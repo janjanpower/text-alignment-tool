@@ -1,0 +1,9 @@
+# .gitignore
+__pycache__/
+*.py[cod]
+*$py.class
+.env
+*.log
+.vscode/
+*.db
+venv/

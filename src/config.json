@@ -1,0 +1,32 @@
+{
+    "window": {
+        "width": 600,
+        "height": 400,
+        "title": "文本對齊工具"
+    },
+    "audio": {
+        "sample_rate": 44100,
+        "channels": 2,
+        "buffer_size": 4096
+    },
+    "display": {
+        "font_family": "Arial",
+        "font_size": 12,
+        "theme": "default"
+    },
+
+    "database": {
+        "host": "localhost",
+        "port": 5432,
+        "username": "postgres",
+        "password": "35035013",
+        "database": "Text_Alignment_Tool"
+      },
+    "recent_projects": [],
+    "recent_files": [],
+    "language": "zh_TW",
+    "auto_save": true,
+    "auto_save_interval": 300,
+    "max_undo_steps": 50
+
+}

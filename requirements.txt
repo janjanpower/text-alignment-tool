@@ -1,0 +1,9 @@
+echo pysrt>=1.1.2
+pygame>=2.5.0
+pydub>=0.25.1
+opencc-python-reimplemented>=0.1.7
+numpy>=1.24.0
+scikit-learn>=1.3.0
+SQLAlchemy>=1.4.41
+bcrypt>=4.0.1
+PyAudio>=0.2.13 > requirements.txt
