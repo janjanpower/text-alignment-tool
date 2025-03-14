@@ -208,6 +208,40 @@ class AlignmentGUI(BaseWindow):
 
         # 綁定事件，點擊其他區域時隱藏滑桿
         self.master.bind("<Button-1>", self.check_slider_focus)
+        # 綁定按鍵事件
+        self.master.bind("<Escape>", self.cancel_time_change)
+        self.master.bind("<Return>", lambda e: self.apply_time_change())
+
+    def cancel_time_change(self, event=None):
+        """取消時間變更"""
+        if self.slider_active:
+            # 恢復原來的值
+            if self.slider_target:
+                item = self.slider_target["item"]
+                column_name = self.slider_target["column"]
+                values = list(self.tree.item(item, "values"))
+
+                # 重設滑桿值
+                if hasattr(self, 'time_slider') and self.time_slider:
+                    self.time_slider.set(self.slider_start_value)
+
+                # 隱藏滑桿，但不應用變更
+                if hasattr(self, 'time_slider') and self.time_slider:
+                    parent = self.time_slider.master
+                    parent.place_forget()
+                    parent.destroy()
+                    self.time_slider = None
+
+                self.slider_active = False
+                self.slider_target = None
+
+                # 解除綁定
+                try:
+                    self.master.unbind("<Button-1>")
+                    self.master.unbind("<Escape>")
+                    self.master.unbind("<Return>")
+                except:
+                    pass
 
     def time_to_seconds(self, time_obj):
         """將時間對象轉換為秒數"""
@@ -301,8 +335,14 @@ class AlignmentGUI(BaseWindow):
             'description': '調整時間軸'
         })
 
+        # 設置標記避免循環調用
+        self._hiding_slider_from_apply = True
+
         # 隱藏滑桿
         self.hide_time_slider()
+
+        # 清除標記
+        self._hiding_slider_from_apply = False
 
     def check_slider_focus(self, event):
         """檢查點擊是否在滑桿外部，如果是則隱藏滑桿"""
@@ -322,7 +362,16 @@ class AlignmentGUI(BaseWindow):
             self.apply_time_change()
 
     def hide_time_slider(self):
-        """隱藏時間調整滑桿"""
+        """隱藏時間調整滑桿並確認變更"""
+        # 檢查是否是從 apply_time_change 調用過來的
+        if not hasattr(self, '_hiding_slider_from_apply') or not self._hiding_slider_from_apply:
+            # 首先應用時間變更
+            if self.slider_active and hasattr(self, 'time_slider') and self.time_slider:
+                # 應用變更
+                self.apply_time_change()
+                return  # 此時 apply_time_change 會再次調用 hide_time_slider
+
+        # 如果是從 apply_time_change 調用的，或者沒有活動的滑桿，直接清理界面元素
         if hasattr(self, 'time_slider') and self.time_slider:
             # 獲取滑桿的父框架
             parent = self.time_slider.master
