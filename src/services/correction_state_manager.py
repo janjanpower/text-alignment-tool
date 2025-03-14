@@ -127,37 +127,30 @@ class CorrectionStateManager:
     def transfer_correction_states(self, old_mode: str, new_mode: str):
         """
         在模式切換時轉移校正狀態
-        :param old_mode: 原始模式 ("srt" 或 "audio_srt")
-        :param new_mode: 新模式 ("srt" 或 "audio_srt")
+        :param old_mode: 原始模式
+        :param new_mode: 新模式
         """
         # 保存當前所有狀態
-        temp_states = {}
-        temp_original = {}
-        temp_corrected = {}
-
-        # 遍歷現有項目並保存狀態
-        for item in self.tree.get_children():
-            values = list(self.tree.item(item, 'values'))
-
-            # 根據不同模式獲取正確的索引位置
-            index = str(values[1] if new_mode == "audio_srt" else values[0])
-
-            # 保存當前狀態
-            if index in self.correction_states:
-                temp_states[index] = self.correction_states[index]
-                temp_original[index] = self.original_texts[index]
-                temp_corrected[index] = self.corrected_texts[index]
+        temp_states = self.correction_states.copy()
+        temp_original = self.original_texts.copy()
+        temp_corrected = self.corrected_texts.copy()
 
         # 清除當前狀態
         self.correction_states.clear()
         self.original_texts.clear()
         self.corrected_texts.clear()
 
-        # 恢復狀態並更新圖標
+        # 遍歷原始狀態並根據不同模式的索引格式轉換
         for index in temp_states:
-            self.correction_states[index] = temp_states[index]
-            self.original_texts[index] = temp_original[index]
-            self.corrected_texts[index] = temp_corrected[index]
+            # 保留原來的狀態
+            state = temp_states[index]
+            original = temp_original.get(index, "")
+            corrected = temp_corrected.get(index, "")
+
+            # 添加到新的狀態結構中
+            self.correction_states[index] = state
+            self.original_texts[index] = original
+            self.corrected_texts[index] = corrected
 
 
     def add_correction_state(self, index: str, original_text: str, corrected_text: str, state: str = 'correct') -> None:
