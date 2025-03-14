@@ -11,7 +11,7 @@ from typing import Dict, Optional, Tuple, List
 from gui.base_window import BaseWindow
 from gui.base_dialog import BaseDialog
 from gui.custom_messagebox import show_info, show_warning, show_error
-from gui.alignment.main_gui import AlignmentGUI
+from gui.alignment_gui import AlignmentGUI
 
 class CorrectionInputDialog(BaseDialog):
     """校正項輸入對話框"""
@@ -330,6 +330,7 @@ class CorrectionTool(BaseWindow):
             # 創建新的 root 和對齊工具，並傳遞專案路徑
             root = tk.Tk()
             alignment_gui = AlignmentGUI(root)
+            # 設置專案路徑
             alignment_gui.current_project_path = self.project_path
             alignment_gui.set_title(f"文本管理 - {os.path.basename(self.project_path)}")
             root.mainloop()
