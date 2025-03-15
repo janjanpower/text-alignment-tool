@@ -3,6 +3,7 @@
 import csv
 import logging
 import os
+import time
 from typing import Dict, List, Tuple, Optional, Any
 
 class CorrectionService:
@@ -193,6 +194,7 @@ class CorrectionService:
         # 如果沒有相關數據，返回空字符串表示無法切換
         return ''
 
+
     def get_correction_state(self, index: str) -> str:
         """
         獲取項目的校正狀態
@@ -342,35 +344,38 @@ class CorrectionService:
             if needs_correction:
                 self.set_correction_state(new_index, original, corrected, 'correct')
 
-    def serialize_state(self) -> Dict[str, Dict[str, str]]:
-        """
-        序列化校正狀態，便於儲存和恢復
-        :return: 可序列化的校正狀態字典
-        """
+    def serialize_state(self) -> Dict[str, Dict[str, Any]]:
+        """完整序列化校正狀態"""
         serialized = {}
-        for index in self.correction_states:
+        # 確保包含所有相關狀態
+        for index, state in self.correction_states.items():
             serialized[index] = {
-                'state': self.correction_states.get(index, ''),
+                'state': state,
                 'original': self.original_texts.get(index, ''),
-                'corrected': self.corrected_texts.get(index, '')
+                'corrected': self.corrected_texts.get(index, ''),
+                'timestamp': time.time()  # 添加時間戳以便追蹤
             }
-
         return serialized
 
     def deserialize_state(self, state_data: Dict[str, Dict[str, str]]) -> None:
-        """
-        從序列化數據恢復校正狀態
-        :param state_data: 序列化的校正狀態字典
-        """
+        """從序列化數據恢復校正狀態"""
         self.clear_correction_states()
 
         for index, data in state_data.items():
-            self.correction_states[index] = data.get('state', 'correct')
-            self.original_texts[index] = data.get('original', '')
-            self.corrected_texts[index] = data.get('corrected', '')
+            state = data.get('state', 'correct')
+            original = data.get('original', '')
+            corrected = data.get('corrected', '')
 
-        self.logger.info(f"已恢復 {len(state_data)} 個項目的校正狀態")
+            # 只有在原始文本和校正文本不同時才設置校正狀態
+            if original != corrected:
+                self.correction_states[index] = state
+                self.original_texts[index] = original
+                self.corrected_texts[index] = corrected
+                self.logger.debug(f"恢復校正狀態: 索引={index}, 狀態={state}")
+            else:
+                self.logger.debug(f"跳過相同的原始和校正文本: 索引={index}")
 
+        self.logger.info(f"已恢復 {len(self.correction_states)} 個項目的校正狀態")
 
     def transfer_correction_states(self, old_indices: Dict[str, str]) -> None:
         """
