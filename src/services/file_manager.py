@@ -7,7 +7,7 @@ import pysrt
 import tkinter as tk
 from tkinter import filedialog, messagebox
 from typing import Dict, Optional, Tuple, List, Any, Callable, Union
-
+from gui.custom_messagebox import show_info, show_warning, show_error, ask_question
 class FileManager:
     """檔案管理類別，負責處理所有檔案相關操作"""
 
@@ -45,7 +45,8 @@ class FileManager:
             'segment_audio': None,           # 分割音頻，參數: srt_data
             'show_info': None,
             'show_warning': None,
-            'show_error': None
+            'show_error': None,
+            'ask_question': None
         }
 
     def set_callback(self, name: str, callback: Callable) -> None:
@@ -95,7 +96,7 @@ class FileManager:
                 if 'show_error' in self.callbacks and self.callbacks['show_error']:
                     self.callbacks['show_error']("錯誤", f"讀取 SRT 檔案失敗: {str(e)}")
                 else:
-                    messagebox.showerror("錯誤", f"讀取 SRT 檔案失敗: {str(e)}", parent=self.parent)
+                    show_error("錯誤", f"讀取 SRT 檔案失敗: {str(e)}", self.parent)
                 return None
 
             # 更新狀態
@@ -155,7 +156,10 @@ class FileManager:
                 srt_data = self.callbacks['get_srt_data']()
 
             if not srt_data:
-                messagebox.showerror("錯誤", "無法獲取SRT數據", parent=self.parent)
+                if 'show_error' in self.callbacks and self.callbacks['show_error']:
+                    self.callbacks['show_error']("錯誤", "無法獲取SRT數據")
+                else:
+                    show_error("錯誤", "無法獲取SRT數據", self.parent)
                 return False
 
             # 保存文件
@@ -167,7 +171,10 @@ class FileManager:
             return True
         except Exception as e:
             self.logger.error(f"儲存 SRT 檔案時出錯: {e}", exc_info=True)
-            messagebox.showerror("錯誤", f"儲存檔案失敗: {str(e)}", parent=self.parent)
+            if 'show_error' in self.callbacks and self.callbacks['show_error']:
+                self.callbacks['show_error']("錯誤", f"儲存檔案失敗: {str(e)}")
+            else:
+                show_error("錯誤", f"儲存檔案失敗: {str(e)}", self.parent)
             return False
 
     def save_srt_as(self) -> bool:
@@ -191,7 +198,10 @@ class FileManager:
                 srt_data = self.callbacks['get_srt_data']()
 
             if not srt_data:
-                messagebox.showerror("錯誤", "無法獲取SRT數據", parent=self.parent)
+                if 'show_error' in self.callbacks and self.callbacks['show_error']:
+                    self.callbacks['show_error']("錯誤", "無法獲取SRT數據")
+                else:
+                    show_error("錯誤", "無法獲取SRT數據", self.parent)
                 return False
 
             # 保存文件
@@ -209,7 +219,10 @@ class FileManager:
             return True
         except Exception as e:
             self.logger.error(f"另存新檔時出錯: {e}", exc_info=True)
-            messagebox.showerror("錯誤", f"另存新檔失敗: {str(e)}", parent=self.parent)
+            if 'show_error' in self.callbacks and self.callbacks['show_error']:
+                self.callbacks['show_error']("錯誤", f"另存新檔失敗: {str(e)}")
+            else:
+                show_error("錯誤", f"另存新檔失敗: {str(e)}", self.parent)
             return False
 
     def export_srt(self, from_toolbar: bool = False) -> bool:
@@ -221,7 +234,10 @@ class FileManager:
         try:
             # 檢查是否有數據可匯出
             if self.callbacks['get_tree_data'] and not self.callbacks['get_tree_data']():
-                messagebox.showwarning("警告", "沒有可匯出的資料！", parent=self.parent)
+                if 'show_warning' in self.callbacks and self.callbacks['show_warning']:
+                    self.callbacks['show_warning']("警告", "沒有可匯出的資料！")
+                else:
+                    show_warning("警告", "沒有可匯出的資料！", self.parent)
                 return False
 
             if from_toolbar:
@@ -238,7 +254,10 @@ class FileManager:
             else:
                 # 直接更新原始檔案
                 if not self.srt_file_path:
-                    messagebox.showwarning("警告", "找不到原始檔案路徑！", parent=self.parent)
+                    if 'show_warning' in self.callbacks and self.callbacks['show_warning']:
+                        self.callbacks['show_warning']("警告", "找不到原始檔案路徑！")
+                    else:
+                        show_warning("警告", "找不到原始檔案路徑！", self.parent)
                     return False
                 file_path = self.srt_file_path
 
@@ -248,7 +267,10 @@ class FileManager:
                 srt_data = self.callbacks['get_srt_data']()
 
             if not srt_data:
-                messagebox.showerror("錯誤", "無法獲取SRT數據", parent=self.parent)
+                if 'show_error' in self.callbacks and self.callbacks['show_error']:
+                    self.callbacks['show_error']("錯誤", "無法獲取SRT數據")
+                else:
+                    show_error("錯誤", "無法獲取SRT數據", self.parent)
                 return False
 
             # 保存文件
@@ -256,14 +278,23 @@ class FileManager:
 
             # 顯示成功訊息
             if from_toolbar:
-                messagebox.showinfo("成功", f"SRT 檔案已匯出至：\n{file_path}", parent=self.parent)
+                if 'show_info' in self.callbacks and self.callbacks['show_info']:
+                    self.callbacks['show_info']("成功", f"SRT 檔案已匯出至：\n{file_path}")
+                else:
+                    show_info("成功", f"SRT 檔案已匯出至：\n{file_path}", self.parent)
             else:
-                messagebox.showinfo("成功", "SRT 檔案已更新", parent=self.parent)
+                if 'show_info' in self.callbacks and self.callbacks['show_info']:
+                    self.callbacks['show_info']("成功", "SRT 檔案已更新")
+                else:
+                    show_info("成功", "SRT 檔案已更新", self.parent)
 
             return True
         except Exception as e:
             self.logger.error(f"匯出 SRT 檔案時出錯: {e}", exc_info=True)
-            messagebox.showerror("錯誤", f"匯出 SRT 檔案失敗：{str(e)}", parent=self.parent)
+            if 'show_error' in self.callbacks and self.callbacks['show_error']:
+                self.callbacks['show_error']("錯誤", f"匯出 SRT 檔案失敗：{str(e)}")
+            else:
+                show_error("錯誤", f"匯出 SRT 檔案失敗：{str(e)}", self.parent)
             return False
 
     # === 音頻檔案相關功能 ===
@@ -271,9 +302,15 @@ class FileManager:
     def import_audio(self) -> None:
         """匯入音頻檔案"""
         try:
+            self.logger.info("===== 開始匯入音頻檔案 =====")
+            self.logger.info(f"當前 SRT 匯入狀態: {self.srt_imported}")
+
             # 檢查是否已匯入 SRT
             if not self.srt_imported:
-                messagebox.showwarning("警告", "請先匯入 SRT 文件", parent=self.parent)
+                if 'show_warning' in self.callbacks and self.callbacks['show_warning']:
+                    self.callbacks['show_warning']("警告", "請先匯入 SRT 文件")
+                else:
+                    show_warning("警告", "請先匯入 SRT 文件", self.parent)
                 return
 
             file_path = filedialog.askopenfilename(
@@ -282,25 +319,50 @@ class FileManager:
             )
 
             if not file_path:
+                self.logger.info("用戶取消了文件選擇")
+                return
+
+            # 確認文件存在
+            import os
+            if not os.path.exists(file_path):
+                self.logger.error(f"選擇的文件不存在: {file_path}")
+                if 'show_error' in self.callbacks and self.callbacks['show_error']:
+                    self.callbacks['show_error']("錯誤", "選擇的文件不存在")
+                else:
+                    show_error("錯誤", "選擇的文件不存在", self.parent)
                 return
 
             # 更新狀態
             self.audio_file_path = file_path
             self.audio_imported = True
+            self.logger.info(f"音頻路徑已更新: {file_path}")
+            self.logger.info(f"音頻匯入狀態已更新: {self.audio_imported}")
 
             # 調用回調函數
             if self.callbacks['on_audio_loaded']:
+                self.logger.info("調用 on_audio_loaded 回調")
                 self.callbacks['on_audio_loaded'](file_path)
+            else:
+                self.logger.warning("on_audio_loaded 回調未設置")
 
             if self.callbacks['on_file_info_updated']:
+                self.logger.info("調用 on_file_info_updated 回調")
                 self.callbacks['on_file_info_updated']()
+            else:
+                self.logger.warning("on_file_info_updated 回調未設置")
 
             # 通知完成音頻載入
-            messagebox.showinfo("成功", f"已成功載入音頻檔案：\n{os.path.basename(file_path)}", parent=self.parent)
+            if 'show_info' in self.callbacks and self.callbacks['show_info']:
+                self.callbacks['show_info']("成功", f"已成功載入音頻檔案：\n{os.path.basename(file_path)}")
+            else:
+                show_info("成功", f"已成功載入音頻檔案：\n{os.path.basename(file_path)}", self.parent)
 
         except Exception as e:
             self.logger.error(f"匯入音頻文件時出錯: {e}", exc_info=True)
-            messagebox.showerror("錯誤", f"無法匯入音頻文件: {str(e)}", parent=self.parent)
+            if 'show_error' in self.callbacks and self.callbacks['show_error']:
+                self.callbacks['show_error']("錯誤", f"無法匯入音頻文件: {str(e)}")
+            else:
+                show_error("錯誤", f"無法匯入音頻文件: {str(e)}", self.parent)
 
     # === Word 文檔相關功能 ===
 
@@ -309,7 +371,10 @@ class FileManager:
         try:
             # 檢查是否已匯入 SRT
             if not self.srt_imported:
-                messagebox.showwarning("警告", "請先匯入 SRT 文件", parent=self.parent)
+                if 'show_warning' in self.callbacks and self.callbacks['show_warning']:
+                    self.callbacks['show_warning']("警告", "請先匯入 SRT 文件")
+                else:
+                    show_warning("警告", "請先匯入 SRT 文件", self.parent)
                 return
 
             file_path = filedialog.askopenfilename(
@@ -336,7 +401,10 @@ class FileManager:
 
         except Exception as e:
             self.logger.error(f"匯入 Word 文檔時出錯: {e}", exc_info=True)
-            messagebox.showerror("錯誤", f"匯入 Word 文檔失敗: {str(e)}", parent=self.parent)
+            if 'show_error' in self.callbacks and self.callbacks['show_error']:
+                self.callbacks['show_error']("錯誤", f"匯入 Word 文檔失敗: {str(e)}")
+            else:
+                show_error("錯誤", f"匯入 Word 文檔失敗: {str(e)}", self.parent)
 
     # === 專案管理相關功能 ===
 
@@ -355,12 +423,17 @@ class FileManager:
             if switch_callback:
                 switch_callback()
             else:
-                messagebox.showinfo("資訊", "未提供切換專案的執行方法", parent=self.parent)
+                if 'show_info' in self.callbacks and self.callbacks['show_info']:
+                    self.callbacks['show_info']("資訊", "未提供切換專案的執行方法")
+                else:
+                    show_info("資訊", "未提供切換專案的執行方法", self.parent)
 
         except Exception as e:
             self.logger.error(f"切換專案時出錯: {e}")
-            messagebox.showerror("錯誤", f"切換專案失敗: {str(e)}", parent=self.parent)
-
+            if 'show_error' in self.callbacks and self.callbacks['show_error']:
+                self.callbacks['show_error']("錯誤", f"切換專案失敗: {str(e)}")
+            else:
+                show_error("錯誤", f"切換專案失敗: {str(e)}", self.parent)
     # === 實用工具方法 ===
 
     def load_corrections(self) -> Dict[str, str]:
