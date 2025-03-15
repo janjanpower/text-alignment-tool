@@ -23,6 +23,7 @@ from services.config_manager import ConfigManager
 from services.correction_state_manager import CorrectionStateManager
 from services.state_manager import StateManager
 from services.word_processor import WordProcessor
+from services.file_manager import FileManager
 from utils.text_utils import simplify_to_traditional
 from utils.time_utils import parse_time
 
@@ -37,7 +38,6 @@ class AlignmentGUI(BaseWindow):
     """文本對齊工具主界面類別"""
     def __init__(self, master: Optional[tk.Tk] = None) -> None:
         """初始化主界面"""
-
         # 加載配置
         self.config = ConfigManager()
         window_config = self.config.get_window_config()
@@ -65,6 +65,9 @@ class AlignmentGUI(BaseWindow):
         # 初始化校正狀態管理器
         self.correction_state_manager = CorrectionStateManager(self.tree)
 
+        # 初始化檔案管理器 - 添加這個調用
+        self.initialize_file_manager()
+
         # 初始化音頻播放器
         self.initialize_audio_player()
 
@@ -75,8 +78,8 @@ class AlignmentGUI(BaseWindow):
 
         # 初始化變數時加入日誌
         self.logger.debug("初始化 AlignmentGUI")
-        self.logger.debug(f"初始 display_mode: {self.display_mode}")
-        self.logger.debug(f"初始 audio_imported: {self.audio_imported}")
+        self.logger.debug(f"初始模式: {self.display_mode}")
+        self.logger.debug(f"初始音頻匯入: {self.audio_imported}")
 
         # 在最後添加窗口大小變化事件綁定
         self.master.bind("<Configure>", self.on_window_resize)
@@ -108,6 +111,318 @@ class AlignmentGUI(BaseWindow):
         self.slider_active = False  # 滑桿是否激活
         self.slider_target = None  # 滑桿調整的目標項目和欄位
         self.slider_start_value = 0  # 滑桿開始值
+
+    def initialize_file_manager(self) -> None:
+        """初始化檔案管理器"""
+        self.logger.debug("開始初始化 FileManager")
+
+        self.file_manager = FileManager(self.master)
+
+        # 設置回調函數 - 確保直接引用方法
+        callbacks = {
+            # 檔案載入回調 - 更新參數以包含檔案路徑
+            'on_srt_loaded': self._on_srt_loaded,  # 接受 (srt_data, file_path, corrections) 參數
+            'on_audio_loaded': self._on_audio_loaded,
+            'on_word_loaded': self._on_word_loaded,
+            'on_file_info_updated': self.update_file_info,
+            'on_status_updated': self.update_status,
+
+            # 通知函數
+            'show_info': lambda title, msg: show_info(title, msg, self.master),
+            'show_warning': lambda title, msg: show_warning(title, msg, self.master),
+            'show_error': lambda title, msg: show_error(title, msg, self.master),
+
+            # 數據獲取函數
+            'get_corrections': self.load_corrections
+        }
+
+        # 設置所有回調
+        for name, callback in callbacks.items():
+            self.file_manager.set_callback(name, callback)
+
+        # 同步初始檔案狀態
+        self.file_manager.srt_imported = self.srt_imported
+        self.file_manager.audio_imported = self.audio_imported
+        self.file_manager.word_imported = self.word_imported
+        self.file_manager.srt_file_path = self.srt_file_path
+        self.file_manager.audio_file_path = self.audio_file_path
+        self.file_manager.word_file_path = self.word_file_path
+        self.file_manager.current_project_path = self.current_project_path
+        self.file_manager.database_file = self.database_file
+
+        self.logger.debug("FileManager 初始化完成")
+
+    def _on_srt_loaded(self, srt_data, file_path, corrections=None) -> None:
+        """SRT 載入後的回調 - 直接處理 SRT 顯示"""
+        self.logger.debug(f"SRT 數據載入回調開始，檔案: {file_path}")
+
+        try:
+            # 清除當前數據
+            self.clear_current_data()
+
+            # 設置 SRT 數據和狀態
+            self.srt_data = srt_data
+            self.srt_imported = True
+            self.srt_file_path = file_path
+
+            self.logger.debug(f"SRT 數據已設置，項目數: {len(srt_data) if srt_data else 0}")
+
+            # 更新顯示模式
+            self.update_display_mode()
+
+            # 如果沒有提供校正數據，嘗試載入
+            if corrections is None:
+                self.logger.debug("未提供校正數據，嘗試載入")
+                corrections = self.load_corrections()
+
+            # 直接處理 SRT 條目並顯示 - 這是關鍵步驟!
+            self.logger.debug("開始處理 SRT 條目")
+            self.process_srt_entries(srt_data, corrections)
+
+            # 檢查樹視圖是否更新成功
+            items_count = len(self.tree.get_children())
+            self.logger.debug(f"樹視圖更新完成，當前項目數: {items_count}")
+
+            # 如果有音頻檔案，更新音頻段落
+            if self.audio_imported and hasattr(self, 'audio_player'):
+                self.logger.debug("更新音頻段落")
+                self.audio_player.segment_audio(self.srt_data)
+
+            # 如果有 Word 檔案，執行比對
+            if self.word_imported and hasattr(self, 'word_processor'):
+                self.logger.debug("執行 Word 比對")
+                self.compare_word_with_srt()
+
+            # 保存初始狀態
+            if hasattr(self, 'state_manager'):
+                description = "Loaded SRT file"
+                if file_path:
+                    description = f"Loaded SRT file: {os.path.basename(file_path)}"
+
+                self.logger.debug("保存初始狀態")
+                self.state_manager.save_state(self.get_current_state(), {
+                    'type': 'load_srt',
+                    'description': description
+                })
+
+            self.logger.debug("SRT 數據載入回調完成")
+
+        except Exception as e:
+            self.logger.error(f"處理 SRT 數據時出錯: {e}", exc_info=True)
+            show_error("錯誤", f"處理 SRT 數據失敗: {str(e)}", self.master)
+
+    def check_treeview_structure(self):
+        """檢查樹視圖結構"""
+        columns = self.tree["columns"]
+        self.logger.debug(f"樹視圖列設置：{columns}")
+
+        # 確認當前顯示模式
+        self.logger.debug(f"當前顯示模式：{self.display_mode}")
+
+        # 確認列配置
+        expected_columns = self.columns.get(self.display_mode, [])
+        self.logger.debug(f"預期列配置：{expected_columns}")
+
+        # 檢查是否匹配
+        if columns != expected_columns:
+            self.logger.error(f"樹視圖列配置不匹配！當前：{columns}，預期：{expected_columns}")
+            # 嘗試修復
+            self.refresh_treeview_structure()
+            self.logger.debug("已嘗試修復樹視圖結構")
+
+    def _on_audio_loaded(self, file_path) -> None:
+        """音頻載入後的回調"""
+        # 記錄音頻檔案路徑
+        self.audio_file_path = file_path
+        self.audio_imported = True
+
+        # 保存當前數據狀態
+        old_mode = self.display_mode
+        self.logger.info(f"音頻已載入，匯入前顯示模式: {old_mode}")
+
+        # 更新顯示模式
+        self.update_display_mode()
+
+        # 檢查模式是否已更新
+        new_mode = self.display_mode
+        if new_mode != old_mode:
+            self.logger.info(f"顯示模式已更新: {old_mode} -> {new_mode}")
+
+        # 確保顯示模式的一致性
+        self.check_display_mode_consistency()
+
+    def _on_word_loaded(self, file_path) -> None:
+        """Word 文檔載入後的回調"""
+        # 確保 Word 處理器已載入文檔
+        if self.word_processor.load_document(file_path):
+            self.word_imported = True
+            self.word_file_path = file_path
+            self.logger.info(f"成功載入 Word 文檔: {file_path}")
+
+            # 更新顯示模式
+            self.update_display_mode()
+
+            # 如果已有 SRT 數據，執行比對
+            if self.srt_data:
+                self.logger.info("執行 SRT 與 Word 文本比對")
+                self.compare_word_with_srt()
+
+            # 檢查模式切換一致性
+            self.check_display_mode_consistency()
+
+    def _get_current_srt_data(self) -> pysrt.SubRipFile:
+        """獲取當前 SRT 數據"""
+        # 創建新的 SRT 文件
+        new_srt = pysrt.SubRipFile()
+
+        # 載入校正資料庫
+        corrections = self.load_corrections()
+
+        # 遍歷所有項目
+        for item in self.tree.get_children():
+            values = self.tree.item(item)['values']
+
+            # 檢查是否使用 Word 文本
+            use_word = self.use_word_text.get(item, False)
+
+            # 根據顯示模式解析值
+            if self.display_mode == self.DISPLAY_MODE_AUDIO_SRT:
+                index = int(values[1])
+                start = values[2]
+                end = values[3]
+                text = values[4]  # SRT 文本
+                # 音頻 SRT 模式下沒有 Word 文本
+                word_text = None
+                # 檢查校正狀態 - V/X 列
+                correction_state = values[5] if len(values) > 5 else ""
+            elif self.display_mode in [self.DISPLAY_MODE_SRT_WORD, self.DISPLAY_MODE_ALL]:
+                # 對於包含 Word 的模式
+                if self.display_mode == self.DISPLAY_MODE_ALL:
+                    index = int(values[1])
+                    start = values[2]
+                    end = values[3]
+                    srt_text = values[4]
+                    word_text = values[5]
+                    # 檢查校正狀態 - V/X 列
+                    correction_state = values[7] if len(values) > 7 else ""
+                else:  # SRT_WORD 模式
+                    index = int(values[0])
+                    start = values[1]
+                    end = values[2]
+                    srt_text = values[3]
+                    word_text = values[4]
+                    # 檢查校正狀態 - V/X 列
+                    correction_state = values[6] if len(values) > 6 else ""
+
+                # 根據標記決定使用哪個文本，不受 mismatch 標記的影響
+                if use_word and word_text:
+                    text = word_text  # 使用 Word 文本
+                    self.logger.debug(f"項目 {index} 使用 Word 文本: {word_text}")
+                else:
+                    text = srt_text  # 使用 SRT 文本
+            else:  # SRT 模式
+                index = int(values[0])
+                start = values[1]
+                end = values[2]
+                text = values[3]
+                word_text = None
+                # 檢查校正狀態 - V/X 列
+                correction_state = values[4] if len(values) > 4 else ""
+
+            # 解析時間
+            start_time = parse_time(start)
+            end_time = parse_time(end)
+
+            # 根據校正狀態決定是否應用校正
+            final_text = text
+            if correction_state == "✅":  # 只在有勾選的情況下應用校正
+                final_text = self.correct_text(text, corrections)
+
+            # 創建字幕項
+            sub = pysrt.SubRipItem(
+                index=index,
+                start=start_time,
+                end=end_time,
+                text=final_text
+            )
+            new_srt.append(sub)
+
+        return new_srt
+
+    def _update_tree_data(self, srt_data, corrections) -> None:
+        """更新樹視圖數據"""
+        self.logger.debug(f"開始更新樹視圖，SRT 項目數：{len(srt_data)}")
+
+        # 清空樹視圖
+        for item in self.tree.get_children():
+            self.tree.delete(item)
+
+        self.logger.debug("樹視圖已清空，開始處理 SRT 條目")
+
+        # 更新數據
+        self.process_srt_entries(srt_data, corrections)
+
+        # 檢查是否成功更新
+        items_count = len(self.tree.get_children())
+        self.logger.debug(f"樹視圖更新完成，當前項目數：{items_count}")
+
+    def _segment_audio(self, srt_data) -> None:
+        """對音頻進行分段"""
+        if hasattr(self, 'audio_player') and self.audio_imported:
+            self.audio_player.segment_audio(srt_data)
+
+    def load_srt(self, event: Optional[tk.Event] = None, file_path: Optional[str] = None) -> None:
+        """載入 SRT 文件"""
+        self.file_manager.load_srt(event, file_path)
+
+    def save_srt(self, event: Optional[tk.Event] = None) -> bool:
+        """儲存 SRT 文件"""
+        return self.file_manager.save_srt(event)
+
+    def save_srt_as(self) -> bool:
+        """另存新檔"""
+        return self.file_manager.save_srt_as()
+
+    def import_audio(self) -> None:
+        """匯入音頻檔案"""
+        self.file_manager.import_audio()
+
+    def import_word_document(self) -> None:
+        """匯入 Word 文檔"""
+        self.file_manager.import_word_document()
+
+    def export_srt(self, from_toolbar: bool = False) -> None:
+        """匯出 SRT 檔案"""
+        self.file_manager.export_srt(from_toolbar)
+
+    def switch_project(self) -> None:
+        """切換專案"""
+        def confirm_switch():
+            """確認是否可以切換專案"""
+            if self.tree.get_children():
+                response = ask_question("確認切換",
+                                    "切換專案前，請確認是否已經儲存當前的文本？\n"
+                                    "未儲存的內容將會遺失。",
+                                    self.master)
+                return response
+            return True
+
+        def do_switch():
+            """執行專案切換"""
+            # 清理當前資源
+            self.cleanup()
+
+            # 關閉當前視窗
+            self.master.destroy()
+
+            # 創建新的應用程式實例並啟動專案管理器
+            root = tk.Tk()
+            from .project_manager import ProjectManager
+            project_manager = ProjectManager(root)
+            project_manager.master.mainloop()
+
+        self.file_manager.switch_project(confirm_switch, do_switch)
+
 
     def show_time_slider(self, event, item, column, column_name):
         """顯示時間調整滑桿"""
@@ -788,96 +1103,6 @@ class AlignmentGUI(BaseWindow):
         edit_menu.add_command(label="復原 Ctrl+Z", command=self.undo)
         edit_menu.add_command(label="重做 Ctrl+Y", command=self.redo)
 
-    def switch_project(self) -> None:
-        """切換專案"""
-        try:
-            # 檢查是否有未儲存的變更
-            if self.tree.get_children():
-                response = ask_question("確認切換",
-                                    "切換專案前，請確認是否已經儲存當前的文本？\n"
-                                    "未儲存的內容將會遺失。",
-                                    self.master)
-                if not response:  # 如果使用者選擇取消
-                    return
-
-            # 清理當前資源
-            self.cleanup()
-
-            # 關閉當前視窗
-            self.master.destroy()
-
-            # 創建新的應用程式實例並啟動專案管理器
-            root = tk.Tk()
-            from .project_manager import ProjectManager
-            project_manager = ProjectManager(root)
-            project_manager.master.mainloop()
-
-        except Exception as e:
-            self.logger.error(f"切換專案時出錯: {e}")
-            show_error("錯誤", f"切換專案失敗: {str(e)}", self.master)
-    def load_srt(self, event: Optional[tk.Event] = None, file_path: Optional[str] = None) -> None:
-        """載入 SRT 文件"""
-        try:
-            if file_path is None:
-                file_path = filedialog.askopenfilename(
-                    filetypes=[("SRT files", "*.srt")],
-                    parent=self.master
-                )
-
-            if not file_path:
-                return
-
-            # 清除當前數據
-            self.clear_current_data()
-            self.srt_file_path = file_path
-
-            # 載入 SRT 數據
-            try:
-                srt_data = pysrt.open(file_path, encoding='utf-8')
-                if not srt_data:
-                    raise ValueError("SRT文件為空或格式無效")
-                self.srt_data = srt_data
-            except Exception as e:
-                show_error("錯誤", f"讀取 SRT 檔案失敗: {str(e)}", self.master)
-                return
-
-            # 設置 SRT 已匯入標誌
-            self.srt_imported = True
-
-            # 更新顯示模式
-            self.update_display_mode()
-
-            # 載入校正數據庫
-            corrections = self.load_corrections()
-
-            # 處理每個字幕項目
-            self.process_srt_entries(srt_data, corrections)
-
-            # 更新界面和音頻
-            self.update_file_info()
-
-            # 如果有音頻檔案，更新音頻段落
-            if self.audio_imported and hasattr(self, 'audio_player'):
-                self.audio_player.segment_audio(self.srt_data)
-
-            # 如果有 Word 檔案，執行比對
-            if self.word_imported and hasattr(self, 'word_processor'):
-                self.compare_word_with_srt()
-
-            # 重要：在載入完成後立即保存初始狀態
-            if hasattr(self, 'state_manager'):
-                self.state_manager.save_state(self.get_current_state(), {
-                    'type': 'load_srt',
-                    'description': f'Loaded SRT file: {os.path.basename(file_path)}'
-                })
-                self.logger.info(f"已保存 SRT 載入後的初始狀態")
-
-            show_info("成功", f"已成功載入SRT檔案：\n{os.path.basename(self.srt_file_path)}", self.master)
-
-        except Exception as e:
-            self.logger.error(f"載入 SRT 檔案時出錯: {e}", exc_info=True)
-            show_error("錯誤", f"無法載入 SRT 檔案: {str(e)}", self.master)
-
     def compare_word_with_srt(self) -> None:
         """比對 SRT 和 Word 文本"""
         try:
@@ -1067,50 +1292,6 @@ class AlignmentGUI(BaseWindow):
                 '✅' if needs_correction else ''
             ]
 
-    def save_srt(self, event: Optional[tk.Event] = None) -> bool:
-        """
-        儲存 SRT 文件
-        :param event: 事件對象（可選）
-        :return: 是否成功儲存
-        """
-        if not self.srt_file_path:
-            return self.save_srt_as()
-
-        try:
-            self.save_srt_file(self.srt_file_path)
-            self.update_status(f"已儲存文件：{os.path.basename(self.srt_file_path)}")
-            return True
-        except Exception as e:
-            self.logger.error(f"儲存 SRT 檔案時出錯: {e}", exc_info=True)
-            show_error("錯誤", f"儲存檔案失敗: {str(e)}",self.master)
-            return False
-
-    def save_srt_as(self) -> bool:
-        """
-        另存新檔
-        :return: 是否成功儲存
-        """
-        try:
-            file_path = filedialog.asksaveasfilename(
-                defaultextension=".srt",
-                filetypes=[("SRT files", "*.srt")],
-                parent=self.master
-            )
-
-            if not file_path:
-                return False
-
-            self.save_srt_file(file_path)
-            self.srt_file_path = file_path
-            self.config.add_recent_file(file_path)
-            self.update_status(f"已另存新檔：{os.path.basename(file_path)}")
-            return True
-
-        except Exception as e:
-            self.logger.error(f"另存新檔時出錯: {e}", exc_info=True)
-            show_error("錯誤", f"另存新檔失敗: {str(e)}",self.master)
-            return False
-
     def close_window(self, event: Optional[tk.Event] = None) -> None:
         """關閉視窗"""
         try:
@@ -1161,17 +1342,29 @@ class AlignmentGUI(BaseWindow):
         """更新檔案資訊顯示"""
         info_parts = []
 
-        # 添加 SRT 文件資訊
-        if self.srt_file_path:
-            info_parts.append(f"SRT檔案：{os.path.basename(self.srt_file_path)}")
+        # 檢查是否有 FileManager，沒有則使用舊方法
+        if hasattr(self, 'file_manager'):
+            # 添加 SRT 文件資訊
+            if self.file_manager.srt_file_path:
+                info_parts.append(f"SRT檔案：{os.path.basename(self.file_manager.srt_file_path)}")
 
-        # 添加音頻文件資訊
-        if hasattr(self, 'audio_file_path') and self.audio_file_path:
-            info_parts.append(f"音頻檔案：{os.path.basename(self.audio_file_path)}")
+            # 添加音頻文件資訊
+            if self.file_manager.audio_file_path:
+                info_parts.append(f"音頻檔案：{os.path.basename(self.file_manager.audio_file_path)}")
 
-        # 添加 Word 文件資訊
-        if hasattr(self, 'word_file_path') and self.word_file_path:
-            info_parts.append(f"Word檔案：{os.path.basename(self.word_file_path)}")
+            # 添加 Word 文件資訊
+            if self.file_manager.word_file_path:
+                info_parts.append(f"Word檔案：{os.path.basename(self.file_manager.word_file_path)}")
+        else:
+            # 舊的實現方式
+            if self.srt_file_path:
+                info_parts.append(f"SRT檔案：{os.path.basename(self.srt_file_path)}")
+
+            if hasattr(self, 'audio_file_path') and self.audio_file_path:
+                info_parts.append(f"音頻檔案：{os.path.basename(self.audio_file_path)}")
+
+            if hasattr(self, 'word_file_path') and self.word_file_path:
+                info_parts.append(f"Word檔案：{os.path.basename(self.word_file_path)}")
 
         # 更新顯示
         if info_parts:
@@ -1188,10 +1381,10 @@ class AlignmentGUI(BaseWindow):
         buttons = [
             ("載入 SRT", self.load_srt),
             ("匯入音頻", self.import_audio),
-            ("載入 Word", self.import_word_document),  # 新增按鈕
-            ("重新比對", self.compare_word_with_srt),  # 新增按鈕
+            ("載入 Word", self.import_word_document),
+            ("重新比對", self.compare_word_with_srt),
             ("調整時間", self.align_end_times),
-            ("匯出 SRT", lambda: self.export_srt(from_toolbar=False))
+            ("匯出 SRT", lambda: self.export_srt(from_toolbar=True))
         ]
 
         # 使用 enumerate 來追蹤每個按鈕的位置
@@ -2483,6 +2676,11 @@ class AlignmentGUI(BaseWindow):
 
     def load_corrections(self) -> Dict[str, str]:
         """載入校正數據庫"""
+        # 如果有 FileManager，直接使用它的方法
+        if hasattr(self, 'file_manager'):
+            return self.file_manager.load_corrections()
+
+        # 否則使用舊的實現方式
         corrections = {}
         if self.current_project_path:
             corrections_file = os.path.join(self.current_project_path, "corrections.csv")
@@ -2499,7 +2697,6 @@ class AlignmentGUI(BaseWindow):
                     self.logger.error(f"載入校正數據庫失敗: {e}")
                     show_error("錯誤", f"載入校正數據庫失敗: {str(e)}", self.master)
         return corrections
-
     def correct_text(self, text: str, corrections: Dict[str, str]) -> str:
         """
         根據校正數據庫修正文本
@@ -2515,6 +2712,12 @@ class AlignmentGUI(BaseWindow):
 
     def process_srt_entries(self, srt_data, corrections):
         """處理 SRT 條目"""
+        self.logger.debug(f"開始處理 SRT 條目，數量: {len(srt_data) if srt_data else 0}")
+
+        if not srt_data:
+            self.logger.warning("SRT 數據為空，無法處理")
+            return
+
         for sub in srt_data:
             # 轉換文本為繁體中文
             text = simplify_to_traditional(sub.text.strip())
@@ -2537,7 +2740,7 @@ class AlignmentGUI(BaseWindow):
                 values.insert(0, self.PLAY_ICON)
 
             # 插入到樹狀視圖
-            self.insert_item('', 'end', values=tuple(values))
+            item_id = self.insert_item('', 'end', values=tuple(values))
 
             # 如果需要校正，保存校正狀態
             if needs_correction:
@@ -3815,176 +4018,6 @@ class AlignmentGUI(BaseWindow):
             show_error("錯誤", f"重做失敗: {str(e)}", self.master)
             return False
 
-    def export_srt(self, from_toolbar: bool = False) -> None:
-        """
-        匯出 SRT 檔案
-        :param from_toolbar: 是否從工具列呼叫
-        """
-        try:
-            if not self.tree.get_children():
-                show_warning("警告", "沒有可匯出的資料！", self.master)
-                return
-
-            if from_toolbar:
-                # 從工具列呼叫時，使用另存新檔對話框
-                file_path = filedialog.asksaveasfilename(
-                    defaultextension=".srt",
-                    filetypes=[("SubRip 字幕檔", "*.srt")],
-                    initialdir=os.path.dirname(self.srt_file_path) if self.srt_file_path else None,
-                    title="匯出 SRT 檔案"
-                )
-                if not file_path:
-                    return
-            else:
-                # 直接更新原始檔案
-                if not self.srt_file_path:
-                    show_warning("警告", "找不到原始檔案路徑！", self.master)
-                    return
-                file_path = self.srt_file_path
-
-            # 保存檔案
-            self.save_srt_file(file_path)
-
-            # 顯示成功訊息
-            if from_toolbar:
-                show_info("成功", f"SRT 檔案已匯出至：\n{file_path}", self.master)
-            else:
-                show_info("成功", "SRT 檔案已更新", self.master)
-
-        except Exception as e:
-            show_error("錯誤", f"匯出 SRT 檔案失敗：{str(e)}", self.master)
-
-    def import_audio(self) -> None:
-        """匯入音頻檔案"""
-        try:
-            # 檢查是否已匯入 SRT
-            if not self.srt_imported:
-                show_warning("警告", "請先匯入 SRT 文件", self.master)
-                return
-
-            if not hasattr(self, 'audio_player'):
-                self.initialize_audio_player()
-
-            file_path = filedialog.askopenfilename(
-                filetypes=[("Audio files", "*.mp3 *.wav")],
-                parent=self.master
-            )
-
-            if not file_path:
-                return
-
-            # 保存當前狀態以便後續參考或恢復
-            old_mode = self.display_mode
-            self.logger.info(f"即將匯入音頻檔案，匯入前顯示模式: {old_mode}")
-
-            # 保存當前樹狀視圖的狀態（如需要）
-            current_state = None
-            if old_mode != self.DISPLAY_MODE_SRT and old_mode != self.DISPLAY_MODE_AUDIO_SRT:
-                current_state = self.get_current_state()
-
-            # 載入音頻文件
-            if self.audio_player.load_audio(file_path):
-                self.audio_imported = True
-                self.audio_file_path = file_path
-                self.logger.info(f"成功載入音頻檔案: {file_path}")
-
-                # 更新顯示模式
-                self.update_display_mode()
-
-                # 檢查顯示模式是否已正確更新
-                new_mode = self.display_mode
-                if new_mode != old_mode:
-                    self.logger.info(f"顯示模式已更新: {old_mode} -> {new_mode}")
-
-                # 如果有 SRT 數據，更新音頻段落
-                if hasattr(self, 'srt_data') and self.srt_data:
-                    self.audio_player.segment_audio(self.srt_data)
-                    self.logger.info("已根據 SRT 數據分割音頻段落")
-
-                # 更新文件信息和界面
-                self.update_file_info()
-
-                # 如果已加載 Word 文檔，根據需要更新比對顯示
-                if self.word_imported and hasattr(self, 'word_processor'):
-                    if old_mode != new_mode:
-                        self.logger.info("因顯示模式變更，正在更新 Word 比對顯示")
-                        self.update_display_with_comparison()
-
-                # 確保顯示模式的一致性
-                self.check_display_mode_consistency()
-
-                # 通知使用者
-                if not self.audio_notification_shown:
-                    show_info("成功", f"已成功載入音頻檔案：\n{os.path.basename(file_path)}", self.master)
-                    self.audio_notification_shown = True
-
-            else:
-                show_error("錯誤", "無法載入音頻檔案", self.master)
-
-        except Exception as e:
-            self.logger.error(f"匯入音頻文件時出錯: {e}", exc_info=True)
-            show_error("錯誤", f"無法匯入音頻文件: {str(e)}", self.master)
-
-    def import_word_document(self) -> None:
-        """匯入 Word 文檔"""
-        try:
-            # 檢查是否已匯入 SRT
-            if not self.srt_imported:
-                show_warning("警告", "請先匯入 SRT 文件", self.master)
-                return
-
-            file_path = filedialog.askopenfilename(
-                filetypes=[("Word files", "*.docx")],
-                parent=self.master
-            )
-
-            if not file_path:
-                return
-
-            # 保存當前顯示模式和狀態
-            old_mode = self.display_mode
-            self.logger.info(f"即將匯入 Word 文檔，匯入前顯示模式: {old_mode}")
-
-            # 保存當前樹狀視圖的狀態（如果需要）
-            current_state = None
-            if old_mode != self.DISPLAY_MODE_SRT and old_mode != self.DISPLAY_MODE_SRT_WORD:
-                current_state = self.get_current_state()
-
-            # 載入 Word 文檔
-            if self.word_processor.load_document(file_path):
-                self.word_imported = True
-                self.word_file_path = file_path
-                self.logger.info(f"成功載入 Word 文檔: {file_path}")
-
-                # 更新顯示模式 - 這裡我們會根據匯入狀態切換模式
-                self.update_display_mode()
-
-                # 更新界面和狀態
-                self.update_file_info()
-                self.update_status(f"已載入 Word 文檔: {os.path.basename(file_path)}")
-
-                # 如果已有 SRT 數據，執行比對
-                if self.srt_data:
-                    self.logger.info("執行 SRT 與 Word 文本比對")
-                    self.compare_word_with_srt()
-
-                # 如果之前有音頻，確保音頻段落和顯示列的一致性
-                if self.audio_imported:
-                    self.logger.info("更新音頻段落以保持與顯示一致")
-                    self.update_audio_segments()
-
-                # 檢查模式切換一致性
-                self.check_display_mode_consistency()
-
-                # 通知使用者
-                show_info("成功", f"已成功載入 Word 文檔：\n{os.path.basename(file_path)}", self.master)
-            else:
-                show_error("錯誤", "無法載入 Word 文檔", self.master)
-
-        except Exception as e:
-            self.logger.error(f"匯入 Word 文檔時出錯: {e}", exc_info=True)
-            show_error("錯誤", f"匯入 Word 文檔失敗: {str(e)}", self.master)
-
     def check_display_mode_consistency(self):
         """檢查顯示模式是否與實際狀態一致"""
         expected_mode = None
@@ -4485,10 +4518,13 @@ class AlignmentGUI(BaseWindow):
                 self.correction_state_manager.original_texts.clear()
                 self.correction_state_manager.corrected_texts.clear()
 
-            # 重置所有狀態
-            self.audio_imported = False
-            self.audio_notification_shown = False
+            # 清除檔案狀態 - 使用 FileManager 進行清理
+            if hasattr(self, 'file_manager'):
+                self.file_manager.clear_file_status()
+
+            # 同步本地狀態變數
             self.srt_imported = False
+            self.audio_imported = False
             self.word_imported = False
             self.srt_file_path = None
             self.audio_file_path = None
