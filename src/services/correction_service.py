@@ -461,10 +461,13 @@ class CorrectionService:
                 }
         return serialized
 
-    def deserialize_state(self, state_data: Optional[Dict[str, Dict[str, Any]]]) -> None:
+    def deserialize_state(self, state_data, id_mapping=None):
         """
-        從序列化數據恢復校正狀態
-        :param state_data: 序列化的校正狀態
+        從序列化數據恢復校正狀態，支持 ID 映射
+
+        Args:
+            state_data: 序列化的校正狀態
+            id_mapping: ID 映射表 {原始ID: 新ID}
         """
         # 清除現有狀態
         self.clear_correction_states()
@@ -474,6 +477,12 @@ class CorrectionService:
 
         # 恢復校正狀態
         for index, data in state_data.items():
+            # 檢查是否需要映射索引
+            if id_mapping and index in id_mapping:
+                mapped_index = id_mapping[index]
+                self.logger.debug(f"應用 ID 映射: {index} -> {mapped_index}")
+                index = mapped_index
+
             state = data.get('state', 'correct')
             original = data.get('original', '')
             corrected = data.get('corrected', '')

@@ -104,7 +104,17 @@ class EnhancedStateManager:
                 self.current_state_index -= 1
 
             self.current_state_index = len(self.states) - 1
-            self.logger.debug(f"保存狀態：索引 {self.current_state_index}, 操作: {operation_info.get('description', '未知操作')}")
+
+            # 記錄更詳細的信息
+            op_type = operation_info.get('type', 'unknown')
+            op_desc = operation_info.get('description', 'Unknown operation')
+            tree_items_count = current_state.get('tree_items_count', 0)
+            if isinstance(current_state.get('tree_items', []), list):
+                tree_items_count = len(current_state.get('tree_items', []))
+
+            self.logger.debug(f"保存狀態：索引 {self.current_state_index}, 操作: {op_desc} ({op_type}), "
+                         f"項目數: {tree_items_count}, "
+                         f"有校正狀態: {correction_state is not None}")
 
             # 觸發狀態變更回調
             self.trigger_callback('on_state_change')
@@ -175,17 +185,106 @@ class EnhancedStateManager:
         執行撤銷操作
         :return: 是否成功撤銷
         """
-        if not self.can_undo():
-            self.logger.debug("無法撤銷：已經是最初狀態")
+        try:
+            # 首先檢查是否可以撤銷
+            if not self.can_undo():
+                self.logger.debug("無法撤銷：已經是最初狀態")
+                return False
+
+            # 詳細的日誌記錄
+            self.logger.debug(f"開始撤銷操作，當前索引: {self.current_state_index}, 目標索引: {self.current_state_index-1}")
+
+            # 保存當前狀態作為可能的回滾點
+            current_state = None
+            current_correction_state = None
+            if self.current_state_index < len(self.states):
+                current_record = self.states[self.current_state_index]
+                current_state = copy.deepcopy(current_record.state)
+                current_correction_state = copy.deepcopy(current_record.correction_state)
+
+                # 記錄當前操作的詳細信息
+                current_op = current_record.operation.get('type', 'unknown')
+                current_desc = current_record.operation.get('description', 'Unknown')
+                self.logger.debug(f"當前操作: [{current_op}] {current_desc}")
+
+                # 記錄當前狀態的特徵
+                if 'tree_items' in current_state:
+                    tree_items_count = len(current_state['tree_items'])
+                    self.logger.debug(f"當前狀態特徵: 樹項目數={tree_items_count}")
+
+            # 獲取目標狀態的詳細信息
+            prev_index = self.current_state_index - 1
+            if 0 <= prev_index < len(self.states):
+                prev_record = self.states[prev_index]
+                prev_op = prev_record.operation.get('type', 'unknown')
+                prev_desc = prev_record.operation.get('description', 'Unknown')
+                self.logger.debug(f"目標操作: [{prev_op}] {prev_desc}")
+
+                # 記錄目標狀態的特徵
+                prev_state = prev_record.state
+                if 'tree_items' in prev_state:
+                    tree_items_count = len(prev_state['tree_items'])
+                    self.logger.debug(f"目標狀態特徵: 樹項目數={tree_items_count}")
+
+            # 實際執行索引變更
+            self.current_state_index -= 1
+            prev_state = self.states[self.current_state_index]
+
+            # 記錄回調觸發前的時間
+            callback_start_time = time.time()
+
+            # 使用 try-except 包裝回調調用
+            try:
+                # 觸發撤銷回調
+                self.logger.debug(f"觸發撤銷回調")
+                if self.callbacks['on_undo']:
+                    self.callbacks['on_undo'](prev_state.state, prev_state.correction_state, prev_state.operation)
+                    callback_duration = time.time() - callback_start_time
+                    self.logger.debug(f"撤銷回調完成，耗時: {callback_duration:.3f}秒")
+                else:
+                    self.logger.warning("沒有設置撤銷回調函數")
+
+                # 觸發狀態變更回調
+                self.trigger_callback('on_state_change')
+
+                return True
+            except Exception as e:
+                # 如果撤銷回調執行失敗
+                self.logger.error(f"撤銷回調執行失敗: {e}", exc_info=True)
+
+                # 嘗試回滾到之前的狀態
+                if current_state:
+                    try:
+                        # 恢復索引
+                        self.current_state_index += 1
+                        self.logger.warning(f"撤銷失敗，嘗試回滾到索引 {self.current_state_index}")
+
+                        # 如果有回滾回調，嘗試執行
+                        if self.callbacks.get('on_rollback'):
+                            self.callbacks['on_rollback'](current_state, current_correction_state,
+                                                        {'type': 'rollback', 'description': '撤銷失敗回滾'})
+                            self.logger.info("成功回滾到之前狀態")
+                        else:
+                            self.logger.warning("無法回滾：未設置回滾回調")
+                    except Exception as rollback_error:
+                        self.logger.error(f"回滾失敗: {rollback_error}", exc_info=True)
+                else:
+                    self.logger.error("撤銷失敗，無法回滾：沒有保存當前狀態")
+
+                return False
+        except Exception as e:
+            # 處理方法本身的執行錯誤
+            self.logger.error(f"undo 方法執行時發生錯誤: {e}", exc_info=True)
+
+            # 確保索引不會越界
+            if self.current_state_index < 0:
+                self.current_state_index = 0
+                self.logger.warning("索引修正: 設置為 0")
+            elif self.current_state_index >= len(self.states):
+                self.current_state_index = len(self.states) - 1
+                self.logger.warning(f"索引修正: 設置為 {self.current_state_index}")
+
             return False
-
-        # 更新索引
-        self.current_state_index -= 1
-        prev_state = self.states[self.current_state_index]
-
-        # 觸發撤銷回調
-        self.trigger_callback('on_undo', prev_state.state, prev_state.correction_state, prev_state.operation)
-        return True
 
     def redo(self) -> bool:
         """
