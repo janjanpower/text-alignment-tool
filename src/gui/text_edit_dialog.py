@@ -318,6 +318,7 @@ class TextEditDialog(simpledialog.Dialog):
 
             # 處理普通 SRT 編輯
             text = self.text_widget.get("1.0", tk.END).strip()
+
             lines = [line.strip() for line in text.split('\n') if line.strip()]
 
             # 基本驗證

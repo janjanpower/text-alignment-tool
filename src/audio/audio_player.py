@@ -7,7 +7,7 @@ import tempfile
 from typing import Any
 import pygame
 import tkinter as tk
-from tkinter import ttk, filedialog, messagebox
+from tkinter import ttk, filedialog
 
 # 添加項目根目錄到Python路徑
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -18,7 +18,12 @@ if project_root not in sys.path:
 from audio.audio_segment_manager import AudioSegmentManager
 from audio.audio_resource_cleaner import AudioResourceCleaner
 from utils.time_utils import parse_time
-
+from gui.custom_messagebox import (
+    show_info,
+    show_warning,
+    show_error,
+    ask_question
+)
 class AudioPlayer(ttk.Frame):
     """音頻播放器類別"""
 
@@ -137,25 +142,57 @@ class AudioPlayer(ttk.Frame):
                 )
 
             if file_path:
-                self.audio_file = file_path
-                self.audio = self.segment_manager.load_audio(file_path)
-                self.total_duration = len(self.audio) / 1000.0
+                try:
+                    self.logger.info(f"開始載入音頻文件: {file_path}")
+                    self.audio_file = file_path
 
-                # 初始化音頻段落字典，確保它不為空
-                self.segment_manager.audio_segments = {}
+                    # 使用 pydub 加載音頻
+                    import os
+                    if not os.path.exists(file_path):
+                        self.logger.error(f"音頻文件不存在: {file_path}")
+                        return None
 
-                # 生成一個默認段落（整個音頻文件）
-                self.segment_manager.audio_segments[0] = self.audio
+                    # 確保 segment_manager 已初始化
+                    if not hasattr(self, 'segment_manager'):
+                        self.segment_manager = AudioSegmentManager(self.sample_rate)
 
-                # 產生音頻載入事件
-                self.master.event_generate("<<AudioLoaded>>")
-                return file_path
+                    # 加載音頻
+                    self.audio = self.segment_manager.load_audio(file_path)
+
+                    if self.audio is None:
+                        self.logger.error(f"音頻加載返回空值: {file_path}")
+                        return None
+
+                    self.total_duration = len(self.audio) / 1000.0
+                    self.logger.info(f"音頻載入成功，總時長: {self.total_duration} 秒")
+
+                    # 初始化或清空音頻段落字典
+                    self.segment_manager.audio_segments = {}
+
+                    # 生成一個默認段落（整個音頻文件）
+                    self.segment_manager.audio_segments[0] = self.audio
+                    self.logger.info("創建了默認音頻段落")
+
+                    # 產生音頻載入事件
+                    if hasattr(self, 'master') and self.master:
+                        self.master.event_generate("<<AudioLoaded>>")
+
+                    return file_path
+                except Exception as e:
+                    self.logger.error(f"載入音頻文件失敗: {e}", exc_info=True)
+                    import traceback
+                    self.logger.error(traceback.format_exc())
+                    show_error("錯誤", f"無法載入音頻文件: {str(e)}", self.master)
+                    return None
+
+            return None
 
         except Exception as e:
-            self.logger.error(f"加載音頻文件時出錯: {e}")
-            messagebox.showerror("錯誤", f"無法加載音頻文件: {str(e)}")
-
-        return None
+            self.logger.error(f"加載音頻文件時出錯: {e}", exc_info=True)
+            import traceback
+            self.logger.error(traceback.format_exc())
+            show_error("錯誤", f"無法加載音頻文件: {str(e)}", self.master)
+            return None
 
     def sync_audio_with_srt(self, srt_data):
         """
@@ -211,64 +248,113 @@ class AudioPlayer(ttk.Frame):
     def play_segment(self, index):
         """播放指定的音頻段落"""
         try:
-            self.logger.debug(f"嘗試播放索引 {index} 的音頻段落")
-            self.logger.debug(f"現有音頻段落索引: {list(self.segment_manager.audio_segments.keys())}")
+            self.logger.info(f"===== 開始播放索引 {index} 的音頻段落 =====")
+            self.logger.info(f"self.audio 存在: {hasattr(self, 'audio') and self.audio is not None}")
+            self.logger.info(f"self.segment_manager 存在: {hasattr(self, 'segment_manager')}")
+            self.logger.info(f"audio_segments 存在: {hasattr(self.segment_manager, 'audio_segments') if hasattr(self, 'segment_manager') else False}")
+            self.logger.info(f"音頻段落數量: {len(self.segment_manager.audio_segments) if hasattr(self.segment_manager, 'audio_segments') else 0}")
+            self.logger.info(f"音頻段落索引: {list(self.segment_manager.audio_segments.keys()) if hasattr(self.segment_manager, 'audio_segments') else []}")
 
-            # 將索引轉換為整數
-            try:
-                if isinstance(index, str):
-                    index = int(index)
-            except ValueError:
-                self.logger.warning(f"無法將索引 '{index}' 轉換為整數")
-
-            # 檢查音頻段落是否存在
-            if not self.segment_manager.has_segments():
-                self.logger.warning("音頻段落為空")
+            # 基本檢查
+            if not hasattr(self, 'audio') or self.audio is None:
+                self.logger.error("音頻未載入")
+                show_warning("警告", "無法播放音訊：音訊未載入或為空", self.master)
                 return False
 
-            # 如果指定索引不存在，嘗試找最接近的索引
-            if index not in self.segment_manager.audio_segments:
-                self.logger.warning(f"索引 {index} 不存在於音頻段落中")
-                valid_indices = list(self.segment_manager.audio_segments.keys())
-                if valid_indices:
-                    closest_index = min(valid_indices, key=lambda x: abs(int(x) - index) if isinstance(x, (int, str)) and str(x).isdigit() else float('inf'))
-                    self.logger.info(f"使用最接近的索引 {closest_index} 代替 {index}")
-                    index = closest_index
-                else:
-                    self.logger.error("沒有可用的音頻段落")
-                    return False
+            if not hasattr(self, 'segment_manager'):
+                self.logger.error("segment_manager 不存在")
+                return False
 
+            if not hasattr(self.segment_manager, 'audio_segments'):
+                self.logger.error("audio_segments 不存在")
+                # 創建音頻段落字典
+                self.segment_manager.audio_segments = {}
+
+            # 統一索引格式
+            if isinstance(index, str):
+                try:
+                    index = int(index)
+                except ValueError:
+                    self.logger.error(f"無法將索引 '{index}' 轉換為整數")
+
+            # 檢查該索引的段落是否存在
+            if index not in self.segment_manager.audio_segments:
+                self.logger.warning(f"索引 {index} 不存在，嘗試創建段落")
+                # 直接使用完整音頻作為該索引的段落
+                self.segment_manager.audio_segments[index] = self.audio
+
+            # 獲取對應的段落
             segment = self.segment_manager.audio_segments[index]
             if segment is None:
-                self.logger.error(f"索引 {index} 的段落為空")
-                return False
+                self.logger.error("段落為空")
+                # 使用完整音頻作為段落
+                self.segment_manager.audio_segments[index] = self.audio
+                segment = self.audio
 
-            # 清理之前的臨時文件
+            # 停止當前播放
+            pygame.mixer.music.stop()
+            pygame.mixer.music.unload()
+
+            # 清理臨時文件
             self.cleanup_temp_file()
 
-            # 創建新的臨時文件
+            # 創建臨時文件
+            import tempfile
             with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as temp_file:
+                self.logger.info(f"創建臨時文件: {temp_file.name}")
                 self.temp_file = temp_file.name
-                segment.export(
-                    temp_file.name,
-                    format='wav',
-                    parameters=[
-                        "-ar", str(self.sample_rate),
-                        "-ac", "2",
-                        "-acodec", "pcm_s16le"
-                    ]
-                )
 
-            # 播放音頻
-            pygame.mixer.quit()
-            pygame.mixer.init(frequency=self.sample_rate, size=-16, channels=2, buffer=4096)
-            pygame.mixer.music.load(self.temp_file)
-            pygame.mixer.music.play()
-            self.logger.debug(f"開始播放索引 {index} 的音頻段落")
-            return True
+                # 導出音頻段落到臨時文件
+                try:
+                    segment.export(
+                        temp_file.name,
+                        format='wav',
+                        parameters=[
+                            "-ar", str(self.sample_rate),
+                            "-ac", "2",
+                            "-acodec", "pcm_s16le"
+                        ]
+                    )
+                    self.logger.info("音頻段落導出成功")
+                except Exception as e:
+                    self.logger.error(f"導出音頻段落失敗: {e}")
+                    # 如果有問題，嘗試重新使用完整音頻
+                    self.audio.export(
+                        temp_file.name,
+                        format='wav',
+                        parameters=[
+                            "-ar", str(self.sample_rate),
+                            "-ac", "2",
+                            "-acodec", "pcm_s16le"
+                        ]
+                    )
+
+            # 初始化播放器並播放
+            try:
+                pygame.mixer.quit()
+                pygame.mixer.init(frequency=self.sample_rate, size=-16, channels=2, buffer=4096)
+
+                # 檢查臨時文件是否存在
+                import os
+                if not os.path.exists(self.temp_file):
+                    self.logger.error("臨時文件不存在")
+                    return False
+
+                # 載入並播放
+                pygame.mixer.music.load(self.temp_file)
+                pygame.mixer.music.play()
+                self.logger.info(f"成功播放索引 {index} 的音頻段落")
+                return True
+            except Exception as e:
+                self.logger.error(f"播放音頻失敗: {e}")
+                import traceback
+                self.logger.error(traceback.format_exc())
+                return False
 
         except Exception as e:
             self.logger.error(f"播放音頻段落時出錯: {e}")
+            import traceback
+            self.logger.error(traceback.format_exc())
             self.cleanup_temp_file()
             return False
 
