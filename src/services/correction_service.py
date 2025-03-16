@@ -124,43 +124,44 @@ class CorrectionService:
     def update_display_status(self, tree_view, display_mode):
         """
         更新樹視圖中的校正狀態顯示
-
-        Args:
-            tree_view: 樹狀視圖控件
-            display_mode: 當前顯示模式
+        :param tree_view: 樹狀視圖控件
+        :param display_mode: 當前顯示模式
         """
-        for item in tree_view.get_children():
-            values = list(tree_view.item(item, 'values'))
+        try:
+            for item in tree_view.get_children():
+                values = list(tree_view.item(item, 'values'))
 
-            # 獲取索引位置
-            if display_mode in ["all", "audio_srt"]:
-                index_pos = 1
-                text_pos = 4
-            else:  # "srt" 或 "srt_word" 模式
-                index_pos = 0
-                text_pos = 3
+                # 獲取索引位置
+                if display_mode in ["all", "audio_srt"]:
+                    index_pos = 1
+                    text_pos = 4
+                else:  # "srt" 或 "srt_word" 模式
+                    index_pos = 0
+                    text_pos = 3
 
-            # 確保索引位置有效
-            if len(values) <= index_pos:
-                continue
+                # 確保索引位置有效
+                if len(values) <= index_pos:
+                    continue
 
-            index = str(values[index_pos])
+                index = str(values[index_pos])
 
-            # 檢查是否有校正狀態
-            state = self.get_correction_state(index)
+                # 檢查是否有校正狀態
+                state = self.get_correction_state(index)
 
-            # 更新圖標和文本
-            if state == 'correct':
-                values[-1] = '✅'
-                if text_pos < len(values):
-                    values[text_pos] = self.corrected_texts.get(index, values[text_pos])
-            elif state == 'error':
-                values[-1] = '❌'
-                if text_pos < len(values):
-                    values[text_pos] = self.original_texts.get(index, values[text_pos])
+                # 更新圖標和文本
+                if state == 'correct' and index in self.corrected_texts:
+                    values[-1] = '✅'
+                    if text_pos < len(values):
+                        values[text_pos] = self.corrected_texts.get(index, values[text_pos])
+                elif state == 'error' and index in self.original_texts:
+                    values[-1] = '❌'
+                    if text_pos < len(values):
+                        values[text_pos] = self.original_texts.get(index, values[text_pos])
 
-            # 更新樹狀視圖顯示
-            tree_view.item(item, values=tuple(values))
+                # 更新樹狀視圖顯示
+                tree_view.item(item, values=tuple(values))
+        except Exception as e:
+            self.logger.error(f"更新校正狀態顯示時出錯: {e}")
 
     def correct_text(self, text: str, corrections: Optional[Dict[str, str]] = None) -> Tuple[bool, str, str]:
         """
@@ -380,12 +381,8 @@ class CorrectionService:
         self.original_texts.clear()
         self.corrected_texts.clear()
 
-    def check_text_for_correction(self, text: str) -> Tuple[bool, str, str, List[Tuple[str, str]]]:
-        """
-        檢查文本是否需要校正，並返回校正資訊
-        :param text: 要檢查的文本
-        :return: (需要校正?, 校正後文本, 原始文本, 實際校正部分列表)
-        """
+    def check_text_for_correction(self, text):
+        """檢查文本是否需要校正，並返回校正資訊"""
         if not text:
             return False, "", "", []
 
@@ -439,7 +436,10 @@ class CorrectionService:
                 self.set_correction_state(new_index, original, corrected, 'correct')
 
     def serialize_state(self) -> Dict[str, Dict[str, Any]]:
-        """完整序列化校正狀態"""
+        """
+        序列化當前校正狀態
+        :return: 序列化後的校正狀態
+        """
         serialized = {}
         # 確保包含所有相關狀態
         indices = set(list(self.correction_states.keys()) +
@@ -461,8 +461,11 @@ class CorrectionService:
                 }
         return serialized
 
-    def deserialize_state(self, state_data: Dict[str, Dict[str, Any]]) -> None:
-        """從序列化數據恢復校正狀態"""
+    def deserialize_state(self, state_data: Optional[Dict[str, Dict[str, Any]]]) -> None:
+        """
+        從序列化數據恢復校正狀態
+        :param state_data: 序列化的校正狀態
+        """
         # 清除現有狀態
         self.clear_correction_states()
 
@@ -481,20 +484,32 @@ class CorrectionService:
                 self.original_texts[index] = original
                 self.corrected_texts[index] = corrected
 
-    def transfer_correction_states(self, old_indices: Dict[str, str]) -> None:
+        self.logger.info(f"已從序列化數據恢復 {len(self.correction_states)} 個校正狀態")
+
+    def transfer_correction_states(self, index_mapping: Dict[str, str]) -> None:
         """
         在索引變更時轉移校正狀態
-        :param old_indices: 舊索引到新索引的映射 {舊索引: 新索引}
+        :param index_mapping: 舊索引到新索引的映射 {舊索引: 新索引}
         """
         new_states = {}
         new_original = {}
         new_corrected = {}
 
-        for old_index, new_index in old_indices.items():
+        # 記錄處理過的舊索引
+        processed_old_indices = set()
+
+        for old_index, new_index in index_mapping.items():
             if old_index in self.correction_states:
                 new_states[new_index] = self.correction_states[old_index]
                 new_original[new_index] = self.original_texts.get(old_index, '')
                 new_corrected[new_index] = self.corrected_texts.get(old_index, '')
+                processed_old_indices.add(old_index)
+
+        # 保留未處理的索引
+        for index in set(self.correction_states.keys()) - processed_old_indices:
+            new_states[index] = self.correction_states[index]
+            new_original[index] = self.original_texts.get(index, '')
+            new_corrected[index] = self.corrected_texts.get(index, '')
 
         # 更新狀態
         self.correction_states = new_states
@@ -502,6 +517,7 @@ class CorrectionService:
         self.corrected_texts = new_corrected
 
         self.logger.info(f"已轉移 {len(new_states)} 個項目的校正狀態")
+
 
     def add_correction_state(self, index: str, original_text: str, corrected_text: str, state: str = 'correct') -> None:
         """
