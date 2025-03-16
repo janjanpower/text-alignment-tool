@@ -66,6 +66,9 @@ class AlignmentGUI(BaseWindow):
         self.state_manager = EnhancedStateManager()
         self.state_manager.set_alignment_gui(self)
 
+        # 在初始化後保存初始狀態
+        self.master.after(500, lambda: self.state_manager.save_state("initial", "初始狀態"))
+
         # 設置狀態管理器的回調函數
         self.setup_state_manager_callbacks()
 
@@ -179,6 +182,7 @@ class AlignmentGUI(BaseWindow):
         """初始化檔案管理器"""
         self.logger.debug("開始初始化 FileManager")
 
+        # 創建 FileManager 實例
         self.file_manager = FileManager(self.master)
 
         # 設置回調函數
@@ -189,11 +193,11 @@ class AlignmentGUI(BaseWindow):
             'on_file_info_updated': self.update_file_info,
             'on_status_updated': self.update_status,
             'get_corrections': self.load_corrections,
-            'get_srt_data': self._get_current_srt_data,  # 添加這個回調
+            'get_srt_data': self._get_current_srt_data,
             'get_tree_data': lambda: self.tree.get_children(),
             'show_info': lambda title, msg: show_info(title, msg, self.master),
             'show_warning': lambda title, msg: show_warning(title, msg, self.master),
-            'show_error': lambda title, msg: show_error(title, msg, self.master), # 添加這個回調
+            'show_error': lambda title, msg: show_error(title, msg, self.master),
             'ask_question': lambda title, msg: ask_question(title, msg, self.master)
         }
 
@@ -201,7 +205,7 @@ class AlignmentGUI(BaseWindow):
         for name, callback in callbacks.items():
             self.file_manager.set_callback(name, callback)
 
-        # 同步初始檔案狀態 - 這是關鍵步驟
+        # 同步初始檔案狀態
         self.file_manager.srt_imported = self.srt_imported
         self.file_manager.audio_imported = self.audio_imported
         self.file_manager.word_imported = self.word_imported
@@ -1892,24 +1896,37 @@ class AlignmentGUI(BaseWindow):
                     display_index = str(values[0])
                     text_index = 3
 
-                # 先檢查最後一列的值是否為空，如果為空代表沒有校正需求
-                correction_mark = values[-1]
+                # 獲取當前文本
+                current_text = values[text_index] if text_index < len(values) else ""
+
+                # 先檢查最後一列的值（校正圖標）
+                correction_mark = values[-1] if len(values) > 0 else ""
+
+                # 如果沒有校正圖標，說明這行文本與錯誤字不符，直接返回
                 if correction_mark == "":
-                    # 該項目不含錯誤字，不響應點擊
                     return
 
-                # 檢查是否有校正狀態
+                # 檢查是否有校正狀態，這裡簡化判斷：有圖標就表示有校正需求
                 if display_index in self.correction_service.correction_states:
                     current_state = self.correction_service.correction_states[display_index]
-                    original_text = self.correction_service.original_texts[display_index]
-                    corrected_text = self.correction_service.corrected_texts[display_index]
+                    original_text = self.correction_service.original_texts.get(display_index, "")
+                    corrected_text = self.correction_service.corrected_texts.get(display_index, "")
 
-                    # 切換狀態和文本
+                    # 如果原始文本或校正文本記錄為空，嘗試從當前文本重新檢查
+                    if not original_text or not corrected_text:
+                        _, corrected_text, original_text, _ = self.correction_service.check_text_for_correction(current_text)
+                        # 更新校正記錄
+                        self.correction_service.original_texts[display_index] = original_text
+                        self.correction_service.corrected_texts[display_index] = corrected_text
+
+                    # 根據當前狀態切換
                     if current_state == 'correct':
+                        # 從已校正切換到未校正
                         self.correction_service.correction_states[display_index] = 'error'
                         values[text_index] = original_text
                         values[-1] = '❌'
                     else:
+                        # 從未校正切換到已校正
                         self.correction_service.correction_states[display_index] = 'correct'
                         values[text_index] = corrected_text
                         values[-1] = '✅'
@@ -1918,7 +1935,50 @@ class AlignmentGUI(BaseWindow):
                     self.tree.item(item, values=tuple(values))
 
                     # 保存當前狀態
-                    self.state_manager.save_state(self.get_current_state())
+                    if hasattr(self, 'state_manager'):
+                        self.state_manager.save_state(self.get_current_state())
+
+                    # 更新 SRT 數據
+                    self.update_srt_data_from_treeview()
+                else:
+                    # 如果沒有校正狀態記錄，但有圖標，可能是初始狀態
+                    # 直接檢查文本並設置校正狀態
+                    needs_correction, corrected_text, original_text, _ = self.correction_service.check_text_for_correction(current_text)
+
+                    if needs_correction:
+                        # 決定當前顯示的是原始文本還是校正後文本
+                        is_showing_corrected = (current_text == corrected_text)
+
+                        if is_showing_corrected:
+                            # 當前顯示的是校正後文本，切換到原始文本
+                            self.correction_service.set_correction_state(
+                                display_index,
+                                original_text,
+                                corrected_text,
+                                'error'  # 未校正狀態
+                            )
+                            values[text_index] = original_text
+                            values[-1] = '❌'
+                        else:
+                            # 當前顯示的是原始文本，切換到校正後文本
+                            self.correction_service.set_correction_state(
+                                display_index,
+                                original_text,
+                                corrected_text,
+                                'correct'  # 已校正狀態
+                            )
+                            values[text_index] = corrected_text
+                            values[-1] = '✅'
+
+                        # 更新樹狀圖顯示
+                        self.tree.item(item, values=tuple(values))
+
+                        # 保存當前狀態
+                        if hasattr(self, 'state_manager'):
+                            self.state_manager.save_state(self.get_current_state())
+
+                        # 更新 SRT 數據
+                        self.update_srt_data_from_treeview()
 
             # 處理 Word Text 列點擊 - 切換使用 Word 文本
             if column_name == "Word Text" and self.display_mode in [self.DISPLAY_MODE_SRT_WORD, self.DISPLAY_MODE_ALL]:
@@ -3768,38 +3828,24 @@ class AlignmentGUI(BaseWindow):
 
         self.master.update_idletasks()
 
-
-
-    def undo(self, event=None) -> bool:
+    def undo(self, event=None):
         """撤銷操作"""
         if hasattr(self, 'state_manager'):
-            # 記錄操作前的校正狀態
-            if hasattr(self, 'correction_service'):
-                states_before = len(self.correction_service.correction_states)
-                self.logger.debug(f"撤銷前的校正狀態數量：{states_before}")
-
-            # 執行撤銷
-            result = self.state_manager.undo(event)
-
-            # 記錄操作後的校正狀態
-            if hasattr(self, 'correction_service'):
-                states_after = len(self.correction_service.correction_states)
-                self.logger.debug(f"撤銷後的校正狀態數量：{states_after}")
-
-                # 如果校正狀態數量變化異常，記錄詳細信息
-                if states_before > 0 and states_after == 0:
-                    self.logger.warning("警告：撤銷操作後校正狀態全部消失")
-                    # 嘗試再次更新顯示
-                    self.update_correction_status_display()
-
-            return result
+            success = self.state_manager.undo()
+            if not success:
+                self.update_status("已到達最初狀態，無法再撤銷")
+            return success
         return False
 
-    def redo(self, event=None) -> bool:
+    def redo(self, event=None):
         """重做操作"""
         if hasattr(self, 'state_manager'):
-            return self.state_manager.redo(event)
+            success = self.state_manager.redo()
+            if not success:
+                self.update_status("已到達最新狀態，無法再重做")
+            return success
         return False
+
     def check_display_mode_consistency(self):
         """檢查顯示模式是否與實際狀態一致"""
         expected_mode = None

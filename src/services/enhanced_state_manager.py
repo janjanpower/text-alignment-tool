@@ -18,7 +18,6 @@ class StateRecord:
     operation: Dict[str, Any]
     timestamp: float
     correction_state: Optional[Dict[str, Any]] = None  # 校正狀態
-
 class EnhancedStateManager:
     """增強狀態管理類別，整合原有 AlignmentGUI 的 undo/redo 功能"""
 
