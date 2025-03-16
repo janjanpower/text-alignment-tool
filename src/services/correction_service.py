@@ -148,11 +148,22 @@ class CorrectionService:
         :param corrected_text: 校正後文本
         :param state: 校正狀態 ('correct', 'error' 或空字符串)
         """
-        # 直接設置狀態，不做任何額外檢查
-        self.correction_states[index] = state
-        self.original_texts[index] = original_text
-        self.corrected_texts[index] = corrected_text
-        self.logger.debug(f"設置索引 {index} 的校正狀態為 {state}, 原文: {original_text}, 校正後: {corrected_text}")
+        # 確保索引是字符串
+        index = str(index)
+
+        # 確保文本是字符串
+        original_text = str(original_text) if original_text is not None else ""
+        corrected_text = str(corrected_text) if corrected_text is not None else ""
+
+        # 只有在原文和校正文本不同時才設置狀態
+        if original_text != corrected_text:
+            self.correction_states[index] = state
+            self.original_texts[index] = original_text
+            self.corrected_texts[index] = corrected_text
+            self.logger.debug(f"設置索引 {index} 的校正狀態為 {state}")
+        else:
+            # 如果文本相同，則移除校正狀態
+            self.remove_correction_state(index)
 
     def toggle_correction_state(self, index: str) -> str:
         """
@@ -189,6 +200,9 @@ class CorrectionService:
         :param index: 項目索引
         :return: 校正狀態 ('correct', 'error' 或空字符串)
         """
+        # 確保索引是字符串
+        index = str(index)
+
         if index in self.correction_states:
             return self.correction_states[index]
         else:
@@ -575,3 +589,50 @@ class CorrectionService:
 
         except Exception as e:
             self.logger.error(f"切換校正圖標時出錯: {e}", exc_info=True)
+
+    def create_correction_states_for_split_items(self, original_index, texts, new_indices):
+        """為拆分後的項目創建校正狀態
+
+        Args:
+            original_index: 原始項目索引
+            texts: 拆分後的文本列表
+            new_indices: 新索引列表
+
+        Returns:
+            Dict[str, Dict]: 新的校正狀態
+        """
+        # 保存原始校正狀態
+        original_state = None
+        if original_index in self.correction_states:
+            original_state = self.correction_states[original_index]
+
+        # 新的校正狀態字典
+        new_correction_states = {}
+
+        # 檢查每個文本是否需要校正
+        for i, (text, new_index) in enumerate(zip(texts, new_indices)):
+            needs_correction, corrected_text, original_text, _ = self.check_text_for_correction(text)
+
+            if needs_correction:
+                # 為第一個項目保留原始狀態（如果有）
+                if i == 0 and original_state:
+                    state = original_state
+                else:
+                    state = 'error'  # 默認為未校正狀態
+
+                # 設置校正狀態
+                self.set_correction_state(
+                    new_index,
+                    text,  # 原始文本
+                    corrected_text,  # 校正後文本
+                    state
+                )
+
+                # 保存到結果字典
+                new_correction_states[new_index] = {
+                    'state': state,
+                    'original': text,
+                    'corrected': corrected_text
+                }
+
+        return new_correction_states

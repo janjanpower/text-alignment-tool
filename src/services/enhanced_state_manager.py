@@ -979,3 +979,93 @@ class EnhancedStateManager:
 
         # 記錄重建的校正狀態數量
         self.logger.info(f"已從 UI 重建 {len(self.alignment_gui.correction_service.correction_states)} 個校正狀態")
+
+    def handle_text_split_operation(self, operation, is_undo=True):
+        """專門處理文本拆分操作的撤銷/重做
+
+        Args:
+            operation: 操作信息
+            is_undo: 是否是撤銷操作
+
+        Returns:
+            bool: 處理是否成功
+        """
+        if not hasattr(self, 'alignment_gui') or not self.alignment_gui:
+            return False
+
+        gui = self.alignment_gui
+
+        try:
+            if is_undo:
+                # 撤銷文本拆分
+                # 獲取原始狀態
+                original_state = operation.get('original_state')
+                original_correction = operation.get('original_correction')
+
+                if not original_state:
+                    self.logger.error("無法撤銷：找不到原始狀態")
+                    return False
+
+                # 從原始狀態恢復
+                return self._restore_state_fully(original_state, original_correction)
+            else:
+                # 重做文本拆分
+                # 獲取結果狀態
+                current_state = self.states[self.current_state_index].state
+                current_correction = self.states[self.current_state_index].correction_state
+
+                if not current_state:
+                    self.logger.error("無法重做：找不到結果狀態")
+                    return False
+
+                # 從結果狀態恢復
+                return self._restore_state_fully(current_state, current_correction)
+
+        except Exception as e:
+            self.logger.error(f"處理文本拆分操作時出錯: {e}", exc_info=True)
+            return False
+
+    def _restore_state_fully(self, state, correction_state):
+        """完整恢復狀態，包括樹視圖和校正狀態"""
+        gui = self.alignment_gui
+
+        # 清空當前樹狀視圖
+        for item in gui.tree.get_children():
+            gui.tree.delete(item)
+
+        # 清空相關狀態
+        gui.use_word_text.clear()
+        gui.correction_service.clear_correction_states()
+
+        # 恢復樹狀視圖項目
+        for item_data in state:
+            values = item_data.get('values', [])
+            position = item_data.get('position', 'end')
+
+            # 插入項目
+            new_id = gui.insert_item('', position, values=tuple(values))
+
+            # 恢復標籤
+            tags = item_data.get('tags')
+            if tags:
+                gui.tree.item(new_id, tags=tags)
+
+            # 恢復 use_word_text 狀態
+            if item_data.get('use_word_text', False):
+                gui.use_word_text[new_id] = True
+
+        # 恢復校正狀態
+        if correction_state:
+            gui.correction_service.deserialize_state(correction_state)
+
+        # 更新 SRT 數據
+        gui.update_srt_data_from_treeview()
+
+        # 更新音頻段落
+        if gui.audio_imported and hasattr(gui, 'audio_player'):
+            gui.audio_player.segment_audio(gui.srt_data)
+
+        # 更新校正狀態顯示
+        gui.update_correction_status_display()
+
+        return True

@@ -238,16 +238,76 @@ class TextEditDialog(simpledialog.Dialog):
         y = self.winfo_y() + deltay
         self.geometry(f"+{x}+{y}")
 
+    def bind_events(self):
+        """綁定事件"""
+        # 儲存所有綁定的事件標識符
+        self.event_bindings = []
+
+        # 綁定各種事件並儲存標識符
+        id1 = self.bind('<Return>', self.ok)
+        id2 = self.bind('<Escape>', self.cancel)
+
+        self.event_bindings.extend([id1, id2])
+
+        # 其他事件綁定...
+
+    def unbind_all_events(self):
+        """清除所有事件綁定"""
+        try:
+            # 如果窗口已存在，才執行解綁
+            if hasattr(self, 'winfo_exists') and self.winfo_exists():
+                # 清除已知的事件綁定
+                for binding_id in getattr(self, 'event_bindings', []):
+                    self.unbind(binding_id)
+
+                # 清除常見事件
+                self.unbind('<Return>')
+                self.unbind('<Escape>')
+
+                # 如果有子控件也需要清理，可以在這裡處理
+        except tk.TclError:
+            # 窗口可能已關閉
+            pass
+
+    def ok(self, event=None):
+        """確定按鈕事件"""
+        try:
+            if self.validate():
+                self.apply()
+                if self.parent:
+                    self.grab_release()
+                self.destroy()
+        except tk.TclError:
+            # 窗口可能已關閉
+            pass
+
+    def cancel(self, event=None):
+        """取消按鈕事件"""
+        try:
+            self.result = None
+            if self.parent:
+                self.grab_release()
+            self.destroy()
+        except tk.TclError:
+            # 窗口可能已關閉
+            pass
+
     def generate_time_segments(self, lines):
         """
         根據文本行生成對應的時間戳
         :param lines: 文本行列表
         :return: 包含文本、開始時間、結束時間的列表
         """
+        # 此處添加診斷信息
+        print(f"開始生成時間段，行數：{len(lines)}")
+        print(f"開始時間: {self.start_time}, 結束時間: {self.end_time}")
+
         start_time = parse_time(str(self.start_time))
         end_time = parse_time(str(self.end_time))
         total_duration = (end_time.ordinal - start_time.ordinal)
         total_chars = sum(len(line) for line in lines)
+
+        print(f"總字符數: {total_chars}, 總持續時間: {total_duration}")
 
         current_time = start_time
         results = []
@@ -260,9 +320,12 @@ class TextEditDialog(simpledialog.Dialog):
             if i == len(lines) - 1:
                 next_time = end_time
             else:
-                line_proportion = len(line) / total_chars
+                line_proportion = len(line) / total_chars if total_chars > 0 else 0
                 time_duration = int(total_duration * line_proportion)
                 next_time = pysrt.SubRipTime.from_ordinal(current_time.ordinal + time_duration)
+
+            # 輸出每行的時間分配
+            print(f"行 {i+1}: '{line}' - {current_time} 到 {next_time}")
 
             results.append((
                 line.strip(),                # 文本
@@ -271,6 +334,7 @@ class TextEditDialog(simpledialog.Dialog):
             ))
             current_time = next_time
 
+        print(f"生成完成，共 {len(results)} 個時間段")
         return results
 
     def apply(self):
@@ -294,32 +358,14 @@ class TextEditDialog(simpledialog.Dialog):
                     self.result = word_text
                     return
 
-            # 檢查是否為分離式編輯
-            elif hasattr(self, 'word_text_widget') and self.word_text_widget and self.display_mode in ["srt_word", "all"]:
-                # 分離式編輯結果包含兩部分
-                srt_text = self.text_widget.get("1.0", tk.END).strip()
-                word_text = self.word_text_widget.get("1.0", tk.END).strip()
-
-                # 記錄哪個文本被編輯了
-                edited_parts = []
-                if self.edit_mode in ['srt', 'both'] and srt_text != self.initial_text:
-                    edited_parts.append('srt')
-                if self.edit_mode in ['word', 'both'] and word_text != self.word_text:
-                    edited_parts.append('word')
-
-                # 設置結果
-                self.result = {
-                    'srt_text': srt_text,
-                    'word_text': word_text,
-                    'edited': edited_parts,
-                    'split': False  # 不拆分文本
-                }
-                return
-
             # 處理普通 SRT 編輯
             text = self.text_widget.get("1.0", tk.END).strip()
 
+            # 這裡是關鍵：調試日誌輸出
+            print(f"編輯文本內容: '{text}', 包含換行符: {'\n' in text}")
+
             lines = [line.strip() for line in text.split('\n') if line.strip()]
+            print(f"拆分後的行數: {len(lines)}")
 
             # 基本驗證
             if not lines:
@@ -357,13 +403,16 @@ class TextEditDialog(simpledialog.Dialog):
                 return
 
             # 生成時間分段
-            self.result = self.generate_time_segments(lines)
+            segments = self.generate_time_segments(lines)
+            print(f"生成的分段數量: {len(segments)}")
+            self.result = segments
 
         except Exception as e:
             error_msg = f"處理文本時出錯：{str(e)}"
             logging.error(error_msg, exc_info=True)
             show_error("錯誤", error_msg, self.parent)
             self.result = None
+
 
     def split_text_by_frames(self, lines):
         """按幀數拆分文本"""
@@ -458,5 +507,9 @@ class TextEditDialog(simpledialog.Dialog):
         return 'break'
 
     def show(self):
-        self.wait_window()
-        return self.result
+        try:
+            self.wait_window()
+            return self.result
+        except tk.TclError:
+            # 窗口已被破壞，可能是用戶關閉了窗口
+            return None
