@@ -8,13 +8,25 @@ from typing import List, Dict, Any, Optional, Set
 
 from gui.custom_messagebox import show_error
 @dataclass
+class AppState:
+    """應用程式狀態記錄"""
+    tree_data: List[Dict[str, Any]]  # 樹狀視圖數據
+    correction_states: Dict[str, Dict[str, Any]]  # 校正狀態
+    display_mode: str  # 顯示模式
+    use_word_flags: Dict[str, bool]  # 使用 Word 文本的標記
+    timestamp: float  # 時間戳
+    operation_info: Dict[str, Any]  # 操作信息
+
+# 將 StateRecord 類擴展，增加更多字段
+@dataclass
 class StateRecord:
     """狀態記錄數據類別"""
     state: Any  # 樹狀視圖狀態
     operation: Dict[str, Any]  # 操作信息
     timestamp: float  # 時間戳
     correction_state: Optional[Dict[str, Any]] = None  # 校正狀態
-
+    display_mode: Optional[str] = None  # 顯示模式
+    use_word_flags: Optional[Dict[str, bool]] = None  # 使用 Word 文本的標記
 
 class EnhancedStateManager:
     """增強狀態管理類別，提供狀態保存、撤銷和重做功能"""
