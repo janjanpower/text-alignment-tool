@@ -291,6 +291,11 @@ class CorrectionService:
 
             self.logger.info(f"開始刷新所有校正狀態，共 {len(all_indices)} 個索引")
 
+            # 創建新的校正狀態集合
+            new_correction_states = {}
+            new_original_texts = {}
+            new_corrected_texts = {}
+
             # 對每個索引重新檢查
             for index in all_indices:
                 # 獲取原始文本
@@ -300,19 +305,25 @@ class CorrectionService:
                     continue
 
                 # 重新檢查是否需要校正
-                needs_correction, corrected_text, _, _ = self.check_text_for_correction(original_text)
+                needs_correction, corrected_text, original_text, _ = self.check_text_for_correction(original_text)
 
                 if needs_correction:
-                    # 更新校正狀態，保持原有的校正狀態類型（已校正或未校正）
+                    # 獲取當前狀態（如果存在）
                     current_state = self.correction_states.get(index, 'correct')
-                    self.logger.debug(f"索引 {index} 需要校正，設置狀態為 {current_state}")
-                    self.set_correction_state(index, original_text, corrected_text, current_state)
-                else:
-                    # 移除不需要校正的項目
-                    self.logger.debug(f"索引 {index} 不需要校正，移除校正狀態")
-                    self.remove_correction_state(index)
 
-            self.logger.info("校正狀態刷新完成")
+                    # 保存到新狀態中
+                    new_correction_states[index] = current_state
+                    new_original_texts[index] = original_text
+                    new_corrected_texts[index] = corrected_text
+
+                    self.logger.debug(f"索引 {index} 需要校正，狀態為 {current_state}")
+
+            # 用新的狀態替換舊的狀態（這樣可以完全清除不再需要的狀態）
+            self.correction_states = new_correction_states
+            self.original_texts = new_original_texts
+            self.corrected_texts = new_corrected_texts
+
+            self.logger.info(f"校正狀態刷新完成，保留 {len(self.correction_states)} 個有效狀態")
         except Exception as e:
             self.logger.error(f"刷新校正狀態時出錯: {e}")
 
