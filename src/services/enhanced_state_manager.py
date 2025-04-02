@@ -15,25 +15,102 @@ class StateRecord:
     correction_state: Optional[Dict[str, Any]] = None  # 校正狀態
     display_mode: Optional[str] = None  # 顯示模式
 
+class ApplicationState:
+    """完整的應用狀態模型"""
+
+    def __init__(self):
+        self.tree_items = []  # 樹狀視圖項目
+        self.display_mode = None  # 顯示模式
+        self.srt_data = []  # SRT數據
+        self.correction_states = {}  # 校正狀態
+        self.use_word_flags = {}  # 使用Word文本的標記
+
+    def from_current_state(self, alignment_gui):
+        """從當前應用狀態創建狀態對象"""
+        # 收集樹狀視圖數據
+        self.tree_items = []
+        for item in alignment_gui.tree.get_children():
+            values = alignment_gui.tree.item(item, 'values')
+            tags = alignment_gui.tree.item(item, 'tags')
+            use_word = alignment_gui.use_word_text.get(item, False)
+
+            # 獲取索引值
+            index_position = 1 if alignment_gui.display_mode in [alignment_gui.DISPLAY_MODE_ALL, alignment_gui.DISPLAY_MODE_AUDIO_SRT] else 0
+            index = str(values[index_position]) if len(values) > index_position else ""
+
+            self.tree_items.append({
+                'values': values,
+                'tags': tags,
+                'position': alignment_gui.tree.index(item),
+                'index': index,
+                'use_word': use_word
+            })
+
+            # 保存使用Word文本標記
+            if use_word:
+                self.use_word_flags[index] = True
+
+        # 保存其他狀態
+        self.display_mode = alignment_gui.display_mode
+        self.srt_data = alignment_gui.get_serialized_srt_data()
+
+        # 保存校正狀態
+        if hasattr(alignment_gui, 'correction_service'):
+            self.correction_states = alignment_gui.correction_service.serialize_state()
+
+        return self
+
+    def apply_to(self, alignment_gui):
+        """將狀態應用到應用程序"""
+        # 首先清空當前狀態
+        alignment_gui.clear_current_state()
+
+        # 設置顯示模式
+        if self.display_mode != alignment_gui.display_mode:
+            alignment_gui.display_mode = self.display_mode
+            alignment_gui.refresh_treeview_structure()
+
+        # 恢復SRT數據
+        if self.srt_data:
+            alignment_gui.restore_srt_data(self.srt_data)
+
+        # 恢復樹狀視圖
+        for item_data in self.tree_items:
+            values = item_data.get('values', [])
+            position = item_data.get('position', 'end')
+            tags = item_data.get('tags')
+            use_word = item_data.get('use_word', False)
+
+            # 插入項目
+            new_id = alignment_gui.insert_item('', position, values=tuple(values))
+
+            # 恢復標籤
+            if tags:
+                alignment_gui.tree.item(new_id, tags=tags)
+
+            # 恢復使用Word文本標記
+            if use_word:
+                alignment_gui.use_word_text[new_id] = True
+
+        # 恢復校正狀態
+        if self.correction_states and hasattr(alignment_gui, 'correction_service'):
+            alignment_gui.correction_service.deserialize_state(self.correction_states)
+
+        # 更新音頻段落
+        if alignment_gui.audio_imported and hasattr(alignment_gui, 'audio_player'):
+            alignment_gui.audio_player.segment_audio(alignment_gui.srt_data)
 class EnhancedStateManager:
     """增強狀態管理類別，提供狀態保存、撤銷和重做功能"""
 
-    def __init__(self, max_states: int = 50) -> None:
-        """
-        初始化狀態管理器
-        :param max_states: 最大狀態數量
-        """
-        self.states: List[StateRecord] = []
-        self.current_state_index: int = -1
+    def __init__(self, max_states=50):
+        self.states = []  # 狀態列表
+        self.current_index = -1  # 當前狀態索引
         self.max_states = max_states
         self.logger = logging.getLogger(self.__class__.__name__)
-
-        # 添加回調函數字典
         self.callbacks = {
             'on_state_change': None,
             'on_undo': None,
-            'on_redo': None,
-            'on_state_applied': None
+            'on_redo': None
         }
 
     def set_callback(self, event_name: str, callback_func: Callable) -> None:
@@ -63,7 +140,7 @@ class EnhancedStateManager:
             self.logger.debug(f"未找到事件 '{event_name}' 的回調或回調不可調用")
 
     def save_state(self, current_state: Dict[str, Any], operation_info: Dict[str, Any],
-                  correction_state: Optional[Dict[str, Any]] = None) -> None:
+              correction_state: Optional[Dict[str, Any]] = None) -> None:
         """
         保存應用狀態
         :param current_state: 當前狀態
@@ -113,8 +190,8 @@ class EnhancedStateManager:
                 tree_items_count = len(current_state.get('tree_items', []))
 
             self.logger.debug(f"保存狀態：索引 {self.current_state_index}, 操作: {op_desc} ({op_type}), "
-                         f"項目數: {tree_items_count}, "
-                         f"有校正狀態: {correction_state is not None}")
+                        f"項目數: {tree_items_count}, "
+                        f"有校正狀態: {correction_state is not None}")
 
             # 觸發狀態變更回調
             self.trigger_callback('on_state_change')
@@ -166,19 +243,18 @@ class EnhancedStateManager:
             return self.states[self.current_state_index].operation
         return None
 
-    def can_undo(self) -> bool:
-        """
-        檢查是否可以撤銷
-        :return: 是否可以撤銷
-        """
-        return self.current_state_index > 0
+    def can_undo(self):
+        """檢查是否可以撤銷"""
+        return self.current_index > 0
 
-    def can_redo(self) -> bool:
-        """
-        檢查是否可以重做
-        :return: 是否可以重做
-        """
-        return self.current_state_index < len(self.states) - 1
+    def can_redo(self):
+        """檢查是否可以重做"""
+        return self.current_index < len(self.states) - 1
+    def get_operation_to_undo(self):
+        """獲取要撤銷的操作信息"""
+        if not self.can_undo():
+            return None
+        return self.states[self.current_index]['operation']
 
     def undo(self) -> bool:
         """
@@ -194,96 +270,33 @@ class EnhancedStateManager:
             # 詳細的日誌記錄
             self.logger.debug(f"開始撤銷操作，當前索引: {self.current_state_index}, 目標索引: {self.current_state_index-1}")
 
-            # 保存當前狀態作為可能的回滾點
-            current_state = None
-            current_correction_state = None
-            if self.current_state_index < len(self.states):
-                current_record = self.states[self.current_state_index]
-                current_state = copy.deepcopy(current_record.state)
-                current_correction_state = copy.deepcopy(current_record.correction_state)
-
-                # 記錄當前操作的詳細信息
-                current_op = current_record.operation.get('type', 'unknown')
-                current_desc = current_record.operation.get('description', 'Unknown')
-                self.logger.debug(f"當前操作: [{current_op}] {current_desc}")
-
-                # 記錄當前狀態的特徵
-                if 'tree_items' in current_state:
-                    tree_items_count = len(current_state['tree_items'])
-                    self.logger.debug(f"當前狀態特徵: 樹項目數={tree_items_count}")
-
-            # 獲取目標狀態的詳細信息
+            # 獲取目標狀態
             prev_index = self.current_state_index - 1
-            if 0 <= prev_index < len(self.states):
-                prev_record = self.states[prev_index]
-                prev_op = prev_record.operation.get('type', 'unknown')
-                prev_desc = prev_record.operation.get('description', 'Unknown')
-                self.logger.debug(f"目標操作: [{prev_op}] {prev_desc}")
+            prev_state = self.states[prev_index]
 
-                # 記錄目標狀態的特徵
-                prev_state = prev_record.state
-                if 'tree_items' in prev_state:
-                    tree_items_count = len(prev_state['tree_items'])
-                    self.logger.debug(f"目標狀態特徵: 樹項目數={tree_items_count}")
+            # 更新索引
+            self.current_state_index = prev_index
 
-            # 實際執行索引變更
-            self.current_state_index -= 1
-            prev_state = self.states[self.current_state_index]
+            # 記錄撤銷操作
+            self.logger.debug(f"撤銷到狀態索引: {self.current_state_index}")
 
-            # 記錄回調觸發前的時間
-            callback_start_time = time.time()
-
-            # 使用 try-except 包裝回調調用
+            # 觸發撤銷回調
             try:
-                # 觸發撤銷回調
-                self.logger.debug(f"觸發撤銷回調")
                 if self.callbacks['on_undo']:
                     self.callbacks['on_undo'](prev_state.state, prev_state.correction_state, prev_state.operation)
-                    callback_duration = time.time() - callback_start_time
-                    self.logger.debug(f"撤銷回調完成，耗時: {callback_duration:.3f}秒")
+                    self.logger.debug("撤銷回調執行完成")
                 else:
-                    self.logger.warning("沒有設置撤銷回調函數")
-
-                # 觸發狀態變更回調
-                self.trigger_callback('on_state_change')
-
-                return True
+                    self.logger.warning("撤銷回調未設置")
             except Exception as e:
-                # 如果撤銷回調執行失敗
                 self.logger.error(f"撤銷回調執行失敗: {e}", exc_info=True)
-
-                # 嘗試回滾到之前的狀態
-                if current_state:
-                    try:
-                        # 恢復索引
-                        self.current_state_index += 1
-                        self.logger.warning(f"撤銷失敗，嘗試回滾到索引 {self.current_state_index}")
-
-                        # 如果有回滾回調，嘗試執行
-                        if self.callbacks.get('on_rollback'):
-                            self.callbacks['on_rollback'](current_state, current_correction_state,
-                                                        {'type': 'rollback', 'description': '撤銷失敗回滾'})
-                            self.logger.info("成功回滾到之前狀態")
-                        else:
-                            self.logger.warning("無法回滾：未設置回滾回調")
-                    except Exception as rollback_error:
-                        self.logger.error(f"回滾失敗: {rollback_error}", exc_info=True)
-                else:
-                    self.logger.error("撤銷失敗，無法回滾：沒有保存當前狀態")
-
                 return False
+
+            # 觸發狀態變更回調
+            self.trigger_callback('on_state_change')
+
+            return True
         except Exception as e:
-            # 處理方法本身的執行錯誤
             self.logger.error(f"undo 方法執行時發生錯誤: {e}", exc_info=True)
-
-            # 確保索引不會越界
-            if self.current_state_index < 0:
-                self.current_state_index = 0
-                self.logger.warning("索引修正: 設置為 0")
-            elif self.current_state_index >= len(self.states):
-                self.current_state_index = len(self.states) - 1
-                self.logger.warning(f"索引修正: 設置為 {self.current_state_index}")
-
             return False
 
     def redo(self) -> bool:
@@ -291,17 +304,39 @@ class EnhancedStateManager:
         執行重做操作
         :return: 是否成功重做
         """
-        if not self.can_redo():
-            self.logger.debug("無法重做：已經是最新狀態")
+        try:
+            if not self.can_redo():
+                self.logger.debug("無法重做：已經是最新狀態")
+                return False
+
+            # 詳細的日誌記錄
+            self.logger.debug(f"開始重做操作，當前索引: {self.current_state_index}, 目標索引: {self.current_state_index+1}")
+
+            # 更新索引
+            self.current_state_index += 1
+            next_state = self.states[self.current_state_index]
+
+            # 記錄重做操作
+            self.logger.debug(f"重做到狀態索引: {self.current_state_index}")
+
+            # 觸發重做回調
+            try:
+                if self.callbacks['on_redo']:
+                    self.callbacks['on_redo'](next_state.state, next_state.correction_state, next_state.operation)
+                    self.logger.debug("重做回調執行完成")
+                else:
+                    self.logger.warning("重做回調未設置")
+            except Exception as e:
+                self.logger.error(f"重做回調執行失敗: {e}", exc_info=True)
+                return False
+
+            # 觸發狀態變更回調
+            self.trigger_callback('on_state_change')
+
+            return True
+        except Exception as e:
+            self.logger.error(f"redo 方法執行時發生錯誤: {e}", exc_info=True)
             return False
-
-        # 更新索引
-        self.current_state_index += 1
-        next_state = self.states[self.current_state_index]
-
-        # 觸發重做回調
-        self.trigger_callback('on_redo', next_state.state, next_state.correction_state, next_state.operation)
-        return True
 
     def clear_states(self) -> None:
         """清除所有狀態"""

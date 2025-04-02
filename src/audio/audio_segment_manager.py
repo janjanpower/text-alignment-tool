@@ -164,16 +164,33 @@ class AudioSegmentManager:
                 self.logger.warning("無法重建段落：缺少完整音頻數據")
                 return False
 
+            # 記錄處理前後的段落數量，用於調試
+            before_count = len(self.audio_segments) if hasattr(self, 'audio_segments') else 0
+
             # 清空現有的音頻段落
             old_segments = self.audio_segments.copy()  # 備份
             self.audio_segments = {}
 
             # 處理每個 SRT 項目
+            successful_count = 0
             for sub in srt_data:
                 try:
                     # 獲取字幕的起止時間
                     start_ms = self.time_to_milliseconds(sub.start)
                     end_ms = self.time_to_milliseconds(sub.end)
+
+                    # 確保時間範圍有效
+                    if start_ms >= end_ms:
+                        self.logger.warning(f"字幕 {sub.index} 的時間範圍無效: {start_ms}-{end_ms}")
+                        continue
+
+                    # 確保不超出音頻總長度
+                    total_duration = len(self.full_audio)
+                    end_ms = min(end_ms, total_duration)
+
+                    if start_ms >= total_duration:
+                        self.logger.warning(f"字幕 {sub.index} 的開始時間超出音頻長度: {start_ms}>{total_duration}")
+                        continue
 
                     # 從完整音頻中切割此段落
                     segment = self.full_audio[start_ms:end_ms]
@@ -183,20 +200,30 @@ class AudioSegmentManager:
                     segment = segment.set_channels(2)
                     segment = segment.set_sample_width(2)
 
-                    # 保存到音頻段落字典
-                    self.audio_segments[sub.index] = segment
-                    self.logger.debug(f"重建段落 {sub.index}: {start_ms}ms-{end_ms}ms")
+                    # 保存到音頻段落字典 - 統一使用整數索引
+                    idx = int(sub.index)
+                    self.audio_segments[idx] = segment
+                    successful_count += 1
+                    self.logger.debug(f"重建段落 {idx}: {start_ms}ms-{end_ms}ms, 長度: {end_ms-start_ms}ms")
 
                 except Exception as e:
                     self.logger.error(f"重建段落 {sub.index} 時出錯: {e}")
                     # 如果特定段落處理失敗，嘗試使用原始段落
-                    if sub.index in old_segments:
-                        self.audio_segments[sub.index] = old_segments[sub.index]
+                    try:
+                        idx = int(sub.index)
+                        if idx in old_segments:
+                            self.audio_segments[idx] = old_segments[idx]
+                            self.logger.info(f"使用原始段落代替: {idx}")
+                    except (ValueError, KeyError):
+                        pass
 
+            # 報告處理結果
+            after_count = len(self.audio_segments)
+            self.logger.info(f"音頻段落重建完成: 處理前 {before_count} 個, 處理後 {after_count} 個, 成功 {successful_count} 個")
             return True
 
         except Exception as e:
-            self.logger.error(f"重建音頻段落時出錯: {e}")
+            self.logger.error(f"重建音頻段落時出錯: {e}", exc_info=True)
             return False
 
     def segment_single_audio(self, audio, original_start_time, original_end_time, new_start_times, new_end_times, original_index):

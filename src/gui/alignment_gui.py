@@ -21,7 +21,8 @@ from gui.custom_messagebox import (
 from gui.text_edit_dialog import TextEditDialog
 from services.config_manager import ConfigManager
 from services.correction_service import CorrectionService
-from services.enhanced_state_manager import EnhancedStateManager
+from services.enhanced_state_manager import EnhancedStateManager, ApplicationState
+
 from services.file_manager import FileManager
 from services.word_processor import WordProcessor
 from utils.text_utils import simplify_to_traditional
@@ -620,36 +621,88 @@ class AlignmentGUI(BaseWindow):
         if not self.slider_active:
             return
 
-        # 保存當前校正狀態
-        correction_states = {}
-        for index, state in self.correction_service.correction_states.items():
-            correction_states[index] = {
-                'state': state,
-                'original': self.correction_service.original_texts.get(index, ''),
-                'corrected': self.correction_service.corrected_texts.get(index, '')
-            }
+        try:
+            # 保存當前校正狀態
+            correction_states = {}
+            for index, state in self.correction_service.correction_states.items():
+                correction_states[index] = {
+                    'state': state,
+                    'original': self.correction_service.original_texts.get(index, ''),
+                    'corrected': self.correction_service.corrected_texts.get(index, '')
+                }
 
-        # 更新 SRT 數據以反映變更
-        self.update_srt_data_from_treeview()
+            # 更新 SRT 數據以反映變更
+            self.update_srt_data_from_treeview()
 
-        # 恢復校正狀態
-        for index, data in correction_states.items():
-            self.correction_service.correction_states[index] = data['state']
-            self.correction_service.original_texts[index] = data['original']
-            self.correction_service.corrected_texts[index] = data['corrected']
+            # 恢復校正狀態
+            for index, data in correction_states.items():
+                self.correction_service.correction_states[index] = data['state']
+                self.correction_service.original_texts[index] = data['original']
+                self.correction_service.corrected_texts[index] = data['corrected']
 
-        # 如果有音頻，更新音頻段落
-        if self.audio_imported and hasattr(self, 'audio_player'):
-            self.audio_player.segment_audio(self.srt_data)
+            # 如果有音頻，更新音頻段落 (這是關鍵步驟)
+            if self.audio_imported and hasattr(self, 'audio_player') and self.audio_player.audio:
+                # 創建一份當前時間調整的記錄，用於可能的撤銷操作
+                self._record_time_adjustment()
 
-        # 保存狀態
-        self.state_manager.save_state(self.get_current_state(), {
-            'type': 'time_adjust',
-            'description': '調整時間軸'
-        })
+                # 使用 segment_audio 而不是 rebuild_segments 確保完全重建
+                self.audio_player.segment_audio(self.srt_data)
+                self.logger.info("時間調整後已更新音頻段落")
 
-        # 隱藏滑桿
-        self.hide_time_slider()
+            # 保存狀態
+            self.state_manager.save_state(self.get_current_state(), {
+                'type': 'time_adjust',
+                'description': '調整時間軸'
+            })
+
+            # 隱藏滑桿
+            self.hide_time_slider()
+
+        except Exception as e:
+            self.logger.error(f"應用時間變更時出錯: {e}", exc_info=True)
+            # 即使出錯也要隱藏滑桿
+            self.hide_time_slider()
+
+    def _record_time_adjustment(self):
+        """記錄時間調整以便撤銷"""
+        # 已有紀錄，就不需要重複記錄
+        if hasattr(self, 'last_time_adjust_operation') and self.last_time_adjust_operation:
+            return
+
+        # 獲取所有項目的時間值
+        items = self.tree.get_children()
+        if not items:
+            return
+
+        # 根據顯示模式確定時間列的索引
+        if self.display_mode in [self.DISPLAY_MODE_SRT, self.DISPLAY_MODE_SRT_WORD]:
+            start_index = 1  # Start 欄位索引
+            end_index = 2    # End 欄位索引
+        else:  # 其他模式
+            start_index = 2  # Start 欄位索引
+            end_index = 3    # End 欄位索引
+
+        # 保存所有項目的原始時間值
+        original_items_times = []
+        for i, item in enumerate(items):
+            values = self.tree.item(item, 'values')
+            if len(values) > end_index:
+                item_data = {
+                    'id': item,
+                    'index': i,
+                    'start': values[start_index] if len(values) > start_index else "",
+                    'end': values[end_index] if len(values) > end_index else ""
+                }
+                original_items_times.append(item_data)
+
+        # 保存操作記錄
+        self.last_time_adjust_operation = {
+            'timestamp': time.time(),
+            'original_items_times': original_items_times,
+            'display_mode': self.display_mode,
+            'start_index': start_index,
+            'end_index': end_index
+        }
 
     def check_slider_focus(self, event):
         """檢查點擊是否在滑桿外部，如果是則隱藏滑桿"""
@@ -670,6 +723,17 @@ class AlignmentGUI(BaseWindow):
 
     def hide_time_slider(self):
         """隱藏時間調整滑桿"""
+        # 應用變更 (如果尚未應用)
+        if self.slider_active and self.slider_target:
+            # 確保應用時間變更，但不重複調用 hide_time_slider 避免遞迴
+            if hasattr(self, '_hide_time_slider_in_progress') and self._hide_time_slider_in_progress:
+                pass  # 避免遞迴調用
+            else:
+                self._hide_time_slider_in_progress = True
+                self.apply_time_change()
+                self._hide_time_slider_in_progress = False
+                return  # 提前返回，因為 apply_time_change 會調用本方法
+
         if hasattr(self, 'time_slider') and self.time_slider:
             # 獲取滑桿的父框架
             parent = self.time_slider.master
@@ -685,7 +749,6 @@ class AlignmentGUI(BaseWindow):
             self.master.unbind("<Button-1>")  # 移除特定的回調函數標識符
         except:
             pass
-
     def remember_mouse_position(self, event):
         """記錄當前滑鼠位置"""
         self.last_mouse_x = event.x_root - self.tree.winfo_rootx()
@@ -751,9 +814,7 @@ class AlignmentGUI(BaseWindow):
             if hasattr(self, 'state_manager'):
                 current_state = self.get_current_state()
                 correction_state = self.correction_service.serialize_state()
-                self.state_manager.save_state(current_state,
-                                            {'type': '操作類型', 'description': '操作描述'},
-                                            correction_state)
+                self.save_operation_state('操作類型', '操作描述', additional_info={'key': 'value'})
 
             # 清除所有資料
             self.clear_current_data()
@@ -1311,10 +1372,7 @@ class AlignmentGUI(BaseWindow):
             if hasattr(self, 'state_manager'):
                 current_state = self.get_current_state()
                 correction_state = self.correction_service.serialize_state()
-                self.state_manager.save_state(current_state,
-                                            {'type': '操作類型', 'description': '操作描述'},
-                                            correction_state)
-
+                self.save_operation_state('操作類型', '操作描述', additional_info={'key': 'value'})
             # 執行清理
             self.cleanup()
 
@@ -1794,9 +1852,7 @@ class AlignmentGUI(BaseWindow):
                     if hasattr(self, 'state_manager'):
                         current_state = self.get_current_state()
                         correction_state = self.correction_service.serialize_state()
-                        self.state_manager.save_state(current_state,
-                                                    {'type': '操作類型', 'description': '操作描述'},
-                                                    correction_state)
+                        self.save_operation_state('操作類型', '操作描述', additional_info={'key': 'value'})
 
                     # 更新 SRT 數據
                     self.update_srt_data_from_treeview()
@@ -1837,9 +1893,7 @@ class AlignmentGUI(BaseWindow):
                         if hasattr(self, 'state_manager'):
                             current_state = self.get_current_state()
                             correction_state = self.correction_service.serialize_state()
-                            self.state_manager.save_state(current_state,
-                                                        {'type': '操作類型', 'description': '操作描述'},
-                                                        correction_state)
+                            self.save_operation_state('操作類型', '操作描述', additional_info={'key': 'value'})
 
                         # 更新 SRT 數據
                         self.update_srt_data_from_treeview()
@@ -1907,10 +1961,7 @@ class AlignmentGUI(BaseWindow):
                 if hasattr(self, 'state_manager'):
                     current_state = self.get_current_state()
                     correction_state = self.correction_service.serialize_state()
-                    self.state_manager.save_state(current_state,
-                                                {'type': '操作類型', 'description': '操作描述'},
-                                                correction_state)
-
+                    self.save_operation_state('操作類型', '操作描述', additional_info={'key': 'value'})
                 return
 
             # 處理音頻播放列的點擊
@@ -2141,20 +2192,32 @@ class AlignmentGUI(BaseWindow):
                 'use_word': self.use_word_text.get(item, False)
             }
 
-            # 檢查結果類型
+            # 在檢測到文本拆分結果後的處理部分
             if isinstance(result, list) and len(result) > 0 and isinstance(result[0], tuple):
                 # 這是文本拆分結果 - 處理文本拆分和時間軸分配
                 self.logger.debug(f"檢測到文本拆分結果，共 {len(result)} 個片段")
-               # 記錄這是一次分割操作
+                # 記錄這是一次分割操作
+
+                # 獲取原始文本和時間信息
+                original_text = original_item_info['values'][3 if self.display_mode in [self.DISPLAY_MODE_SRT, self.DISPLAY_MODE_SRT_WORD] else 4]
+
+                # 獲取Word文本（如果存在）
+                original_word_text = ""
+                if self.display_mode in [self.DISPLAY_MODE_ALL, self.DISPLAY_MODE_SRT_WORD]:
+                    word_text_index = 5 if self.display_mode == self.DISPLAY_MODE_ALL else 4
+                    if len(original_item_info['values']) > word_text_index:
+                        original_word_text = original_item_info['values'][word_text_index]
+
                 self.last_split_operation = {
                     'timestamp': time.time(),
                     'srt_index': srt_index,
                     'split_result': result,
-                    'original_text': original_item_info['values'][3 if self.display_mode in [self.DISPLAY_MODE_SRT, self.DISPLAY_MODE_SRT_WORD] else 4],
+                    'original_text': original_text,
                     'original_start': start_time,
                     'original_end': end_time,
                     'display_mode': self.display_mode,
-                    'original_correction_state': self.correction_service.serialize_state() if hasattr(self, 'correction_service') else {}
+                    'original_correction_state': self.correction_service.serialize_state() if hasattr(self, 'correction_service') else {},
+                    'original_word_text': original_word_text  # 保存Word文本
                 }
 
                 # 記錄該項目的原始校正狀態
@@ -2661,21 +2724,6 @@ class AlignmentGUI(BaseWindow):
             if tags and 'mismatch' in tags:
                 tags = tuple(tag for tag in tags if tag != 'mismatch')
 
-            # 檢查原始項目的校正狀態
-            values = self.tree.item(original_item)['values']
-            correction_state = ''
-            if self.display_mode == self.DISPLAY_MODE_ALL and len(values) > 7:
-                correction_state = values[7]
-            elif self.display_mode == self.DISPLAY_MODE_SRT_WORD and len(values) > 6:
-                correction_state = values[6]
-
-            # 取得原始SRT文本
-            srt_text = ""
-            if self.display_mode == self.DISPLAY_MODE_ALL:
-                srt_text = values[4] if len(values) > 4 else ""
-            elif self.display_mode == self.DISPLAY_MODE_SRT_WORD:
-                srt_text = values[3] if len(values) > 3 else ""
-
             # 從樹狀視圖中刪除原項目
             self.tree.delete(original_item)
 
@@ -2695,26 +2743,30 @@ class AlignmentGUI(BaseWindow):
                     new_values[2] = new_start  # Start
                     new_values[3] = new_end    # End
 
-                    # 為第一個段落保留SRT文本，其他段落使用空白字符串但不是None
+                    # 為第一個段落保留SRT文本，其他段落使用空白字符串
                     if i > 0:
                         new_values[4] = ""  # 新段落的SRT文本為空白字符串
 
                     new_values[5] = text  # Word文本
                     new_values[6] = ""  # 清空Match欄位
-                    # 不修改校正狀態 (V/X)，保留原始值
+
+                    # 重要修改：清空校正圖標，稍後根據校正檢查重新設置
+                    new_values[7] = ""
 
                 elif self.display_mode == self.DISPLAY_MODE_SRT_WORD:
                     new_values[0] = str(new_srt_index)  # Index
                     new_values[1] = new_start  # Start
                     new_values[2] = new_end    # End
 
-                    # 為第一個段落保留SRT文本，其他段落使用空白字符串但不是None
+                    # 為第一個段落保留SRT文本，其他段落使用空白字符串
                     if i > 0:
                         new_values[3] = ""  # 新段落的SRT文本為空白字符串
 
                     new_values[4] = text  # Word文本
                     new_values[5] = ""  # 清空Match欄位
-                    # 不修改校正狀態 (V/X)，保留原始值
+
+                    # 重要修改：清空校正圖標，稍後根據校正檢查重新設置
+                    new_values[6] = ""
 
                 # 確保V.O值保持
                 if self.display_mode in [self.DISPLAY_MODE_ALL, self.DISPLAY_MODE_AUDIO_SRT]:
@@ -2731,6 +2783,27 @@ class AlignmentGUI(BaseWindow):
                 # 如果這是第一個項目，保存use_word_text狀態
                 if i == 0 and original_item in self.use_word_text:
                     self.use_word_text[new_item] = self.use_word_text[original_item]
+
+                # 重要修改：重新檢查文本是否需要校正，不繼承原校正狀態
+                needs_correction, corrected_text, original_text, _ = self.correction_service.check_text_for_correction(text)
+
+                # 根據校正檢查設置校正圖標和狀態
+                if needs_correction:
+                    # 獲取校正圖標的位置
+                    vx_pos = 7 if self.display_mode == self.DISPLAY_MODE_ALL else 6
+
+                    # 更新值列表中的校正圖標
+                    updated_values = list(self.tree.item(new_item, 'values'))
+                    updated_values[vx_pos] = '❌'  # 預設為未校正狀態
+                    self.tree.item(new_item, values=tuple(updated_values))
+
+                    # 設置校正狀態
+                    self.correction_service.set_correction_state(
+                        str(new_srt_index),
+                        original_text,
+                        corrected_text,
+                        'error'  # 預設為未校正狀態
+                    )
 
                 # 更新Word處理器中的段落
                 if hasattr(self, 'word_processor'):
@@ -2757,10 +2830,10 @@ class AlignmentGUI(BaseWindow):
                 self.tree.selection_set(new_items)
                 self.tree.see(new_items[0])
 
-            # 更新 SRT 數據以反映變化 - 這是關鍵，確保 SRT 數據與界面同步
+            # 更新 SRT 數據以反映變化
             self.update_srt_data_from_treeview()
 
-            # 保存當前狀態 - 這裡是關鍵，我們要正確保存當前斷句後的狀態
+            # 保存當前狀態
             current_state = self.get_current_state()
             current_correction = self.correction_service.serialize_state()
 
@@ -2786,6 +2859,7 @@ class AlignmentGUI(BaseWindow):
         except Exception as e:
             self.logger.error(f"處理 Word 文本分割時出錯: {e}", exc_info=True)
             show_error("錯誤", f"分割 Word 文本失敗: {str(e)}", self.master)
+
     def bind_all_events(self) -> None:
         """綁定所有事件"""
         # 綁定視窗關閉事件
@@ -2815,10 +2889,7 @@ class AlignmentGUI(BaseWindow):
         """
         current_state = self.get_current_state()
         correction_state = self.correction_service.serialize_state()
-        self.state_manager.save_state(current_state,
-                                    {'type': '操作類型', 'description': '操作描述'},
-                                    correction_state)
-
+        self.save_operation_state('操作類型', '操作描述', additional_info={'key': 'value'})
     def on_closing(self) -> None:
         """處理視窗關閉事件"""
         try:
@@ -2826,9 +2897,7 @@ class AlignmentGUI(BaseWindow):
                 self.audio_player.cleanup()
             current_state = self.get_current_state()
             correction_state = self.correction_service.serialize_state()
-            self.state_manager.save_state(current_state,
-                                        {'type': '操作類型', 'description': '操作描述'},
-                                        correction_state)
+            self.save_operation_state('操作類型', '操作描述', additional_info={'key': 'value'})
 
             # 先解除所有事件綁定
             for widget in self.master.winfo_children():
@@ -4070,6 +4139,9 @@ class AlignmentGUI(BaseWindow):
         self.state_manager.set_callback('on_redo', self.on_redo_state)
         self.state_manager.set_callback('on_state_applied', self.on_state_applied)
 
+        # 記錄初始化完成
+        self.logger.info("狀態管理器初始化完成，已設置所有回調函數")
+
     def get_tree_data(self) -> List[Dict[str, Any]]:
         """獲取樹狀視圖數據"""
         tree_data = []
@@ -4117,12 +4189,7 @@ class AlignmentGUI(BaseWindow):
             if 'original_item_mapping' in operation:
                 id_mapping = operation.get('original_item_mapping', {})
 
-            # 4. 恢復 SRT 數據
-            if 'srt_data' in state and state['srt_data']:
-                self.restore_srt_data(state['srt_data'])
-                self.logger.debug(f"已恢復 SRT 數據，項目數: {len(state['srt_data'])}")
-
-            # 5. 恢復樹狀視圖
+            # 4. 恢復樹狀視圖（確保先恢復樹狀視圖，再恢復SRT數據）
             new_items = []  # 收集新的項目 ID
             if 'tree_items' in state:
                 for item_data in state['tree_items']:
@@ -4145,6 +4212,15 @@ class AlignmentGUI(BaseWindow):
 
                 self.logger.debug(f"已恢復樹狀視圖，項目數: {len(state['tree_items'])}")
 
+            # 5. 恢復 SRT 數據
+            if 'srt_data' in state and state['srt_data']:
+                self.restore_srt_data(state['srt_data'])
+                self.logger.debug(f"已恢復 SRT 數據，項目數: {len(state['srt_data'])}")
+            else:
+                # 如果沒有 SRT 數據，從樹狀視圖重建
+                self.update_srt_data_from_treeview()
+                self.logger.debug("從樹狀視圖重建 SRT 數據")
+
             # 6. 恢復使用 Word 文本的標記
             if 'use_word_text' in state:
                 self.restore_use_word_flags(state['use_word_text'], id_mapping)
@@ -4152,25 +4228,20 @@ class AlignmentGUI(BaseWindow):
 
             # 7. 恢復校正狀態
             if correction_state and hasattr(self, 'correction_service'):
-                self.correction_service.deserialize_state(correction_state)
+                self.correction_service.deserialize_state(correction_state, id_mapping)
                 self.logger.debug("已恢復校正狀態")
 
-            # 8. 更新 SRT 數據（如果步驟 4 沒有恢復）
-            if 'srt_data' not in state:
-                self.update_srt_data_from_treeview()
-                self.logger.debug("已從樹狀視圖更新 SRT 數據")
-
-            # 9. 更新音頻段落
+            # 8. 更新音頻段落
             if self.audio_imported and hasattr(self, 'audio_player'):
                 self.audio_player.segment_audio(self.srt_data)
                 self.logger.debug("已更新音頻段落")
 
-            # 10. 更新校正狀態顯示
+            # 9. 更新校正狀態顯示
             if hasattr(self, 'correction_service'):
                 self.correction_service.update_display_status(self.tree, self.display_mode)
                 self.logger.debug("已更新校正狀態顯示")
 
-            # 11. 恢復視圖位置
+            # 10. 恢復視圖位置
             if visible_item:
                 # 嘗試1: 直接使用保存的項目 ID
                 if self.tree.exists(visible_item):
@@ -4203,16 +4274,19 @@ class AlignmentGUI(BaseWindow):
                                 else:
                                     self.logger.warning("無法恢復視圖位置：樹為空")
 
-            # 12. 觸發狀態應用完成回調
+            # 11. 觸發狀態應用完成回調
             if hasattr(self, 'state_manager'):
                 self.state_manager.trigger_callback('on_state_applied')
 
-            # 13. 更新狀態欄
+            # 12. 更新狀態欄
             op_desc = "恢復狀態"
             if operation and 'description' in operation:
                 op_desc = operation['description']
             self.update_status(f"已{op_desc}")
             self.logger.debug(f"狀態應用完成: {op_desc}")
+
+            # 13. 強制更新界面
+            self.master.update_idletasks()
 
         except Exception as e:
             self.logger.error(f"應用狀態時出錯: {e}", exc_info=True)
@@ -4250,18 +4324,69 @@ class AlignmentGUI(BaseWindow):
             op_type = operation.get('type', '')
             self.logger.debug(f"執行撤銷操作: {op_type} - {operation.get('description', '未知操作')}")
 
-            # 專門處理拆分操作的復原
+            # 根據操作類型分別處理
             if op_type == 'split_srt':
                 self.restore_from_split_operation(operation)
-                return
+            elif op_type == 'combine_sentences':
+                # 使用保存的原始樹狀態還原
+                if 'original_tree_state' in operation:
+                    self.clear_current_treeview()
+                    self.restore_tree_data(operation.get('original_tree_state', []))
+                    self.update_srt_data_from_treeview()
+                    # 更新音頻段落
+                    if self.audio_imported and hasattr(self, 'audio_player'):
+                        self.audio_player.segment_audio(self.srt_data)
+            elif op_type == 'align_end_times':
+                # 處理時間調整操作的撤銷
+                if 'backup_values' in operation:
+                    backup_values = operation.get('backup_values', {})
+                    for item, values in backup_values.items():
+                        if self.tree.exists(item):
+                            self.tree.item(item, values=values)
+                    self.update_srt_data_from_treeview()
+                    # 更新音頻段落
+                    if self.audio_imported and hasattr(self, 'audio_player'):
+                        self.audio_player.segment_audio(self.srt_data)
+            else:
+                # 其他類型的操作使用一般方法處理
+                self.apply_state(state, correction_state, operation)
 
-            # 其他類型的操作使用一般方法處理
-            self.apply_state(state, correction_state, operation)
             self.update_status(f"已撤銷：{operation.get('description', '未知操作')}")
+            # 強制更新界面
+            self.master.update_idletasks()
         except Exception as e:
             self.logger.error(f"撤銷狀態時出錯: {e}", exc_info=True)
             show_error("錯誤", f"撤銷操作失敗: {str(e)}", self.master)
 
+    def on_redo_state(self, state, correction_state, operation):
+        """
+        重做狀態回調處理
+
+        Args:
+            state: 要恢復的狀態
+            correction_state: 校正狀態
+            operation: 操作信息
+        """
+        try:
+            op_type = operation.get('type', '')
+            self.logger.debug(f"執行重做操作: {op_type} - {operation.get('description', '未知操作')}")
+
+            # 應用狀態
+            self.apply_state(state, correction_state, operation)
+
+            # 更新 SRT 數據
+            self.update_srt_data_from_treeview()
+
+            # 如果有音頻，更新音頻段落
+            if self.audio_imported and hasattr(self, 'audio_player'):
+                self.audio_player.segment_audio(self.srt_data)
+
+            self.update_status(f"已重做：{operation.get('description', '未知操作')}")
+            # 強制更新界面
+            self.master.update_idletasks()
+        except Exception as e:
+            self.logger.error(f"重做狀態時出錯: {e}", exc_info=True)
+            show_error("錯誤", f"重做操作失敗: {str(e)}", self.master)
     def restore_from_split_operation(self, operation):
         """從拆分操作恢復狀態 - 基於完整原始狀態的復原"""
         try:
@@ -4412,23 +4537,6 @@ class AlignmentGUI(BaseWindow):
         except Exception as e:
             self.logger.error(f"清除樹狀視圖時出錯: {e}")
 
-    def on_redo_state(self, state, correction_state, operation):
-        """
-        重做狀態回調處理
-
-        Args:
-            state: 要恢復的狀態
-            correction_state: 校正狀態
-            operation: 操作信息
-        """
-        try:
-            self.logger.debug(f"執行重做操作: {operation.get('description', '未知操作')}")
-            self.apply_state(state, correction_state, operation)
-            self.update_status(f"已重做：{operation.get('description', '未知操作')}")
-        except Exception as e:
-            self.logger.error(f"重做狀態時出錯: {e}")
-            show_error("錯誤", f"重做操作失敗: {str(e)}", self.master)
-
     def on_state_applied(self):
         """
         狀態應用完成回調
@@ -4454,18 +4562,32 @@ class AlignmentGUI(BaseWindow):
         """
         try:
             if hasattr(self, 'state_manager'):
+                # 檢查是否有任何內容可保存
+                if not self.tree.get_children():
+                    self.logger.debug("樹為空，跳過初始狀態保存")
+                    return
+
                 current_state = self.get_current_state()
                 correction_state = self.correction_service.serialize_state() if hasattr(self, 'correction_service') else None
 
+                # 診斷日誌
+                self.logger.debug(f"保存初始狀態，樹項目數: {len(self.tree.get_children())}")
+
+                # 保存狀態
                 self.state_manager.save_state(current_state, {
                     'type': 'initial',
                     'description': '初始狀態'
                 }, correction_state)
 
-                self.logger.debug("已保存初始狀態")
+                # 再次診斷
+                self.logger.debug(f"初始狀態已保存，當前索引: {self.state_manager.current_state_index}, 狀態數: {len(self.state_manager.states)}")
+
+                # 更新按鈕狀態
                 self.update_undo_redo_buttons()
+            else:
+                self.logger.warning("無法保存初始狀態：狀態管理器未初始化")
         except Exception as e:
-            self.logger.error(f"保存初始狀態時出錯: {e}")
+            self.logger.error(f"保存初始狀態時出錯: {e}", exc_info=True)
 
     def undo(self, event=None):
         """
@@ -4478,30 +4600,46 @@ class AlignmentGUI(BaseWindow):
             是否成功撤銷
         """
         try:
+            self.logger.debug("開始執行撤銷操作")
+
             # 首先嘗試特殊操作的撤銷
             if hasattr(self, 'last_split_operation') and self.last_split_operation:
                 # 如果最近有拆分操作，使用專門的拆分撤銷
                 self.logger.debug("檢測到拆分操作，使用專用撤銷機制")
                 if self.undo_split_operation():
+                    self.update_status("已撤銷拆分操作")
                     return True
 
             if hasattr(self, 'last_combine_operation') and self.last_combine_operation:
                 # 如果最近有合併操作，使用專門的合併撤銷
                 self.logger.debug("檢測到合併操作，使用專用撤銷機制")
                 if self.undo_combine_operation():
+                    self.update_status("已撤銷合併操作")
                     return True
 
             if hasattr(self, 'last_time_adjust_operation') and self.last_time_adjust_operation:
                 # 如果最近有時間調整操作，使用專門的時間調整撤銷
                 self.logger.debug("檢測到時間調整操作，使用專用撤銷機制")
                 if self.undo_time_adjust_operation():
+                    self.update_status("已撤銷時間調整操作")
                     return True
 
             # 如果沒有特殊操作或特殊撤銷失敗，使用常規撤銷
             if hasattr(self, 'state_manager'):
                 if self.state_manager.can_undo():
                     self.logger.debug("使用一般撤銷機制")
-                    self.state_manager.undo()
+                    result = self.state_manager.undo()
+
+                    # 重要：確保更新 UI
+                    self.master.update_idletasks()
+
+                    # 確保修改後更新 SRT 數據和音頻段落
+                    self.update_srt_data_from_treeview()
+
+                    # 如果有音頻，更新音頻段落
+                    if self.audio_imported and hasattr(self, 'audio_player'):
+                        self.audio_player.segment_audio(self.srt_data)
+
                     return True
                 else:
                     self.update_status("已到達最初狀態，無法再撤銷")
@@ -4527,25 +4665,38 @@ class AlignmentGUI(BaseWindow):
             是否成功重做
         """
         try:
+            self.logger.debug("開始執行重做操作")
+
             if hasattr(self, 'state_manager'):
                 if self.state_manager.can_redo():
-                    self.state_manager.redo()
+                    result = self.state_manager.redo()
+
+                    # 重要：確保更新 UI
+                    self.master.update_idletasks()
+
+                    # 確保修改後更新 SRT 數據和音頻段落
+                    self.update_srt_data_from_treeview()
+
+                    # 如果有音頻，更新音頻段落
+                    if self.audio_imported and hasattr(self, 'audio_player'):
+                        self.audio_player.segment_audio(self.srt_data)
+
+                    self.update_status("已重做操作")
                     return True
                 else:
                     self.update_status("已到達最新狀態，無法再重做")
                     self.logger.debug("嘗試重做，但已到達最新狀態")
             else:
                 self.logger.warning("無法重做：狀態管理器未初始化")
+
         except Exception as e:
-            self.logger.error(f"執行重做操作時出錯: {e}")
+            self.logger.error(f"執行重做操作時出錯: {e}", exc_info=True)
             show_error("錯誤", f"重做操作失敗: {str(e)}", self.master)
 
         return False
 
     def save_operation_state(self, operation_type, operation_description, additional_info=None):
-        """
-        統一保存操作狀態的方法
-        """
+        """統一保存操作狀態的方法"""
         if not hasattr(self, 'state_manager'):
             self.logger.warning("無法保存操作狀態：狀態管理器未初始化")
             return
@@ -4564,22 +4715,26 @@ class AlignmentGUI(BaseWindow):
                 'type': operation_type,
                 'description': operation_description,
                 'timestamp': time.time(),
-                'display_mode': self.display_mode,  # 確保包含顯示模式
-                'tree_items_count': len(self.tree.get_children())  # 幫助調試
+                'display_mode': self.display_mode,
+                'tree_items_count': len(self.tree.get_children())
             }
 
             # 添加附加信息
             if additional_info:
                 for key, value in additional_info.items():
-                    # 避免重複添加
                     if key not in operation_info:
                         operation_info[key] = value
 
+            # 保存狀態前添加診斷日誌
+            self.logger.debug(f"正在保存狀態，操作類型: {operation_type}, 狀態管理器狀態數: {len(self.state_manager.states)}")
+
             # 保存狀態
             self.state_manager.save_state(current_state, operation_info, correction_state)
-            self.logger.debug(f"已保存操作狀態: {operation_description}, 類型: {operation_type}")
+
+            # 保存後再次診斷
+            self.logger.debug(f"狀態已保存，當前狀態索引: {self.state_manager.current_state_index}, 總狀態數: {len(self.state_manager.states)}")
         except Exception as e:
-            self.logger.error(f"保存操作狀態時出錯: {e}")
+            self.logger.error(f"保存操作狀態時出錯: {e}", exc_info=True)
 
     def _get_appropriate_display_mode(self):
         """根據已匯入的檔案類型確定適當的顯示模式"""
@@ -5078,14 +5233,20 @@ class AlignmentGUI(BaseWindow):
             show_error("錯誤", f"清除數據失敗: {str(e)}", self.master)
 
     def clear_current_state(self):
-        """完全清除當前狀態"""
+        """徹底清除當前狀態"""
         try:
+            # 在清除前記錄當前狀態
+            tree_items_count = len(self.tree.get_children() if hasattr(self, 'tree') else [])
+            self.logger.debug(f"開始清除當前狀態，當前樹項目數: {tree_items_count}")
+
             # 清空樹狀視圖
-            for item in self.tree.get_children():
-                self.tree.delete(item)
+            if hasattr(self, 'tree'):
+                for item in self.tree.get_children():
+                    self.tree.delete(item)
 
             # 清空相關狀態
-            self.use_word_text.clear()
+            if hasattr(self, 'use_word_text'):
+                self.use_word_text.clear()
 
             # 清空校正狀態
             if hasattr(self, 'correction_service'):
@@ -5093,7 +5254,7 @@ class AlignmentGUI(BaseWindow):
 
             self.logger.debug("已清除當前狀態")
         except Exception as e:
-            self.logger.error(f"清除當前狀態時出錯: {e}")
+            self.logger.error(f"清除當前狀態時出錯: {e}", exc_info=True)
 
     def restore_srt_data(self, serialized_data):
         """
@@ -5196,9 +5357,7 @@ class AlignmentGUI(BaseWindow):
         return None
 
     def undo_split_operation(self):
-        """
-        專門處理拆分操作的撤銷，完全獨立於一般撤銷機制
-        """
+        """專門處理拆分操作的撤銷"""
         try:
             # 檢查是否有拆分操作記錄
             if not hasattr(self, 'last_split_operation') or not self.last_split_operation:
@@ -5209,8 +5368,10 @@ class AlignmentGUI(BaseWindow):
             split_op = self.last_split_operation
             srt_index = split_op.get('srt_index')
             split_result = split_op.get('split_result', [])
-            timestamp = split_op.get('timestamp', 0)
             original_correction_state = split_op.get('original_correction_state', {})
+
+            # 重要：獲取保存的Word文本
+            original_word_text = split_op.get('original_word_text', "")
 
             self.logger.debug(f"執行拆分操作撤銷，索引: {srt_index}, 拆分數: {len(split_result)}")
 
@@ -5218,6 +5379,7 @@ class AlignmentGUI(BaseWindow):
             items_to_remove = []
             positions = []
             first_item_position = -1
+
 
             # 尋找所有相關項目
             for item in self.tree.get_children():
@@ -5254,7 +5416,7 @@ class AlignmentGUI(BaseWindow):
             for text, _, _ in split_result:
                 original_text += text
 
-            # 獲取時間範圍 - 拆分第一段的開始時間和最後一段的結束時間
+            # 獲取時間範圍
             original_start = split_result[0][1] if split_result else ""
             original_end = split_result[-1][2] if split_result else ""
 
@@ -5313,11 +5475,14 @@ class AlignmentGUI(BaseWindow):
                         display_text = corrected_text
                         correction_icon = '✅'
 
-            # 創建恢復的值列表
+            original_word_text = split_op.get('original_word_text', "")
+
+            # 創建恢復的值列表，包含Word文本
             restored_values = self._create_restored_values_with_correction(
                 display_text, original_text, corrected_text,
                 original_start, original_end, srt_index,
-                correction_icon, needs_correction
+                correction_icon, needs_correction,
+                original_word_text  # 傳入保存的Word文本
             )
 
             # 插入還原後的項目
@@ -5359,9 +5524,9 @@ class AlignmentGUI(BaseWindow):
             return False
 
     def _create_restored_values_with_correction(self, display_text, original_text, corrected_text,
-                                          start, end, srt_index, correction_icon, needs_correction):
+                                      start, end, srt_index, correction_icon, needs_correction, word_text=""):
         """
-        為拆分還原創建值列表，包含校正狀態
+        為拆分還原創建值列表，包含校正狀態和Word文本
         """
         # 根據顯示模式準備值
         if self.display_mode == self.DISPLAY_MODE_ALL:
@@ -5371,7 +5536,7 @@ class AlignmentGUI(BaseWindow):
                 start,
                 end,
                 display_text,
-                "",  # Word文本
+                word_text,  # 使用傳入的Word文本
                 "",  # Match
                 correction_icon
             ]
@@ -5381,7 +5546,7 @@ class AlignmentGUI(BaseWindow):
                 start,
                 end,
                 display_text,
-                "",  # Word文本
+                word_text,  # 使用傳入的Word文本
                 "",  # Match
                 correction_icon
             ]
