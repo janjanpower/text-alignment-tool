@@ -5843,7 +5843,7 @@ class AlignmentGUI(BaseWindow):
             column = self.tree.identify_column(event.x)
             item = self.tree.identify_row(event.y)
 
-            # 只有在文本欄位上顯示圖標
+            # 只有在文本欄位上顯示圖標，無論是否被選取
             is_text_column = False
             if region == "cell" and column and item:
                 column_idx = int(column[1:]) - 1
@@ -5852,9 +5852,9 @@ class AlignmentGUI(BaseWindow):
                     if column_name in ["SRT Text", "Word Text"]:
                         is_text_column = True
 
-            # 如果不在文本欄位上，隱藏圖標
+            # 如果不在文本欄位上，隱藏圖標，但不隱藏已固定的圖標
             if not is_text_column:
-                if hasattr(self, 'floating_icon'):
+                if hasattr(self, 'floating_icon') and not (hasattr(self, 'floating_icon_fixed') and self.floating_icon_fixed):
                     self.floating_icon.place_forget()
                 return
 
@@ -5884,9 +5884,13 @@ class AlignmentGUI(BaseWindow):
                     cursor="hand2"
                 )
                 self.floating_icon.bind("<Button-1>", self.on_icon_click)
+                # 初始化 floating_icon_fixed 狀態
+                self.floating_icon_fixed = False
 
-            # 更新圖標位置跟隨游標
-            self.floating_icon.place(x=event.x + 10, y=event.y - 10)
+            # 如果圖標已固定，則不更新位置
+            if not hasattr(self, 'floating_icon_fixed') or not self.floating_icon_fixed:
+                # 更新圖標位置跟隨游標
+                self.floating_icon.place(x=event.x + 10, y=event.y - 10)
 
         except Exception as e:
             self.logger.error(f"顯示浮動校正圖標時出錯: {e}", exc_info=True)
@@ -5894,18 +5898,23 @@ class AlignmentGUI(BaseWindow):
     def on_icon_click(self, event):
         """當圖標被點擊時的處理"""
         try:
-            # 將圖標固定在當前位置
-            if hasattr(self, 'floating_icon_fixed') and self.floating_icon_fixed:
-                # 如果已經固定，則再次點擊啟動校正對話框
-                self.show_add_correction_dialog(self.current_hovering_text)
+            # 切換固定狀態
+            if not hasattr(self, 'floating_icon_fixed'):
+                self.floating_icon_fixed = False
+
+            # 切換固定狀態
+            self.floating_icon_fixed = not self.floating_icon_fixed
+
+            if self.floating_icon_fixed:
+                # 固定圖標位置時，改變外觀以指示它已被固定
+                self.floating_icon.config(bg="#E0E0E0", relief=tk.RAISED)  # 變更背景色和邊框樣式
+                # 如果是第一次固定，顯示提示信息
+                self.floating_icon.after(2000, lambda: self.show_add_correction_dialog(self.current_hovering_text))
+            else:
+                # 取消固定時，恢復原來的外觀
+                self.floating_icon.config(bg="#FFFFFF", relief=tk.FLAT)
                 # 隱藏圖標
                 self.floating_icon.place_forget()
-                self.floating_icon_fixed = False
-            else:
-                # 固定圖標位置
-                self.floating_icon_fixed = True
-                # 改變圖標外觀以指示它已被固定
-                self.floating_icon.config(bg="#E0E0E0")  # 變更背景色
         except Exception as e:
             self.logger.error(f"圖標點擊處理時出錯: {e}", exc_info=True)
 
