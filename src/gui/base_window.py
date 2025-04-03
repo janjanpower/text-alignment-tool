@@ -245,8 +245,19 @@ class BaseWindow:
             sys.exit(1)
 
     def cleanup(self) -> None:
-        """基礎清理方法"""
-        ResourceCleaner.clear_window_resources(self.master)
+        """標準資源清理流程"""
+        # 1. 停止所有異步任務
+        self._stop_async_tasks()
+
+        # 2. 清除數據
+        self._clear_data()
+
+        # 3. 釋放資源
+        self._release_resources()
+
+        # 4. 清理 UI
+        self._clear_ui()
+
 
     def close_window(self, event: Optional[tk.Event] = None) -> None:
         """關閉視窗"""
