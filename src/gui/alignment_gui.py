@@ -3328,24 +3328,47 @@ class AlignmentGUI(BaseWindow):
             self.logger.error(f"從 Treeview 更新 SRT 數據時出錯: {e}")
             show_error("錯誤", f"更新 SRT 數據失敗: {str(e)}", self.master)
 
-    def combine_sentences(self, event=None) -> None:
+    def combine_sentences(self, event=None):
         """合併字幕"""
         try:
             # 檢查是否有足夠的選中項
             if not self._validate_combine_selection():
                 return
 
+            # 記錄合併前的狀態
+            self.logger.info("=== 開始合併字幕 ===")
+
             # 保存合併前的狀態
             original_state, original_correction, original_items_data, selected_indices = self._prepare_combine_state()
 
-            # 執行實際的合併操作
+            # 執行實際的合併操作 - 包含所有後續處理
             success, new_item, new_item_index = self._execute_combine(original_items_data, selected_indices)
 
             if not success:
                 return
 
-            # 處理合併後的狀態保存
-            self._finalize_combine(original_state, original_correction, original_items_data, new_item, new_item_index)
+            # 保存操作後的狀態
+            current_state = self.get_current_state()
+            current_correction = self.correction_service.serialize_state()
+
+            # 保存操作狀態
+            self.save_operation_state(
+                'combine_sentences',
+                '合併字幕',
+                {
+                    'original_state': original_state,
+                    'original_correction': original_correction,
+                    'selected_items_details': original_items_data,
+                    'new_item': new_item,
+                    'new_item_index': new_item_index
+                }
+            )
+
+            # 隱藏合併符號
+            if hasattr(self, 'merge_symbol'):
+                self.merge_symbol.place_forget()
+
+            self.update_status("已合併所選字幕")
 
         except Exception as e:
             self.logger.error(f"合併字幕時出錯: {e}", exc_info=True)
@@ -3410,7 +3433,7 @@ class AlignmentGUI(BaseWindow):
 
         return original_state, original_correction, original_items_data, selected_indices
 
-    def _execute_combine(self, original_items_data, selected_indices) -> tuple:
+    def _execute_combine(self, original_items_data, selected_indices):
         """執行實際的合併操作"""
         try:
             # 使用所有選中的項目進行合併
@@ -3426,9 +3449,27 @@ class AlignmentGUI(BaseWindow):
             base_item = sorted_items[0]
             base_values = list(self.tree.item(base_item, 'values'))
             base_tags = self.tree.item(base_item, 'tags')
+            base_position = self.tree.index(base_item)
 
-            # 合併文本和其他數據
-            combined_values = self._combine_item_values(sorted_items, column_indices, base_values)
+            # 收集合併前的信息
+            all_texts = []
+            all_word_texts = []
+            for item in sorted_items:
+                values = self.tree.item(item, 'values')
+                if column_indices['text'] < len(values):
+                    all_texts.append(values[column_indices['text']])
+                if column_indices['word_text'] is not None and column_indices['word_text'] < len(values):
+                    all_word_texts.append(values[column_indices['word_text']])
+
+            # 合併文本
+            combined_text = " ".join(text for text in all_texts if text)
+            combined_word_text = " ".join(text for text in all_word_texts if text)
+
+            # 獲取時間範圍
+            first_start = base_values[column_indices['start']]
+            last_item = sorted_items[-1]
+            last_values = self.tree.item(last_item, 'values')
+            last_end = last_values[column_indices['end']] if column_indices['end'] < len(last_values) else ""
 
             # 清除被合併項目的校正狀態
             for item_index in selected_indices:
@@ -3436,14 +3477,61 @@ class AlignmentGUI(BaseWindow):
                     self.correction_service.remove_correction_state(item_index)
                     self.logger.debug(f"已清除索引 {item_index} 的校正狀態")
 
-            # 檢查合併後的文本是否需要校正
-            needs_correction, corrected_text, original_text, _ = self._check_combined_text_correction(combined_values, column_indices)
+            # 檢查合併後的文本是否需要校正 - 修正的呼叫方式
+            needs_correction, corrected_text, original_text, _ = self._check_combined_text_correction(combined_text)
 
-            # 創建新的合併項目
-            new_item, new_item_index = self._create_merged_item(sorted_items, combined_values, needs_correction, corrected_text, base_tags, column_indices)
+            # 刪除所有原始項目
+            for item in sorted_items:
+                self.tree.delete(item)
 
-            # 更新 SRT 數據和音頻段落
-            self._update_srt_and_audio(sorted_items, new_item_index)
+            # 構建合併後的值
+            combined_values = base_values.copy()
+            combined_values[column_indices['text']] = combined_text
+            combined_values[column_indices['end']] = last_end
+            if column_indices['word_text'] is not None:
+                combined_values[column_indices['word_text']] = combined_word_text
+            if column_indices['match'] is not None:
+                combined_values[column_indices['match']] = ""
+
+            # 設置校正圖標
+            combined_values[column_indices['vx']] = '✅' if needs_correction else ''
+
+            # 插入新合併項目
+            new_item = self.insert_item('', base_position, values=tuple(combined_values))
+
+            # 確定新項目的索引
+            if self.display_mode in [self.DISPLAY_MODE_ALL, self.DISPLAY_MODE_AUDIO_SRT]:
+                new_item_index = str(combined_values[1])
+            else:
+                new_item_index = str(combined_values[0])
+
+            # 設置標籤
+            if base_tags:
+                self.tree.item(new_item, tags=base_tags)
+
+            # 設置校正狀態
+            if needs_correction:
+                self.correction_service.set_correction_state(
+                    new_item_index,
+                    original_text,
+                    corrected_text,
+                    'correct'  # 默認為已校正狀態
+                )
+
+            # 更新 SRT 數據
+            self.update_srt_data_from_treeview()
+
+            # 更新音頻段落 - 不再使用原始項目
+            if self.audio_imported and hasattr(self, 'audio_player'):
+                # 直接更新整個 SRT 數據的音頻段落
+                self.audio_player.segment_audio(self.srt_data)
+
+            # 重新編號
+            self.renumber_items()
+
+            # 選中新合併的項目
+            self.tree.selection_set(new_item)
+            self.tree.see(new_item)
 
             return True, new_item, new_item_index
 
@@ -3499,7 +3587,7 @@ class AlignmentGUI(BaseWindow):
                 'vx': 7
             }
 
-    def _combine_item_values(self, sorted_items, column_indices, base_values) -> list:
+    def _combine_item_values(self, sorted_items, column_indices, base_values):
         """合併所有選中項的值"""
         # 載入校正數據庫
         corrections = self.load_corrections()
@@ -3512,15 +3600,28 @@ class AlignmentGUI(BaseWindow):
         combined_word_text = ""
         combined_match = ""
 
-        # 從基礎項目獲取初始值
-        if column_indices['text'] < len(base_values):
-            combined_text = base_values[column_indices['text']]
+        # 收集所有文本和Word文本
+        all_srt_texts = []
+        all_word_texts = []
 
-        if column_indices['word_text'] is not None and column_indices['word_text'] < len(base_values):
-            combined_word_text = base_values[column_indices['word_text']]
+        # 從所有項目獲取文本內容
+        for i, item in enumerate(sorted_items):
+            item_values = self.tree.item(item, 'values')
 
-        if column_indices['match'] is not None and column_indices['match'] < len(base_values):
-            combined_match = base_values[column_indices['match']]
+            # 獲取SRT文本
+            if column_indices['text'] < len(item_values) and item_values[column_indices['text']].strip():
+                all_srt_texts.append(item_values[column_indices['text']])
+
+            # 獲取Word文本（如果有）
+            if column_indices['word_text'] is not None and column_indices['word_text'] < len(item_values) and item_values[column_indices['word_text']].strip():
+                all_word_texts.append(item_values[column_indices['word_text']])
+
+        # 合併所有文本（使用空格連接）
+        combined_text = " ".join(all_srt_texts)
+
+        # 合併所有Word文本（如果有）
+        if all_word_texts:
+            combined_word_text = " ".join(all_word_texts)
 
         # 使用最後一個項目的結束時間
         last_item_values = self.tree.item(sorted_items[-1], 'values')
@@ -3529,26 +3630,6 @@ class AlignmentGUI(BaseWindow):
             end_time = last_item_values[column_indices['end']]
         else:
             end_time = base_values[column_indices['end']] if column_indices['end'] < len(base_values) else ""
-
-        # 合併所有選中項的文本
-        for item in sorted_items[1:]:
-            item_values = self.tree.item(item, 'values')
-
-            # 合併 SRT 文本
-            if column_indices['text'] < len(item_values) and item_values[column_indices['text']].strip():
-                combined_text += f" {item_values[column_indices['text']]}"
-
-            # 合併 Word 文本
-            if column_indices['word_text'] is not None and column_indices['word_text'] < len(item_values) and item_values[column_indices['word_text']].strip():
-                combined_word_text += f" {item_values[column_indices['word_text']]}"
-
-            # 合併 Match 狀態
-            if column_indices['match'] is not None and column_indices['match'] < len(item_values):
-                current_match = item_values[column_indices['match']]
-                if current_match and combined_match:
-                    combined_match += f" | {current_match}"
-                elif current_match:
-                    combined_match = current_match
 
         # 更新合併後的值
         combined_values[column_indices['end']] = end_time
@@ -3560,19 +3641,29 @@ class AlignmentGUI(BaseWindow):
         if column_indices['word_text'] is not None:
             combined_values[column_indices['word_text']] = combined_word_text
 
+        # 更新Match欄位（如果需要）
         if column_indices['match'] is not None:
-            combined_values[column_indices['match']] = combined_match
+            # 可能需要根據文本內容重新計算Match狀態
+            combined_values[column_indices['match']] = ""
+
+        self.logger.debug(f"合併文本: {combined_text}")
+        self.logger.debug(f"合併Word文本: {combined_word_text}")
 
         return combined_values
 
-    def _check_combined_text_correction(self, combined_values, column_indices) -> tuple:
-        """檢查合併後的文本是否需要校正"""
-        combined_text = combined_values[column_indices['text']]
+    def _check_combined_text_correction(self, text, column_indices=None):
+        """
+        檢查合併後的文本是否需要校正
 
-        # 檢查合併後的文本是否需要校正
-        needs_correction, corrected_text, original_text, actual_corrections = self.correction_service.check_text_for_correction(combined_text)
+        Args:
+            text: 合併後的文本
+            column_indices: 列索引配置 (可選)
 
-        return needs_correction, corrected_text, original_text, actual_corrections
+        Returns:
+            tuple: (是否需要校正, 校正後的文本, 原始文本, 實際校正項目)
+        """
+        # 使用 correction_service 檢查文本是否需要校正
+        return self.correction_service.check_text_for_correction(text)
 
     def _create_merged_item(self, sorted_items, combined_values, needs_correction, corrected_text, base_tags, column_indices) -> tuple:
         """創建新的合併項目"""
@@ -3636,29 +3727,102 @@ class AlignmentGUI(BaseWindow):
 
         return new_item, new_item_index
 
-    def _update_srt_and_audio(self, sorted_items, new_item_index) -> None:
+    def _update_srt_and_audio(self, sorted_items, new_item_index):
         """更新 SRT 數據和音頻段落"""
-        # 更新項目編號
-        self.renumber_items()
+        # 首先獲取所有需要合併的索引
+        indices_to_merge = []
+        for item in sorted_items:
+            item_values = self.tree.item(item, 'values')
+            if self.display_mode in [self.DISPLAY_MODE_ALL, self.DISPLAY_MODE_AUDIO_SRT]:
+                if len(item_values) > 1:
+                    try:
+                        idx = int(item_values[1])  # 索引在第2列
+                        indices_to_merge.append(idx)
+                    except (ValueError, TypeError):
+                        pass
+            else:
+                if item_values:
+                    try:
+                        idx = int(item_values[0])  # 索引在第1列
+                        indices_to_merge.append(idx)
+                    except (ValueError, TypeError):
+                        pass
 
-        # 更新 SRT 數據
-        self.update_srt_data_from_treeview()
+        # 對索引排序，確保按順序處理
+        indices_to_merge.sort()
 
-        # 如果有音頻，處理音頻段落
-        if self.audio_imported and hasattr(self, 'audio_player'):
-            self._merge_audio_segments(sorted_items, new_item_index)
+        # 如果沒有找到有效索引，無法處理
+        if not indices_to_merge:
+            self.logger.warning("找不到要合併的有效索引")
+            return
 
-            # 重新對整個 SRT 數據進行分割以確保一致性
-            self.audio_player.segment_audio(self.srt_data)
-            self.logger.info(f"已重新分割全部音頻段落，確保與 SRT 同步")
+        # 合併SRT數據
+        try:
+            # 保留第一個索引的項目
+            first_idx = indices_to_merge[0]
+            if first_idx <= len(self.srt_data):
+                # 獲取合併後的文本 - 從樹狀視圖中獲取，確保與顯示一致
+                merged_text = ""
+                for item in sorted_items:
+                    values = self.tree.item(item, 'values')
+                    text_index = 4 if self.display_mode in [self.DISPLAY_MODE_ALL, self.DISPLAY_MODE_AUDIO_SRT] else 3
+                    if text_index < len(values) and values[text_index]:
+                        if merged_text:
+                            merged_text += " "
+                        merged_text += values[text_index]
 
-        # 刷新所有校正狀態，確保它們基於最新的文本內容
-        if hasattr(self.correction_service, 'refresh_all_correction_states'):
-            self.correction_service.refresh_all_correction_states()
-            self.logger.debug("已刷新所有校正狀態")
+                # 獲取開始時間和結束時間
+                start_time = self.srt_data[first_idx - 1].start
+                last_idx = indices_to_merge[-1]
+                end_time = self.srt_data[last_idx - 1].end if last_idx <= len(self.srt_data) else start_time
 
-        # 更新校正狀態顯示
-        self.update_correction_status_display()
+                # 更新第一個項目
+                self.srt_data[first_idx - 1].text = merged_text
+                self.srt_data[first_idx - 1].end = end_time
+
+                # 刪除其他被合併的項目
+                self.srt_data = [sub for sub in self.srt_data if sub.index not in indices_to_merge[1:]]
+
+                # 重新編號
+                for i, sub in enumerate(self.srt_data, 1):
+                    sub.index = i
+
+                self.logger.info(f"已更新SRT數據，合併 {len(indices_to_merge)} 個項目")
+        except Exception as e:
+            self.logger.error(f"更新SRT數據時出錯: {e}", exc_info=True)
+
+            # 更新項目編號
+            self.renumber_items()
+
+            # 更新 SRT 數據
+            self.update_srt_data_from_treeview()
+
+            # 如果有音頻，處理音頻段落
+            if self.audio_imported and hasattr(self, 'audio_player'):
+                # 由於原始項目已被刪除，使用索引而非項目ID來處理音頻段落
+                try:
+                    # 直接使用新的合併項目索引
+                    new_index = int(new_item_index)
+
+                    # 重新對整個 SRT 數據進行分割以確保一致性
+                    self.audio_player.segment_audio(self.srt_data)
+                    self.logger.info(f"已重新分割全部音頻段落，確保與 SRT 同步")
+                except Exception as e:
+                    self.logger.error(f"處理音頻段落時出錯: {e}", exc_info=True)
+                    # 即使出錯，也嘗試重新分割所有音頻
+                    if hasattr(self.audio_player, 'segment_audio'):
+                        self.audio_player.segment_audio(self.srt_data)
+
+            # 刷新所有校正狀態，確保它們基於最新的文本內容
+            if hasattr(self.correction_service, 'refresh_all_correction_states'):
+                self.correction_service.refresh_all_correction_states()
+                self.logger.debug("已刷新所有校正狀態")
+
+            # 更新校正狀態顯示
+            self.update_correction_status_display()
+
+        except Exception as e:
+            self.logger.error(f"更新 SRT 數據和音頻段落時出錯: {e}", exc_info=True)
 
     def _merge_audio_segments(self, sorted_items, new_item_index) -> None:
         """合併音頻段落"""
@@ -3734,10 +3898,12 @@ class AlignmentGUI(BaseWindow):
             else:
                 self.logger.warning("沒有找到有效的音頻段落可合併")
 
+            if self.audio_imported and hasattr(self, 'audio_player'):
+                # 使用全部音頻段落重新分割
+                self.audio_player.segment_audio(self.srt_data)
+                self.logger.info(f"已根據更新後的 SRT 數據重新分割音頻段落")
         except Exception as e:
-            self.logger.error(f"合併音頻段落時出錯: {e}")
-            import traceback
-            self.logger.error(traceback.format_exc())
+            self.logger.error(f"合併音頻段落時出錯: {e}", exc_info=True)
 
     def _finalize_combine(self, original_state, original_correction, original_items_data, new_item, new_item_index) -> None:
         """完成合併操作，保存狀態並更新顯示"""
