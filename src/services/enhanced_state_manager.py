@@ -382,40 +382,252 @@ class EnhancedStateManager:
                 self.logger.debug("無法重做：已經是最新狀態")
                 return False
 
+            # 保存操作前數據的完整備份
+            original_tree_data = self._backup_current_tree_data()
+            original_correction_state = None
+            if hasattr(self.gui, 'correction_service'):
+                original_correction_state = self.gui.correction_service.serialize_state()
+
             # 更新索引
             self.current_index += 1
             next_state = self.states[self.current_index]
 
-            # 記錄重做操作
-            self.logger.debug(f"重做到狀態索引: {self.current_index}")
+            # 獲取操作類型
+            operation = next_state.operation
+            op_type = operation.get('type', '')
+
+            self.logger.debug(f"重做操作: {op_type} - {operation.get('description', '未知操作')}")
+
+            # 標記已進行編號的狀態，避免重複編號
+            renumbering_done = False
+
+            try:
+                # 根據操作類型處理重做
+                if op_type == 'split_srt':
+                    # 使用專門的方法處理拆分操作重做
+                    result = self._redo_split_operation(next_state, operation)
+                    renumbering_done = True  # 標記拆分操作中已完成編號
+                elif op_type == 'combine_sentences':
+                    # 使用專門的方法處理合併操作重做
+                    result = self._redo_combine_operation(next_state, operation)
+                    renumbering_done = True  # 標記合併操作中已完成編號
+                elif op_type == 'align_end_times':
+                    # 使用專門的方法處理時間調整操作重做
+                    result = self._redo_time_adjustment(next_state, operation)
+                else:
+                    # 一般操作使用通用方法處理
+                    result = self.apply_state_safely(next_state.state, next_state.correction_state, operation)
+            except Exception as e:
+                # 如果重做過程出錯，嘗試還原到原始狀態
+                self.logger.error(f"執行重做操作時出錯: {e}", exc_info=True)
+                self._restore_backup_data(original_tree_data, original_correction_state)
+                self.current_index -= 1  # 恢復索引
+                return False
+
+            # 只有在尚未完成編號的情況下才執行編號
+            if not renumbering_done:
+                # 確保項目編號正確
+                self.gui.renumber_items(skip_correction_update=False)  # 確保更新校正狀態
 
             # 觸發重做回調
-            try:
-                if self.callbacks['on_redo']:
-                    self.callbacks['on_redo'](next_state.state, next_state.correction_state, next_state.operation)
-                    self.logger.debug("重做回調執行完成")
-                else:
-                    self.logger.warning("重做回調未設置")
-            except Exception as e:
-                self.logger.error(f"重做回調執行失敗: {e}", exc_info=True)
-                return False
+            if self.callbacks['on_redo']:
+                try:
+                    self.callbacks['on_redo'](next_state.state, next_state.correction_state, operation)
+                except Exception as e:
+                    self.logger.error(f"執行重做回調時出錯: {e}", exc_info=True)
 
             # 觸發狀態變更回調
             self.trigger_callback('on_state_change')
 
-            # 確保修改後更新 SRT 數據和音頻段落
+            # 確保修改後更新 SRT 數據
             self.gui.update_srt_data_from_treeview()
 
             # 如果有音頻，更新音頻段落
             if self.gui.audio_imported and hasattr(self.gui, 'audio_player'):
                 self.gui.audio_player.segment_audio(self.gui.srt_data)
 
-            self.gui.update_status("已重做操作")
+            self.gui.update_status(f"已重做操作: {operation.get('description', '未知操作')}")
             return True
 
         except Exception as e:
             self.logger.error(f"執行重做操作時出錯: {e}", exc_info=True)
             return False
+
+    def apply_state_safely(self, state, correction_state, operation):
+        """
+        安全地應用狀態，處理可能的錯誤
+        """
+        try:
+            # 保存可能有效的可見項目
+            visible_item = None
+            if hasattr(self.gui, 'tree'):
+                selected = self.gui.tree.selection()
+                if selected:
+                    visible_item = selected[0]
+
+            # 清除當前狀態
+            self.gui.clear_current_state()
+
+            # 設置顯示模式
+            if 'display_mode' in state:
+                old_mode = self.gui.display_mode
+                new_mode = state.get('display_mode')
+                if old_mode != new_mode:
+                    self.gui.display_mode = new_mode
+                    self.gui.refresh_treeview_structure()
+
+            # 保存要恢復的項目 ID 映射
+            id_mapping = {}
+            if 'item_id_mapping' in state:
+                id_mapping = state.get('item_id_mapping', {})
+
+            # 恢復樹狀視圖
+            new_items = []  # 收集新的項目 ID
+            if 'tree_items' in state:
+                for item_data in state['tree_items']:
+                    values = item_data.get('values', [])
+                    position = item_data.get('position', 'end')
+                    tags = item_data.get('tags')
+                    original_id = item_data.get('original_id')
+
+                    # 插入項目
+                    new_id = self.gui.insert_item('', position, values=tuple(values))
+                    new_items.append(new_id)
+
+                    # 保存 ID 映射
+                    if original_id:
+                        id_mapping[original_id] = new_id
+
+                    # 恢復標籤
+                    if tags:
+                        self.gui.tree.item(new_id, tags=tags)
+
+            # 恢復 SRT 數據
+            if 'srt_data' in state and state['srt_data']:
+                self.gui.restore_srt_data(state['srt_data'])
+
+            # 恢復使用 Word 文本的標記
+            if 'use_word_text' in state:
+                self.gui.restore_use_word_flags(state['use_word_text'], id_mapping)
+
+            # 恢復校正狀態
+            if correction_state and hasattr(self.gui, 'correction_service'):
+                self.gui.correction_service.deserialize_state(correction_state, id_mapping)
+
+            # 恢復視圖位置
+            if visible_item:
+                # 嘗試1: 使用 ID 映射
+                if visible_item in id_mapping:
+                    mapped_id = id_mapping[visible_item]
+                    if self.gui.tree.exists(mapped_id):
+                        self.gui.tree.see(mapped_id)
+                        self.gui.tree.selection_set(mapped_id)
+                # 嘗試2: 使用操作中的目標項目 ID
+                elif 'target_item_id' in operation:
+                    target_id = operation['target_item_id']
+                    if target_id and self.gui.tree.exists(target_id):
+                        self.gui.tree.see(target_id)
+                        self.gui.tree.selection_set(target_id)
+                # 嘗試3: 使用第一個新項目
+                elif new_items:
+                    self.gui.tree.see(new_items[0])
+                    self.gui.tree.selection_set(new_items[0])
+
+            return True
+
+        except Exception as e:
+            self.logger.error(f"安全應用狀態時出錯: {e}", exc_info=True)
+            return False
+
+    def _backup_current_tree_data(self):
+        """備份當前樹視圖數據"""
+        backup_data = []
+        if hasattr(self.gui, 'tree'):
+            for item in self.gui.tree.get_children():
+                values = self.gui.tree.item(item, 'values')
+                tags = self.gui.tree.item(item, 'tags')
+                position = self.gui.tree.index(item)
+                use_word = self.gui.use_word_text.get(item, False)
+
+                # 獲取索引值
+                index_pos = 1 if self.gui.display_mode in [self.gui.DISPLAY_MODE_ALL, self.gui.DISPLAY_MODE_AUDIO_SRT] else 0
+                index = str(values[index_pos]) if len(values) > index_pos else ""
+
+                correction_info = None
+                if hasattr(self.gui, 'correction_service') and index:
+                    if index in self.gui.correction_service.correction_states:
+                        correction_info = {
+                            'state': self.gui.correction_service.correction_states[index],
+                            'original': self.gui.correction_service.original_texts.get(index, ''),
+                            'corrected': self.gui.correction_service.corrected_texts.get(index, '')
+                        }
+
+                backup_data.append({
+                    'id': item,
+                    'values': values,
+                    'tags': tags,
+                    'position': position,
+                    'use_word': use_word,
+                    'index': index,
+                    'correction': correction_info
+                })
+        return backup_data
+
+    def _restore_backup_data(self, backup_data, correction_state=None):
+        """從備份還原樹視圖數據"""
+        if not backup_data:
+            return
+
+        # 清空當前樹視圖
+        if hasattr(self.gui, 'tree'):
+            for item in self.gui.tree.get_children():
+                self.gui.tree.delete(item)
+
+        # 清空校正狀態
+        if hasattr(self.gui, 'correction_service'):
+            self.gui.correction_service.clear_correction_states()
+
+        # 清空 Word 文本標記
+        if hasattr(self.gui, 'use_word_text'):
+            self.gui.use_word_text.clear()
+
+        # 恢復數據
+        for item_data in backup_data:
+            values = item_data.get('values', [])
+            position = item_data.get('position', 'end')
+            tags = item_data.get('tags')
+            use_word = item_data.get('use_word', False)
+
+            # 插入項目
+            new_id = self.gui.insert_item('', position, values=tuple(values))
+
+            # 恢復標籤
+            if tags:
+                self.gui.tree.item(new_id, tags=tags)
+
+            # 恢復使用 Word 文本標記
+            if use_word:
+                self.gui.use_word_text[new_id] = True
+
+        # 恢復校正狀態 - 優先使用傳入的校正狀態
+        if correction_state and hasattr(self.gui, 'correction_service'):
+            self.gui.correction_service.deserialize_state(correction_state)
+        else:
+            # 從備份數據中恢復校正狀態
+            for item_data in backup_data:
+                if 'correction' in item_data and item_data['correction'] and 'index' in item_data:
+                    index = item_data['index']
+                    correction = item_data['correction']
+                    if hasattr(self.gui, 'correction_service') and 'state' in correction:
+                        self.gui.correction_service.set_correction_state(
+                            index,
+                            correction.get('original', ''),
+                            correction.get('corrected', ''),
+                            correction.get('state', 'correct')
+                        )
+
+        # 更新 SRT 數據
+        self.gui.update_srt_data_from_treeview()
 
     def clear_states(self) -> None:
         """清除所有狀態"""
@@ -894,4 +1106,87 @@ class EnhancedStateManager:
 
         except Exception as e:
             self.logger.error(f"撤銷時間調整操作時出錯: {e}", exc_info=True)
+            return False
+
+    def redo_combine_operation(self, state, operation):
+        """處理合併操作的重做"""
+        try:
+            # 清除當前樹狀視圖
+            self.gui.clear_current_treeview()
+
+            # 從狀態恢復樹狀視圖
+            if 'tree_items' in state.state:
+                for item_data in state.state['tree_items']:
+                    values = item_data.get('values', [])
+                    position = item_data.get('position', 'end')
+                    tags = item_data.get('tags')
+                    use_word = item_data.get('use_word', False)
+
+                    # 插入項目
+                    new_id = self.gui.insert_item('', position, values=tuple(values))
+
+                    # 恢復標籤
+                    if tags:
+                        self.gui.tree.item(new_id, tags=tags)
+
+                    # 恢復使用 Word 文本的標記
+                    if use_word:
+                        self.gui.use_word_text[new_id] = True
+
+            # 恢復 SRT 數據
+            if 'srt_data' in state.state:
+                self.gui.restore_srt_data(state.state['srt_data'])
+
+            # 恢復校正狀態
+            if state.correction_state and hasattr(self.gui, 'correction_service'):
+                self.gui.correction_service.deserialize_state(state.correction_state)
+
+            # 選中合併後的項目
+            if 'new_item' in operation and self.gui.tree.exists(operation['new_item']):
+                self.gui.tree.selection_set(operation['new_item'])
+                self.gui.tree.see(operation['new_item'])
+
+            return True
+
+        except Exception as e:
+            self.logger.error(f"重做合併操作時出錯: {e}", exc_info=True)
+            return False
+
+    def redo_time_adjustment(self, state, operation):
+        """處理時間調整操作的重做"""
+        try:
+            # 清除當前樹狀視圖
+            self.gui.clear_current_treeview()
+
+            # 從狀態恢復樹狀視圖
+            if 'tree_items' in state.state:
+                for item_data in state.state['tree_items']:
+                    values = item_data.get('values', [])
+                    position = item_data.get('position', 'end')
+                    tags = item_data.get('tags')
+                    use_word = item_data.get('use_word', False)
+
+                    # 插入項目
+                    new_id = self.gui.insert_item('', position, values=tuple(values))
+
+                    # 恢復標籤
+                    if tags:
+                        self.gui.tree.item(new_id, tags=tags)
+
+                    # 恢復使用 Word 文本的標記
+                    if use_word:
+                        self.gui.use_word_text[new_id] = True
+
+            # 恢復 SRT 數據
+            if 'srt_data' in state.state:
+                self.gui.restore_srt_data(state.state['srt_data'])
+
+            # 恢復校正狀態
+            if state.correction_state and hasattr(self.gui, 'correction_service'):
+                self.gui.correction_service.deserialize_state(state.correction_state)
+
+            return True
+
+        except Exception as e:
+            self.logger.error(f"重做時間調整操作時出錯: {e}", exc_info=True)
             return False

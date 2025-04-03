@@ -4250,8 +4250,8 @@ class AlignmentGUI(BaseWindow):
             return False
 
     # 在 renumber_items 函數中，確保校正狀態正確轉移
-    def renumber_items(self) -> None:
-        """重新編號項目並保持校正狀態 - 改進版本"""
+    def renumber_items(self, skip_correction_update=False) -> None:
+        """重新編號項目並保持校正狀態"""
         try:
             items = self.tree.get_children()
             if not items:
@@ -4265,24 +4265,24 @@ class AlignmentGUI(BaseWindow):
 
             # 創建舊索引到新索引的完整映射
             index_mapping = {}
-            new_values_mapping = {}
 
-            # 先建立當前所有校正狀態的完整備份
+            # 如果不跳過校正狀態更新，則備份當前校正狀態
             old_correction_states = {}
             old_original_texts = {}
             old_corrected_texts = {}
 
-            for key, value in self.correction_service.correction_states.items():
-                old_correction_states[key] = value
+            if not skip_correction_update and hasattr(self, 'correction_service'):
+                for key, value in self.correction_service.correction_states.items():
+                    old_correction_states[key] = value
 
-            for key, value in self.correction_service.original_texts.items():
-                old_original_texts[key] = value
+                for key, value in self.correction_service.original_texts.items():
+                    old_original_texts[key] = value
 
-            for key, value in self.correction_service.corrected_texts.items():
-                old_corrected_texts[key] = value
+                for key, value in self.correction_service.corrected_texts.items():
+                    old_corrected_texts[key] = value
 
-            # 清除當前所有校正狀態 - 稍後會根據映射恢復
-            self.correction_service.clear_correction_states()
+                # 清除當前所有校正狀態 - 稍後會根據映射恢復
+                self.correction_service.clear_correction_states()
 
             # 先建立舊索引到新索引的映射
             for i, item in enumerate(items, 1):
@@ -4315,28 +4315,22 @@ class AlignmentGUI(BaseWindow):
                 values[index_pos] = str(i)
                 self.tree.item(item, values=tuple(values))
 
-                # 檢查是否需要更新校正狀態
-                if old_index in old_correction_states:
-                    # 獲取該項目的原始校正信息
-                    correction_state = old_correction_states[old_index]
-                    original_text = old_original_texts.get(old_index, "")
-                    corrected_text = old_corrected_texts.get(old_index, "")
+                # 如果不跳過校正狀態更新，則檢查是否需要更新校正狀態
+                if not skip_correction_update:
+                    if old_index in old_correction_states:
+                        # 獲取該項目的原始校正信息
+                        correction_state = old_correction_states[old_index]
+                        original_text = old_original_texts.get(old_index, "")
+                        corrected_text = old_corrected_texts.get(old_index, "")
 
-                    # 使用新索引設置校正狀態
-                    self.correction_service.set_correction_state(
-                        str(i),
-                        original_text,
-                        corrected_text,
-                        correction_state
-                    )
-                    self.logger.debug(f"索引重編號: {old_index} -> {i}, 校正狀態已轉移")
-
-            # 更新 SRT 數據 (確保反映了新的編號)
-            self.update_srt_data_from_treeview()
-
-            # 更新音頻段落
-            if self.audio_imported and hasattr(self, 'audio_player'):
-                self.audio_player.segment_audio(self.srt_data)
+                        # 使用新索引設置校正狀態
+                        self.correction_service.set_correction_state(
+                            str(i),
+                            original_text,
+                            corrected_text,
+                            correction_state
+                        )
+                        self.logger.debug(f"索引重編號: {old_index} -> {i}, 校正狀態已轉移")
 
             self.logger.info(f"重新編號完成: {len(items)} 個項目, {len(index_mapping)} 個索引映射")
 
@@ -4910,17 +4904,215 @@ class AlignmentGUI(BaseWindow):
 
     def redo(self, event=None):
         """
-        重做操作 - 現在直接使用 EnhancedStateManager 的重做功能
+        重做操作 - 使用 EnhancedStateManager 的重做功能
         """
         try:
             if hasattr(self, 'state_manager'):
-                return self.state_manager.redo()
+                success = self.state_manager.redo()
+                if success:
+                    self.update_status("已重做操作")
+                return success
             else:
                 self.logger.warning("無法重做：狀態管理器未初始化")
                 return False
         except Exception as e:
             self.logger.error(f"重做操作時出錯: {e}", exc_info=True)
             show_error("錯誤", f"重做操作失敗: {str(e)}", self.master)
+            return False
+
+    def redo_split_operation(self, state, operation):
+        """處理拆分操作的重做"""
+        try:
+            # 獲取操作信息
+            split_info = operation.get('split_result', [])
+            srt_index = operation.get('srt_index')
+
+            if not split_info or not srt_index:
+                self.logger.warning("重做拆分操作失敗：缺少必要信息")
+                return False
+
+            # 清除當前狀態
+            self.gui.clear_current_treeview()
+
+            # 恢復拆分後的樹狀視圖
+            if 'tree_items' in state.state:
+                for item_data in state.state['tree_items']:
+                    values = item_data.get('values', [])
+                    position = item_data.get('position', 'end')
+                    tags = item_data.get('tags')
+
+                    # 插入項目
+                    new_id = self.gui.insert_item('', position, values=tuple(values))
+
+                    # 恢復標籤
+                    if tags:
+                        self.gui.tree.item(new_id, tags=tags)
+
+                    # 恢復使用 Word 文本的標記
+                    if item_data.get('use_word', False):
+                        self.gui.use_word_text[new_id] = True
+
+            # 恢復 SRT 數據
+            if 'srt_data' in state.state:
+                self.gui.restore_srt_data(state.state['srt_data'])
+
+            # 恢復校正狀態
+            if state.correction_state and hasattr(self.gui, 'correction_service'):
+                self.gui.correction_service.deserialize_state(state.correction_state)
+
+            # 選中拆分後的第一個項目
+            items = self.gui.tree.get_children()
+            if items:
+                first_position = operation.get('first_position', 0)
+                if 0 <= first_position < len(items):
+                    self.gui.tree.selection_set(items[first_position])
+                    self.gui.tree.see(items[first_position])
+
+            return True
+
+        except Exception as e:
+            self.logger.error(f"重做拆分操作時出錯: {e}", exc_info=True)
+            return False
+
+    def _redo_split_operation(self, state, operation):
+        """重做拆分操作"""
+        try:
+            # 獲取操作信息
+            split_result = operation.get('split_result', [])
+            srt_index = operation.get('srt_index')
+
+            if not split_result or not srt_index:
+                self.logger.warning("無法重做拆分操作: 缺少必要信息")
+                return False
+
+            # 清空樹視圖並恢復 state 中的樹視圖狀態
+            self.gui.clear_current_treeview()
+
+            # 從狀態數據中還原完整樹視圖
+            if 'tree_items' in state.state:
+                # 保存項目 ID 映射
+                id_mapping = {}
+
+                for item_data in state.state['tree_items']:
+                    values = item_data.get('values', [])
+                    position = item_data.get('position', 'end')
+                    tags = item_data.get('tags')
+                    use_word = item_data.get('use_word', False)
+                    original_id = item_data.get('original_id')
+
+                    # 插入新項目
+                    new_id = self.gui.insert_item('', position, values=tuple(values))
+
+                    # 保存 ID 映射
+                    if original_id:
+                        id_mapping[original_id] = new_id
+
+                    # 恢復標籤
+                    if tags:
+                        self.gui.tree.item(new_id, tags=tags)
+
+                    # 恢復使用 Word 文本標記
+                    if use_word:
+                        self.gui.use_word_text[new_id] = True
+
+            # 恢復 SRT 數據
+            if 'srt_data' in state.state and state.state['srt_data']:
+                self.gui.restore_srt_data(state.state['srt_data'])
+
+            # 恢復校正狀態
+            if state.correction_state and hasattr(self.gui, 'correction_service'):
+                self.gui.correction_service.deserialize_state(state.correction_state, id_mapping)
+
+            # 如果有目標項目，選中它
+            target_item_id = operation.get('target_item_id')
+            if target_item_id and target_item_id in id_mapping:
+                mapped_id = id_mapping[target_item_id]
+                if self.gui.tree.exists(mapped_id):
+                    self.gui.tree.selection_set(mapped_id)
+                    self.gui.tree.see(mapped_id)
+            else:
+                # 選中第一個拆分項目
+                items = self.gui.tree.get_children()
+                if items:
+                    first_item = None
+                    for item in items:
+                        values = self.gui.tree.item(item, 'values')
+                        index_pos = 1 if self.gui.display_mode in [self.gui.DISPLAY_MODE_ALL, self.gui.DISPLAY_MODE_AUDIO_SRT] else 0
+                        if len(values) > index_pos and str(values[index_pos]) == str(srt_index):
+                            first_item = item
+                            break
+
+                    if first_item:
+                        self.gui.tree.selection_set(first_item)
+                        self.gui.tree.see(first_item)
+
+            # 如果有音頻，確保更新音頻段落
+            if self.gui.audio_imported and hasattr(self.gui, 'audio_player'):
+                self.gui.audio_player.segment_audio(self.gui.srt_data)
+
+            return True
+
+        except Exception as e:
+            self.logger.error(f"重做拆分操作時出錯: {e}", exc_info=True)
+            return False
+
+    def _redo_combine_operation(self, state, operation):
+        """重做合併操作"""
+        try:
+            # 清空樹視圖並恢復 state 中的樹視圖狀態
+            self.gui.clear_current_treeview()
+
+            # 恢復合併後的數據
+            if 'tree_items' in state.state:
+                # 保存項目 ID 映射
+                id_mapping = {}
+
+                for item_data in state.state['tree_items']:
+                    values = item_data.get('values', [])
+                    position = item_data.get('position', 'end')
+                    tags = item_data.get('tags')
+                    use_word = item_data.get('use_word', False)
+                    original_id = item_data.get('original_id')
+
+                    # 插入新項目
+                    new_id = self.gui.insert_item('', position, values=tuple(values))
+
+                    # 保存 ID 映射
+                    if original_id:
+                        id_mapping[original_id] = new_id
+
+                    # 恢復標籤
+                    if tags:
+                        self.gui.tree.item(new_id, tags=tags)
+
+                    # 恢復使用 Word 文本標記
+                    if use_word:
+                        self.gui.use_word_text[new_id] = True
+
+            # 恢復 SRT 數據
+            if 'srt_data' in state.state and state.state['srt_data']:
+                self.gui.restore_srt_data(state.state['srt_data'])
+
+            # 恢復校正狀態
+            if state.correction_state and hasattr(self.gui, 'correction_service'):
+                self.gui.correction_service.deserialize_state(state.correction_state, id_mapping)
+
+            # 如果有合併後的項目 ID，選中它
+            new_item = operation.get('new_item')
+            if new_item and new_item in id_mapping:
+                mapped_id = id_mapping[new_item]
+                if self.gui.tree.exists(mapped_id):
+                    self.gui.tree.selection_set(mapped_id)
+                    self.gui.tree.see(mapped_id)
+
+            # 如果有音頻，確保更新音頻段落
+            if self.gui.audio_imported and hasattr(self.gui, 'audio_player'):
+                self.gui.audio_player.segment_audio(self.gui.srt_data)
+
+            return True
+
+        except Exception as e:
+            self.logger.error(f"重做合併操作時出錯: {e}", exc_info=True)
             return False
 
     def save_operation_state(self, operation_type, operation_description, additional_info=None):
