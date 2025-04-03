@@ -1,0 +1,59 @@
+代碼拆分建議清單
+
+將視窗元素建立相關代碼抽離成獨立模組:
+
+創建 gui/components/gui_builder.py，將所有 UI 元素建立的方法（如 create_menu, create_toolbar, create_main_content 等）放在這裡
+
+
+抽離音頻處理相關功能:
+
+將音頻播放和處理相關的方法移至 services/audio_service.py
+保留在 AlignmentGUI 中的音頻方法應該只是對 AudioService 方法的簡單調用
+
+
+拆分狀態管理和操作功能:
+
+將撤銷/重做和狀態保存相關的邏輯移至 services/enhanced_state_manager.py（已存在，但可擴展）
+使 AlignmentGUI 通過委派模式調用這些功能
+
+
+建立專門的 SRT 數據處理器:
+
+創建 services/srt_processor.py 處理 SRT 相關操作（如合併、拆分、重編號等）
+AlignmentGUI 應該只保留高層次的 SRT 操作邏輯
+
+
+分離 TreeView 操作邏輯:
+
+創建 gui/components/tree_view_manager.py 處理 TreeView 的所有操作
+包括項目插入、刪除、更新等基本操作
+
+
+建立專門的校正服務（已存在）:
+
+繼續使用並擴展現有的 services/correction_service.py
+確保 AlignmentGUI 只是簡單地調用這個服務而非包含校正邏輯
+
+
+抽離文件操作為獨立服務（已存在）:
+
+繼續優化現有的 services/file_manager.py
+確保所有文件操作都通過這個服務進行
+
+
+重構顯示模式相關代碼:
+
+創建 services/display_mode_manager.py 處理顯示模式的轉換和適配
+包含 adjust_values_for_mode 等方法
+
+
+拆分事件處理邏輯:
+
+創建 gui/handlers/event_handlers.py 處理各種 UI 事件
+如點擊、雙擊、鍵盤事件等
+
+
+建立配置管理器（已存在）:
+
+繼續使用並擴展 services/config_manager.py
+確保所有配置相關操作都通過這個服務進行

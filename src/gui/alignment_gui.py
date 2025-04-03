@@ -28,6 +28,8 @@ from services.word_processor import WordProcessor
 from utils.text_utils import simplify_to_traditional
 from utils.time_utils import parse_time
 from gui.quick_correction_dialog import QuickCorrectionDialog
+from gui.components.tree_view_manager import TreeViewManager
+from gui.components.gui_builder import GUIBuilder
 
 # 添加項目根目錄到路徑以確保絕對導入能正常工作
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -134,7 +136,7 @@ class AlignmentGUI(BaseWindow):
             'on_status_updated': self.update_status,
             'get_corrections': self.load_corrections,
             'get_srt_data': self._get_current_srt_data,
-            'get_tree_data': lambda: self.tree.get_children(),
+            'get_tree_data': lambda: self.tree_manager.get_all_items(),
             'show_info': lambda title, msg: show_info(title, msg, self.master),
             'show_warning': lambda title, msg: show_warning(title, msg, self.master),
             'show_error': lambda title, msg: show_error(title, msg, self.master),
@@ -190,7 +192,7 @@ class AlignmentGUI(BaseWindow):
             self.process_srt_entries(srt_data, corrections)
 
             # 檢查樹視圖是否更新成功
-            items_count = len(self.tree.get_children())
+            items_count = len(self.tree_manager.get_all_items())
             self.logger.debug(f"樹視圖更新完成，當前項目數: {items_count}")
 
             # 如果有音頻檔案，更新音頻段落
@@ -312,7 +314,7 @@ class AlignmentGUI(BaseWindow):
         corrections = self.load_corrections()
 
         # 遍歷所有項目
-        for item in self.tree.get_children():
+        for item in self.tree_manager.get_all_items():
             values = self.tree.item(item)['values']
 
             # 檢查是否使用 Word 文本
@@ -387,8 +389,7 @@ class AlignmentGUI(BaseWindow):
         self.logger.debug(f"開始更新樹視圖，SRT 項目數：{len(srt_data)}")
 
         # 清空樹視圖
-        for item in self.tree.get_children():
-            self.tree.delete(item)
+        self.tree_manager.clear_all()
 
         self.logger.debug("樹視圖已清空，開始處理 SRT 條目")
 
@@ -396,7 +397,7 @@ class AlignmentGUI(BaseWindow):
         self.process_srt_entries(srt_data, corrections)
 
         # 檢查是否成功更新
-        items_count = len(self.tree.get_children())
+        items_count = len(self.tree_manager.get_all_items())
         self.logger.debug(f"樹視圖更新完成，當前項目數：{items_count}")
 
     def _segment_audio(self, srt_data) -> None:
@@ -432,7 +433,7 @@ class AlignmentGUI(BaseWindow):
         """切換專案"""
         def confirm_switch():
             """確認是否可以切換專案"""
-            if self.tree.get_children():
+            if self.tree_manager.get_all_items():
                 response = ask_question("確認切換",
                                     "切換專案前，請確認是否已經儲存當前的文本？\n"
                                     "未儲存的內容將會遺失。",
@@ -470,7 +471,7 @@ class AlignmentGUI(BaseWindow):
         values = self.tree.item(item, "values")
 
         # 獲取樹狀視圖中的所有項目
-        all_items = self.tree.get_children()
+        all_items = self.tree_manager.get_all_items()
         item_index = all_items.index(item)
 
         # 根據不同模式確定索引、開始時間和結束時間的位置
@@ -605,7 +606,7 @@ class AlignmentGUI(BaseWindow):
                 self.tree.item(next_item, values=tuple(next_values))
 
         # 更新當前項目的值
-        self.tree.item(item, values=tuple(values))
+        self.tree_manager.update_item(item, values=tuple(values))
 
     def milliseconds_to_time(self, milliseconds):
         """將毫秒轉換為 SubRipTime 對象"""
@@ -670,7 +671,7 @@ class AlignmentGUI(BaseWindow):
             return
 
         # 獲取所有項目的時間值
-        items = self.tree.get_children()
+        items = self.tree_manager.get_all_items()
         if not items:
             return
 
@@ -685,7 +686,7 @@ class AlignmentGUI(BaseWindow):
         # 保存所有項目的原始時間值
         original_items_times = []
         for i, item in enumerate(items):
-            values = self.tree.item(item, 'values')
+            values = self.tree_manager.get_item_values(item)
             if len(values) > end_index:
                 item_data = {
                     'id': item,
@@ -757,7 +758,7 @@ class AlignmentGUI(BaseWindow):
 
     def on_treeview_select(self, event=None):
         """處理樹狀視圖選擇變化"""
-        selected_items = self.tree.selection()
+        selected_items = self.tree_manager.get_selected_items()
 
         # 隱藏合併符號
         self.merge_symbol.place_forget()
@@ -957,9 +958,9 @@ class AlignmentGUI(BaseWindow):
 
         # 更新 Treeview 結構前，先保存現有的數據
         existing_data = []
-        for item in self.tree.get_children():
-            values = self.tree.item(item, 'values')
-            tags = self.tree.item(item, 'tags')
+        for item in self.tree_manager.get_all_items():
+            values = self.tree_manager.get_item_values(item)
+            tags = self.tree_manager.get_item_tags(item)
 
             # 找到當前項目的索引
             if old_mode in [self.DISPLAY_MODE_ALL, self.DISPLAY_MODE_AUDIO_SRT]:
@@ -1083,8 +1084,7 @@ class AlignmentGUI(BaseWindow):
         """
         try:
             # 清空當前樹狀視圖
-            for item in self.tree.get_children():
-                self.tree.delete(item)
+            self.tree_manager.clear_all()
 
             # 清空校正狀態
             self.correction_service.clear_correction_states()
@@ -1162,6 +1162,9 @@ class AlignmentGUI(BaseWindow):
 
     def create_gui_elements(self) -> None:
         """創建主要界面元素"""
+        # 初始化 GUI 建構器
+        self.gui_builder = GUIBuilder(self.master, self.main_frame)
+
         # 創建選單列
         self.create_menu()
 
@@ -1172,39 +1175,31 @@ class AlignmentGUI(BaseWindow):
         self.create_main_content()
 
         # 創建底部檔案信息區域
-        self.create_file_info_area()
+        self.gui_builder.create_file_info_area(self.main_frame)
 
         # 最後創建狀態欄
-        self.create_status_bar()
+        self.gui_builder.create_status_bar(self.main_frame)
 
     def create_menu(self) -> None:
         """創建選單列"""
-        self.menubar = tk.Menu(self.menu_frame)
+        # 定義選單命令
+        menu_commands = {
+            '檔案': {
+                '切換專案': self.switch_project,
+                'separator': None,
+                '開啟 SRT': self.load_srt,
+                '儲存': self.save_srt,
+                '另存新檔': self.save_srt_as,
+                'separator': None,
+                '離開': self.close_window
+            },
+            '編輯': {
+                '復原 Ctrl+Z': self.undo,
+                '重做 Ctrl+Y': self.redo
+            }
+        }
 
-        # 建立一個 frame 來放置選單按鈕
-        menu_buttons_frame = ttk.Frame(self.menu_frame)
-        menu_buttons_frame.pack(fill=tk.X)
-
-        #檔案選單
-        file_menu = tk.Menu(self.menubar, tearoff=0)
-        file_button = ttk.Menubutton(menu_buttons_frame, text="檔案", menu=file_menu)
-        file_button.pack(side=tk.LEFT, padx=2)
-
-        file_menu.add_command(label="切換專案", command=self.switch_project)
-        file_menu.add_separator()  # 分隔線
-        file_menu.add_command(label="開啟 SRT", command=self.load_srt)
-        file_menu.add_command(label="儲存", command=self.save_srt)
-        file_menu.add_command(label="另存新檔", command=self.save_srt_as)
-        file_menu.add_separator()
-        file_menu.add_command(label="離開", command=self.close_window)
-
-        # 編輯選單
-        edit_menu = tk.Menu(self.menubar, tearoff=0)
-        edit_button = ttk.Menubutton(menu_buttons_frame, text="編輯", menu=edit_menu)
-        edit_button.pack(side=tk.LEFT, padx=2)
-
-        edit_menu.add_command(label="復原 Ctrl+Z", command=self.undo)
-        edit_menu.add_command(label="重做 Ctrl+Y", command=self.redo)
+        self.gui_builder.create_menu(self.menu_frame, menu_commands)
 
     def compare_word_with_srt(self) -> None:
         """比對 SRT 和 Word 文本"""
@@ -1247,14 +1242,14 @@ class AlignmentGUI(BaseWindow):
                 return
 
             # 備份當前選中和標籤以及值
-            selected = self.tree.selection()
+            selected = self.tree_manager.get_selected_items()
             tags_backup = {}
             values_backup = {}
             use_word_backup = self.use_word_text.copy()  # 備份 use_word_text 狀態
 
-            for item in self.tree.get_children():
-                tags_backup[item] = self.tree.item(item, 'tags')
-                values_backup[item] = self.tree.item(item, 'values')
+            for item in self.tree_manager.get_all_items():
+                tags_backup[item] = self.tree_manager.get_item_tags(item)
+                values_backup[item] = self.tree_manager.get_item_values(item)
 
             # 建立索引到項目ID的映射
             index_to_item = {}
@@ -1270,8 +1265,7 @@ class AlignmentGUI(BaseWindow):
                     self.logger.error(f"處理項目索引映射時出錯: {e}")
 
             # 清空樹
-            for item in self.tree.get_children():
-                self.tree.delete(item)
+            self.tree_manager.clear_all()
 
             # 載入校正數據庫
             corrections = self.load_corrections()
@@ -1352,7 +1346,7 @@ class AlignmentGUI(BaseWindow):
             # 恢復選中
             if selected:
                 for item in selected:
-                    if item in self.tree.get_children():
+                    if item in self.tree_manager.get_all_items():
                         self.tree.selection_add(item)
 
             # 配置標記樣式 - 確保標籤的優先級
@@ -1440,35 +1434,26 @@ class AlignmentGUI(BaseWindow):
 
         # 更新顯示
         if info_parts:
-            self.file_info_var.set(" | ".join(info_parts))
+            self.gui_builder.update_file_info(" | ".join(info_parts))
         else:
-            self.file_info_var.set("尚未載入任何檔案")
+            self.gui_builder.update_file_info("尚未載入任何檔案")
 
     def create_toolbar(self) -> None:
         """創建工具列"""
         self.toolbar_frame = ttk.Frame(self.main_frame)
         self.toolbar_frame.pack(fill=tk.X, padx=5, pady=5)
 
-        # 建立工具列按鈕
+        # 定義工具列按鈕
         buttons = [
-            ("載入 SRT", self.load_srt),
-            ("匯入音頻", self.import_audio),
-            ("載入 Word", self.import_word_document),
-            ("重新比對", self.compare_word_with_srt),
-            ("調整時間", self.align_end_times),
-            ("匯出 SRT", lambda: self.export_srt(from_toolbar=True))
+            {"text": "載入 SRT", "command": self.load_srt, "width": 15},
+            {"text": "匯入音頻", "command": self.import_audio, "width": 15},
+            {"text": "載入 Word", "command": self.import_word_document, "width": 15},
+            {"text": "重新比對", "command": self.compare_word_with_srt, "width": 15},
+            {"text": "調整時間", "command": self.align_end_times, "width": 15},
+            {"text": "匯出 SRT", "command": lambda: self.export_srt(from_toolbar=True), "width": 15}
         ]
 
-        # 使用 enumerate 來追蹤每個按鈕的位置
-        for index, (text, command) in enumerate(buttons):
-            btn = ttk.Button(
-                self.toolbar_frame,
-                text=text,
-                command=command,
-                width=15,
-                style='Custom.TButton'
-            )
-            btn.pack(side=tk.LEFT, padx=5)
+        self.gui_builder.create_toolbar(self.toolbar_frame, buttons)
 
     def create_main_content(self) -> None:
         """創建主要內容區域"""
@@ -1476,15 +1461,11 @@ class AlignmentGUI(BaseWindow):
         self.content_frame = ttk.Frame(self.main_frame)
         self.content_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
 
-        # 計算總固定寬度
-        total_width = sum(config['width'] for config in ColumnConfig.COLUMNS.values()) + 20  # 20 為卷軸寬度
+        # 使用 GUI 建構器創建內容容器
+        container = self.gui_builder.create_main_content(self.content_frame)
 
-        # 設定固定寬度的容器
-        container = ttk.Frame(self.content_frame, width=total_width)
-        container.pack(expand=False)
-        container.pack_propagate(False)  # 防止自動調整大小
-
-        self.content_frame.pack(fill=tk.BOTH, expand=False)
+        # 使用容器建立 Treeview
+        self.result_frame = container
 
         # 建立 Treeview
         self.create_treeview()
@@ -1500,6 +1481,9 @@ class AlignmentGUI(BaseWindow):
 
         # 創建 Treeview
         self.tree = ttk.Treeview(self.result_frame)
+
+        # 初始化 TreeView 管理器
+        self.tree_manager = TreeViewManager(self.tree)
 
         # 設置列配置前確保 Treeview 已顯示
         self.setup_treeview_columns()
@@ -1517,6 +1501,7 @@ class AlignmentGUI(BaseWindow):
         self.tree.tag_configure('mismatch', background='#FFDDDD')  # 淺紅色背景標記不匹配項目
         self.tree.tag_configure('use_word_text', background='#00BFFF')  # 淺藍色背景標記使用 Word 文本的項目
         self.logger.debug("Treeview 創建完成")
+
     def setup_treeview_columns(self) -> None:
         """設置 Treeview 列配置 - 簡化版"""
         try:
@@ -1535,11 +1520,11 @@ class AlignmentGUI(BaseWindow):
                     'anchor': 'w' if col in ['SRT Text', 'Word Text'] else 'center'
                 })
 
-                self.tree.column(col,
+                self.tree_manager.set_column_config(col,
                     width=config['width'],
                     stretch=config['stretch'],
                     anchor=config['anchor'])
-                self.tree.heading(col, text=col, anchor='center')
+                self.tree_manager.set_heading(col, text=col, anchor='center')
 
             # 調試輸出
             self.logger.debug(f"Treeview 列配置完成，顯示模式: {self.display_mode}, 列: {columns}")
@@ -1582,7 +1567,7 @@ class AlignmentGUI(BaseWindow):
             column_name = self.tree["columns"][column_idx]
 
             # 獲取選中的項目
-            selected_items = self.tree.selection()
+            selected_items = self.tree_manager.get_selected_items()
             if not selected_items:
                 return
 
@@ -1591,7 +1576,7 @@ class AlignmentGUI(BaseWindow):
             if not self.tree.exists(item):
                 return
 
-            values = list(self.tree.item(item, 'values'))
+            values = list(self.tree_manager.get_item_values(item))
             if not values:
                 return
 
@@ -1775,7 +1760,7 @@ class AlignmentGUI(BaseWindow):
                 return
 
             # 檢查是否是選中的項目
-            is_selected = item in self.tree.selection()
+            is_selected = item in self.tree_manager.get_selected_items()
 
             # 獲取列名
             column_idx = int(column[1:]) - 1
@@ -1905,7 +1890,7 @@ class AlignmentGUI(BaseWindow):
                         values[-1] = '✅'
 
                     # 更新樹狀圖顯示
-                    self.tree.item(item, values=tuple(values))
+                    self.tree_manager.update_item(item, values=tuple(values))
 
                     # 保存當前狀態
                     if hasattr(self, 'state_manager'):
@@ -1946,7 +1931,7 @@ class AlignmentGUI(BaseWindow):
                             values[-1] = '✅'
 
                         # 更新樹狀圖顯示
-                        self.tree.item(item, values=tuple(values))
+                        self.tree_manager.update_item(item, values=tuple(values))
 
                         # 保存當前狀態
                         if hasattr(self, 'state_manager'):
@@ -2110,7 +2095,7 @@ class AlignmentGUI(BaseWindow):
                 ]
 
             # 插入新項目
-            new_item = self.tree.insert('', insert_position, values=tuple(new_values))
+            new_item = self.tree_manager.insert_item('', insert_position, values=tuple(new_values))
 
             # 如果需要校正，建立校正狀態
             if needs_correction:
@@ -2138,7 +2123,7 @@ class AlignmentGUI(BaseWindow):
         try:
             # 保存全局樹狀態，用於後續復原
             original_tree_state = []
-            for tree_item in self.tree.get_children():
+            for tree_item in self.tree_manager.get_all_items():
                 original_tree_state.append({
                     'id': tree_item,
                     'values': self.tree.item(tree_item, 'values'),
@@ -2165,9 +2150,9 @@ class AlignmentGUI(BaseWindow):
             # 保存原始樹狀視圖項目的完整信息
             original_item_info = {
                 'id': item,
-                'values': self.tree.item(item, 'values'),
-                'tags': self.tree.item(item, 'tags'),
-                'position': self.tree.index(item),
+                'values': self.tree_manager.get_item_values(item),
+                'tags': self.tree_manager.get_item_tags(item),
+                'position': self.tree_manager.get_item_position(item),
                 'use_word': self.use_word_text.get(item, False)
             }
 
@@ -2219,8 +2204,8 @@ class AlignmentGUI(BaseWindow):
 
                 # 保存當前標籤狀態和刪除位置
                 try:
-                    tags = self.tree.item(item, 'tags')
-                    delete_position = self.tree.index(item)
+                    tags = self.tree_manager.get_item_tags(item)
+                    delete_position = self.tree_manager.get_item_position(item)
                     values = self.tree.item(item)['values']
 
                     # 獲取當前 Word 文本和 Match 狀態（如果有）
@@ -2264,7 +2249,7 @@ class AlignmentGUI(BaseWindow):
 
                 # 刪除原始項目 - 在刪除後不再使用 item 引用
                 try:
-                    self.tree.delete(item)
+                    self.tree_manager.delete_item(item)
                 except Exception as e:
                     self.logger.error(f"刪除項目失敗: {e}")
                     return
@@ -2417,8 +2402,8 @@ class AlignmentGUI(BaseWindow):
 
                 # 選中新創建的項目
                 if new_items:
-                    self.tree.selection_set(new_items[0])
-                    self.tree.see(new_items[0])
+                    self.tree_manager.set_selection(new_items[0])
+                    self.tree_manager.select_and_see(new_items[0])
 
                 # 保存完整的操作狀態，包含所有復原所需的信息
                 full_operation_info = {
@@ -2466,7 +2451,7 @@ class AlignmentGUI(BaseWindow):
                 text = str(text)
 
                 # 獲取當前值
-                values = list(self.tree.item(item, 'values'))
+                values = list(self.tree_manager.get_item_values(item))
 
                 # 更新 SRT 文本
                 if self.display_mode == self.DISPLAY_MODE_ALL:
@@ -2483,7 +2468,7 @@ class AlignmentGUI(BaseWindow):
                     self.srt_data[srt_index - 1].text = text
 
                 # 更新樹狀視圖，保留原有標籤
-                self.tree.item(item, values=tuple(values), tags=self.tree.item(item, 'tags'))
+                self.tree.item(item, values=tuple(values), tags=self.tree_manager.get_item_tags(item))
 
                 # 標記 SRT 欄位被編輯
                 i = srt_index - 1
@@ -2622,7 +2607,7 @@ class AlignmentGUI(BaseWindow):
             # 檢查結果類型
             if isinstance(result, list) and len(result) > 0 and isinstance(result[0], tuple):
                 # 這是文本拆分結果 - 獲取當前值
-                current_values = self.tree.item(item, 'values')
+                current_values = self.tree_manager.get_item_values(item)
 
                 # 調用處理 Word 文本斷句的方法
                 word_index = -1  # 設置適當的 Word 文檔索引
@@ -2643,8 +2628,8 @@ class AlignmentGUI(BaseWindow):
                 text = str(text)
 
                 # 獲取當前值
-                values = list(self.tree.item(item, 'values'))
-                tags = self.tree.item(item, 'tags')
+                values = list(self.tree_manager.get_item_values(item))
+                tags = self.tree_manager.get_item_tags(item)
 
                 # 更新 Word 文本
                 if self.display_mode == self.DISPLAY_MODE_ALL:
@@ -2704,7 +2689,7 @@ class AlignmentGUI(BaseWindow):
                 tags = tuple(tag for tag in tags if tag != 'mismatch')
 
             # 從樹狀視圖中刪除原項目
-            self.tree.delete(original_item)
+            self.tree_manager.delete_item(original_item)
 
             # 載入校正數據庫
             corrections = self.load_corrections()
@@ -2752,7 +2737,7 @@ class AlignmentGUI(BaseWindow):
                     new_values[0] = self.PLAY_ICON
 
                 # 插入新項目
-                new_item = self.tree.insert('', delete_position + i, values=tuple(new_values))
+                new_item = self.tree_manager.insert_item('', delete_position + i, values=tuple(new_values))
                 new_items.append(new_item)
 
                 # 應用標籤
@@ -2806,8 +2791,8 @@ class AlignmentGUI(BaseWindow):
 
             # 選中新創建的項目
             if new_items:
-                self.tree.selection_set(new_items)
-                self.tree.see(new_items[0])
+                self.tree_manager.set_selection(new_items)
+                self.tree_manager.select_and_see(new_items[0])
 
             # 更新 SRT 數據以反映變化
             self.update_srt_data_from_treeview()
@@ -2946,18 +2931,9 @@ class AlignmentGUI(BaseWindow):
     def insert_item(self, parent: str, position: str, values: tuple) -> str:
         """
         封裝 Treeview 的插入操作，並加入日誌追蹤
-
-        Args:
-            parent: 父項目的 ID
-            position: 插入位置 ('', 'end' 等)
-            values: 要插入的值的元組
-
-        Returns:
-            插入項目的 ID
         """
         try:
-            item_id = self.tree.insert(parent, position, values=values)
-            return item_id
+            return self.tree_manager.insert_item(parent, position, values)
         except Exception as e:
             self.logger.error(f"插入項目時出錯: {e}")
             raise
@@ -2975,9 +2951,9 @@ class AlignmentGUI(BaseWindow):
 
                 # 保存當前樹視圖數據
                 current_data = []
-                for item in self.tree.get_children():
-                    values = self.tree.item(item, 'values')
-                    tags = self.tree.item(item, 'tags')
+                for item in self.tree_manager.get_all_items():
+                    values = self.tree_manager.get_item_values(item)
+                    tags = self.tree_manager.get_item_tags(item)
                     use_word = self.use_word_text.get(item, False)
 
                     # 獲取索引位置
@@ -3002,8 +2978,7 @@ class AlignmentGUI(BaseWindow):
                     })
 
                 # 先清空當前樹狀視圖
-                for item in self.tree.get_children():
-                    self.tree.delete(item)
+                self.tree_manager.clear_all()
 
                 # 更新顯示模式 (這會改變樹狀視圖的結構)
                 self.update_display_mode()
@@ -3081,7 +3056,7 @@ class AlignmentGUI(BaseWindow):
         corrections = self.correction_service.load_corrections()
 
         # 如果有項目，自動應用校正
-        if hasattr(self, 'tree') and self.tree.get_children():
+        if hasattr(self, 'tree') and self.tree_manager.get_all_items():
             self.update_correction_display()
 
         return corrections
@@ -3248,9 +3223,9 @@ class AlignmentGUI(BaseWindow):
                 end_col = 2
                 text_col = 3
 
-            for i, item in enumerate(self.tree.get_children(), 1):
+            for i, item in enumerate(self.tree_manager.get_all_items(), 1):
                 try:
-                    values = self.tree.item(item, 'values')
+                    values = self.tree_manager.get_item_values(item)
 
                     # 安全地獲取數據，避免索引錯誤
                     if len(values) <= index_col:
@@ -3464,7 +3439,7 @@ class AlignmentGUI(BaseWindow):
             all_texts = []
             all_word_texts = []
             for item in sorted_items:
-                values = self.tree.item(item, 'values')
+                values = self.tree_manager.get_item_values(item)
                 if column_indices['text'] < len(values):
                     all_texts.append(values[column_indices['text']])
                 if column_indices['word_text'] is not None and column_indices['word_text'] < len(values):
@@ -3491,7 +3466,7 @@ class AlignmentGUI(BaseWindow):
 
             # 刪除所有原始項目
             for item in sorted_items:
-                self.tree.delete(item)
+                self.tree_manager.delete_item(item)
 
             # 構建合併後的值
             combined_values = base_values.copy()
@@ -3539,8 +3514,8 @@ class AlignmentGUI(BaseWindow):
             self.renumber_items()
 
             # 選中新合併的項目
-            self.tree.selection_set(new_item)
-            self.tree.see(new_item)
+            self.tree_manager.set_selection(new_item)
+            self.tree_manager.select_and_see(new_item)
 
             return True, new_item, new_item_index
 
@@ -3618,7 +3593,7 @@ class AlignmentGUI(BaseWindow):
 
         # 從所有項目獲取文本內容
         for i, item in enumerate(sorted_items):
-            item_values = self.tree.item(item, 'values')
+            item_values = self.tree_manager.get_item_values(item)
 
             # 獲取SRT文本
             if column_indices['text'] < len(item_values) and item_values[column_indices['text']].strip():
@@ -3692,7 +3667,7 @@ class AlignmentGUI(BaseWindow):
         # 刪除所有原始項目
         insert_position = self.tree.index(sorted_items[0])
         for item in sorted_items:
-            self.tree.delete(item)
+            self.tree_manager.delete_item(item)
 
         # 插入新合併項目
         new_item = self.insert_item('', insert_position, values=tuple(combined_values))
@@ -3744,7 +3719,7 @@ class AlignmentGUI(BaseWindow):
         # 首先獲取所有需要合併的索引
         indices_to_merge = []
         for item in sorted_items:
-            item_values = self.tree.item(item, 'values')
+            item_values = self.tree_manager.get_item_values(item)
             if self.display_mode in [self.DISPLAY_MODE_ALL, self.DISPLAY_MODE_AUDIO_SRT]:
                 if len(item_values) > 1:
                     try:
@@ -3776,7 +3751,7 @@ class AlignmentGUI(BaseWindow):
                 # 獲取合併後的文本 - 從樹狀視圖中獲取，確保與顯示一致
                 merged_text = ""
                 for item in sorted_items:
-                    values = self.tree.item(item, 'values')
+                    values = self.tree_manager.get_item_values(item)
                     text_index = 4 if self.display_mode in [self.DISPLAY_MODE_ALL, self.DISPLAY_MODE_AUDIO_SRT] else 3
                     if text_index < len(values) and values[text_index]:
                         if merged_text:
@@ -3842,7 +3817,7 @@ class AlignmentGUI(BaseWindow):
             # 獲取所有被合併項目的確切索引
             indices_to_merge = []
             for item in sorted_items:
-                item_values = self.tree.item(item, 'values')
+                item_values = self.tree_manager.get_item_values(item)
                 if self.display_mode in [self.DISPLAY_MODE_ALL, self.DISPLAY_MODE_AUDIO_SRT]:
                     if len(item_values) > 1:
                         try:
@@ -3951,8 +3926,8 @@ class AlignmentGUI(BaseWindow):
         self.state_manager.save_state(current_state, operation_info, current_correction)
 
         # 選中新合併的項目
-        self.tree.selection_set(new_item)
-        self.tree.see(new_item)
+        self.tree_manager.set_selection(new_item)
+        self.tree_manager.select_and_see(new_item)
 
         self.save_operation_state(
             'combine_sentences',
@@ -3973,7 +3948,7 @@ class AlignmentGUI(BaseWindow):
 
     def align_end_times(self) -> None:
         """調整結束時間"""
-        items = self.tree.get_children()
+        items = self.tree_manager.get_all_items()
         if not items:
             show_warning("警告", "沒有可調整的字幕項目", self.master)
             return
@@ -3996,7 +3971,7 @@ class AlignmentGUI(BaseWindow):
             # 保存所有項目的原始時間值
             original_items_times = []
             for i, item in enumerate(items):
-                values = self.tree.item(item, 'values')
+                values = self.tree_manager.get_item_values(item)
                 if len(values) > end_index:
                     item_data = {
                         'id': item,
@@ -4018,7 +3993,7 @@ class AlignmentGUI(BaseWindow):
             # 創建備份以便還原
             backup_values = {}
             for item in items:
-                backup_values[item] = list(self.tree.item(item, 'values'))
+                backup_values[item] = list(self.tree_manager.get_item_values(item))
 
             # 逐項調整結束時間
             for i in range(len(items) - 1):
@@ -4093,7 +4068,7 @@ class AlignmentGUI(BaseWindow):
                 original_end = item_data.get('end', '')
 
                 # 獲取當前項目
-                items = self.tree.get_children()
+                items = self.tree_manager.get_all_items()
                 if 0 <= item_index < len(items):
                     current_item = items[item_index]
                     values = list(self.tree.item(current_item, 'values'))
@@ -4130,7 +4105,7 @@ class AlignmentGUI(BaseWindow):
     def renumber_items(self, skip_correction_update=False) -> None:
         """重新編號項目並保持校正狀態"""
         try:
-            items = self.tree.get_children()
+            items = self.tree_manager.get_all_items()
             if not items:
                 return
 
@@ -4190,7 +4165,7 @@ class AlignmentGUI(BaseWindow):
 
                 # 更新值中的索引
                 values[index_pos] = str(i)
-                self.tree.item(item, values=tuple(values))
+                self.tree_manager.update_item(item, values=tuple(values))
 
                 # 如果不跳過校正狀態更新，則檢查是否需要更新校正狀態
                 if not skip_correction_update:
@@ -4231,10 +4206,10 @@ class AlignmentGUI(BaseWindow):
             }
 
             # 收集樹狀視圖數據
-            for item in self.tree.get_children():
-                values = self.tree.item(item, 'values')
-                tags = self.tree.item(item, 'tags')
-                position = self.tree.index(item)
+            for item in self.tree_manager.get_all_items():
+                values = self.tree_manager.get_item_values(item)
+                tags = self.tree_manager.get_item_tags(item)
+                position = self.tree_manager.get_item_position(item)
 
                 # 獲取索引值
                 index_position = 1 if self.display_mode in [self.DISPLAY_MODE_ALL, self.DISPLAY_MODE_AUDIO_SRT] else 0
@@ -4286,18 +4261,10 @@ class AlignmentGUI(BaseWindow):
         :param message: 狀態訊息（可選）
         """
         if message:
-            self.status_var.set(message)
+            self.gui_builder.update_status(message)
 
         # 更新檔案狀態
-        file_status_parts = []
-
-        # 添加 SRT 文件狀態
-        if self.srt_file_path:
-            file_status_parts.append(f"SRT檔案：{os.path.basename(self.srt_file_path)}")
-
-        # 添加音頻文件狀態
-        if hasattr(self, 'audio_file_path') and self.audio_file_path:
-            file_status_parts.append(f"音頻檔案：{os.path.basename(self.audio_file_path)}")
+        self.update_file_info()
 
         self.master.update_idletasks()
 
@@ -4320,10 +4287,10 @@ class AlignmentGUI(BaseWindow):
     def get_tree_data(self) -> List[Dict[str, Any]]:
         """獲取樹狀視圖數據"""
         tree_data = []
-        for item in self.tree.get_children():
-            values = self.tree.item(item, 'values')
-            tags = self.tree.item(item, 'tags')
-            position = self.tree.index(item)
+        for item in self.tree_manager.get_all_items():
+            values = self.tree_manager.get_item_values(item)
+            tags = self.tree_manager.get_item_tags(item)
+            position = self.tree_manager.get_item_position(item)
             use_word = self.use_word_text.get(item, False)
 
             tree_data.append({
@@ -4420,8 +4387,8 @@ class AlignmentGUI(BaseWindow):
             if visible_item:
                 # 嘗試1: 直接使用保存的項目 ID
                 if self.tree.exists(visible_item):
-                    self.tree.see(visible_item)
-                    self.tree.selection_set(visible_item)
+                    self.tree_manager.select_and_see(visible_item)
+                    self.tree_manager.set_selection(visible_item)
                     self.logger.debug(f"已恢復視圖位置至項目 {visible_item}")
                 else:
                     # 嘗試2: 檢查操作中的 ID 映射
@@ -4429,22 +4396,22 @@ class AlignmentGUI(BaseWindow):
                     if id_mapping and visible_item in id_mapping:
                         mapped_id = id_mapping[visible_item]
                         if self.tree.exists(mapped_id):
-                            self.tree.see(mapped_id)
-                            self.tree.selection_set(mapped_id)
+                            self.tree_manager.select_and_see(mapped_id)
+                            self.tree_manager.set_selection(mapped_id)
                             self.logger.debug(f"已通過映射恢復視圖位置: {visible_item} -> {mapped_id}")
                         else:
                             # 嘗試3: 查找目標項目 ID
                             target_id = operation.get('target_item_id')
                             if target_id and self.tree.exists(target_id):
-                                self.tree.see(target_id)
-                                self.tree.selection_set(target_id)
+                                self.tree_manager.select_and_see(target_id)
+                                self.tree_manager.set_selection(target_id)
                                 self.logger.debug(f"已恢復視圖位置至目標項目 {target_id}")
                             else:
                                 # 嘗試4: 使用第一個項目
-                                all_items = self.tree.get_children()
+                                all_items = self.tree_manager.get_all_items()
                                 if all_items:
-                                    self.tree.see(all_items[0])
-                                    self.tree.selection_set(all_items[0])
+                                    self.tree_manager.select_and_see(all_items[0])
+                                    self.tree_manager.set_selection(all_items[0])
                                     self.logger.debug(f"無法找到原始項目，已恢復視圖位置至第一個項目 {all_items[0]}")
                                 else:
                                     self.logger.warning("無法恢復視圖位置：樹為空")
@@ -4661,8 +4628,7 @@ class AlignmentGUI(BaseWindow):
         """從 SRT 數據重新填充樹狀視圖"""
         try:
             # 確保樹狀視圖已清空
-            for item in self.tree.get_children():
-                self.tree.delete(item)
+            self.tree_manager.clear_all()
 
             # 載入校正數據
             corrections = self.load_corrections()
@@ -4697,8 +4663,7 @@ class AlignmentGUI(BaseWindow):
         """徹底清除當前樹狀視圖及相關狀態"""
         try:
             # 清除樹狀視圖項目
-            for item in self.tree.get_children():
-                self.tree.delete(item)
+            self.tree_manager.clear_all()
 
             # 清除使用 Word 文本的標記
             if hasattr(self, 'use_word_text'):
@@ -4738,7 +4703,7 @@ class AlignmentGUI(BaseWindow):
         try:
             if hasattr(self, 'state_manager'):
                 # 檢查是否有任何內容可保存
-                if not self.tree.get_children():
+                if not self.tree_manager.get_all_items():
                     self.logger.debug("樹為空，跳過初始狀態保存")
                     return
 
@@ -4746,7 +4711,7 @@ class AlignmentGUI(BaseWindow):
                 correction_state = self.correction_service.serialize_state() if hasattr(self, 'correction_service') else None
 
                 # 診斷日誌
-                self.logger.debug(f"保存初始狀態，樹項目數: {len(self.tree.get_children())}")
+                self.logger.debug(f"保存初始狀態，樹項目數: {len(self.tree_manager.get_all_items())}")
 
                 # 保存狀態
                 self.state_manager.save_state(current_state, {
@@ -5013,7 +4978,7 @@ class AlignmentGUI(BaseWindow):
                 'description': operation_description,
                 'timestamp': time.time(),
                 'display_mode': self.display_mode,
-                'tree_items_count': len(self.tree.get_children())
+                'tree_items_count': len(self.tree_manager.get_all_items())
             }
 
             # 添加附加信息
@@ -5069,7 +5034,7 @@ class AlignmentGUI(BaseWindow):
             # 保存當前樹中的數據
             current_data = []
 
-            for item in self.tree.get_children():
+            for item in self.tree_manager.get_all_items():
                 values = list(self.tree.item(item)['values'])
                 tags = self.tree.item(item)['tags']
                 use_word = self.use_word_text.get(item, False)
@@ -5100,7 +5065,7 @@ class AlignmentGUI(BaseWindow):
                 })
 
             # 清空樹狀視圖項目
-            self.tree.delete(*self.tree.get_children())
+            self.tree_manager.clear_all()
 
             # 更新列配置
             columns = self.columns[self.display_mode]
@@ -5115,11 +5080,11 @@ class AlignmentGUI(BaseWindow):
                     'anchor': 'w' if col in ['SRT Text', 'Word Text'] else 'center'
                 })
 
-                self.tree.column(col,
+                self.tree_manager.set_column_config(col,
                     width=config['width'],
                     stretch=config['stretch'],
                     anchor=config['anchor'])
-                self.tree.heading(col, text=col, anchor='center')
+                self.tree_manager.set_heading(col, text=col, anchor='center')
 
             # 恢復數據到樹狀視圖
             old_mode = "any"  # 使用通用模式檢測
@@ -5147,8 +5112,7 @@ class AlignmentGUI(BaseWindow):
         """
         try:
             # 清空當前樹狀視圖
-            for item in self.tree.get_children():
-                self.tree.delete(item)
+            self.tree_manager.clear_all()
 
             # 清空校正狀態
             self.correction_service.clear_correction_states()
@@ -5482,8 +5446,7 @@ class AlignmentGUI(BaseWindow):
                 self.state_manager.clear_states()
 
             if hasattr(self, 'tree'):
-                for item in self.tree.get_children():
-                    self.tree.delete(item)
+                self.tree_manager.clear_all()
 
             if hasattr(self, 'correction_service'):
                 self.correction_service.clear_correction_states()
@@ -5533,13 +5496,12 @@ class AlignmentGUI(BaseWindow):
         """徹底清除當前狀態"""
         try:
             # 在清除前記錄當前狀態
-            tree_items_count = len(self.tree.get_children() if hasattr(self, 'tree') else [])
+            tree_items_count = len(self.tree_manager.get_all_items() if hasattr(self, 'tree') else [])
             self.logger.debug(f"開始清除當前狀態，當前樹項目數: {tree_items_count}")
 
             # 清空樹狀視圖
             if hasattr(self, 'tree'):
-                for item in self.tree.get_children():
-                    self.tree.delete(item)
+                self.tree_manager.clear_all()
 
             # 清空相關狀態
             if hasattr(self, 'use_word_text'):
@@ -5610,8 +5572,8 @@ class AlignmentGUI(BaseWindow):
 
             # 首先，建立一個從索引到樹項目 ID 的映射
             index_to_item = {}
-            for item in self.tree.get_children():
-                values = self.tree.item(item, 'values')
+            for item in self.tree_manager.get_all_items():
+                values = self.tree_manager.get_item_values(item)
                 index_position = 1 if self.display_mode in [self.DISPLAY_MODE_ALL, self.DISPLAY_MODE_AUDIO_SRT] else 0
                 if len(values) > index_position:
                     index = str(values[index_position])
@@ -5646,7 +5608,7 @@ class AlignmentGUI(BaseWindow):
         :return: 當前可見項目的 ID
         """
         try:
-            current_selection = self.tree.selection()
+            current_selection = self.tree_manager.get_selected_items()
             if current_selection:
                 return current_selection[0]
 
@@ -5656,7 +5618,7 @@ class AlignmentGUI(BaseWindow):
                 return visible_items
 
             # 如果沒有可見項目，返回第一個項目
-            all_items = self.tree.get_children()
+            all_items = self.tree_manager.get_all_items()
             if all_items:
                 return all_items[0]
         except Exception as e:
@@ -5825,7 +5787,7 @@ class AlignmentGUI(BaseWindow):
                 return
 
             # 檢查是否為選中的項目
-            is_selected = item in self.tree.selection()
+            is_selected = item in self.tree_manager.get_selected_items()
 
             # 只有在文本欄位上且是被選中的項目才顯示圖標
             is_text_column = False
@@ -5935,7 +5897,7 @@ class AlignmentGUI(BaseWindow):
             srt_data_updated = False
 
             # 遍歷所有項目
-            for item in self.tree.get_children():
+            for item in self.tree_manager.get_all_items():
                 values = list(self.tree.item(item, "values"))
 
                 # 獲取文本列索引
@@ -5972,7 +5934,7 @@ class AlignmentGUI(BaseWindow):
                     values[text_index] = corrected_text
 
                     # 更新項目
-                    self.tree.item(item, values=tuple(values))
+                    self.tree_manager.update_item(item, values=tuple(values))
 
                     # 標記 SRT 數據需要更新
                     srt_data_updated = True
