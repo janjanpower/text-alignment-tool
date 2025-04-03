@@ -2060,128 +2060,8 @@ class AlignmentGUI(BaseWindow):
             self.floating_icon_fixed = False
 
     def toggle_correction_icon(self, item: str, index: str, text: str) -> None:
-        """
-        切換校正圖標狀態
-
-        Args:
-            item: 樹狀視圖項目ID
-            index: 項目索引
-            text: 當前文本
-        """
-        # 添加遞歸保護
-        if hasattr(self, '_toggling_correction_icon') and self._toggling_correction_icon:
-            return
-
-        try:
-            self._toggling_correction_icon = True
-            self.logger.debug(f"切換校正圖標開始: 索引={index}, 項目ID={item}")
-
-            # 保存操作前的狀態
-            original_state = self.get_current_state()
-            original_correction = self.correction_service.serialize_state()
-
-            # 獲取當前項目的值
-            values = list(self.tree.item(item, "values"))
-            if not values:
-                self.logger.warning(f"項目 {item} 沒有值，無法切換校正狀態")
-                return
-
-            # 檢查文本是否需要校正
-            needs_correction, corrected_text, original_text, _ = self.correction_service.check_text_for_correction(text)
-
-            if not needs_correction:
-                self.logger.debug(f"文本不需要校正，不做任何更改: {text}")
-                return
-
-            # 獲取當前校正圖標
-            correction_mark = values[-1] if values else ''
-
-            # 記錄切換前的校正狀態
-            before_state = self.correction_service.get_correction_state(index)
-            self.logger.debug(f"切換前校正狀態: {before_state}")
-
-            # 保存所有項目的狀態，而不僅僅是當前項
-            all_items_state = []
-            for tree_item in self.tree.get_children():
-                all_items_state.append({
-                    'id': tree_item,
-                    'values': self.tree.item(tree_item, 'values'),
-                    'tags': self.tree.item(tree_item, 'tags'),
-                    'position': self.tree.index(tree_item),
-                    'use_word': self.use_word_text.get(tree_item, False)
-                })
-
-            # 切換校正狀態
-            if correction_mark == '✅':
-                # 從已校正切換到未校正
-                values[-1] = '❌'
-
-                # 獲取文本位置索引
-                text_index = self.get_text_position_in_values()
-
-                # 更新顯示文本為原始文本
-                if text_index is not None and text_index < len(values):
-                    values[text_index] = original_text
-
-                # 更新校正狀態
-                self.correction_service.set_correction_state(
-                    index,
-                    original_text,
-                    corrected_text,
-                    'error'  # 設置為未校正狀態
-                )
-            else:  # correction_mark == '❌' 或空白
-                # 從未校正或無狀態切換到已校正
-                values[-1] = '✅'
-
-                # 獲取文本位置索引
-                text_index = self.get_text_position_in_values()
-
-                # 更新顯示文本為校正後文本
-                if text_index is not None and text_index < len(values):
-                    values[text_index] = corrected_text
-
-                # 更新校正狀態
-                self.correction_service.set_correction_state(
-                    index,
-                    original_text,
-                    corrected_text,
-                    'correct'  # 設置為已校正狀態
-                )
-
-            # 更新樹狀圖顯示
-            self.tree.item(item, values=tuple(values))
-
-            # 記錄切換後的校正狀態
-            after_state = self.correction_service.get_correction_state(index)
-            self.logger.debug(f"切換後校正狀態: {after_state}")
-
-            # 更新 SRT 數據
-            self.update_srt_data_from_treeview()
-
-            # 保存更完整的狀態信息
-            self.save_operation_state(
-                'toggle_correction',
-                '切換校正狀態',
-                {
-                    'item_id': item,
-                    'index': index,
-                    'before_state': before_state,
-                    'after_state': after_state,
-                    'original_state': original_state,
-                    'original_correction': original_correction,
-                    'all_items_state': all_items_state,  # 新增：保存所有項目狀態
-                    'was_split': True if hasattr(self, 'last_split_operation') else False  # 標記是否在分割後操作
-                }
-            )
-
-            # 更新 SRT 數據但禁止觸發校正狀態更新
-            self._skip_correction_on_update = True
-            self.update_srt_data_from_treeview()
-            self._skip_correction_on_update = False
-
-        finally:
-            self._toggling_correction_icon = False
+        """交由 CorrectionService 處理"""
+        self.correction_service.toggle_correction_icon(self.tree, item, index, text, self.display_mode)
 
     def get_text_position_in_values(self):
         """獲取文本在值列表中的位置"""
@@ -3462,31 +3342,46 @@ class AlignmentGUI(BaseWindow):
                 return
 
             # 保存操作後的狀態
-            current_state = self.get_current_state()
-            current_correction = self.correction_service.serialize_state()
-
-            # 保存操作狀態
-            self.save_operation_state(
-                'combine_sentences',
-                '合併字幕',
-                {
-                    'original_state': original_state,
-                    'original_correction': original_correction,
-                    'selected_items_details': original_items_data,
-                    'new_item': new_item,
-                    'new_item_index': new_item_index
-                }
-            )
+            self._save_combine_operation_state(original_state, original_correction, original_items_data, new_item, new_item_index)
 
             # 隱藏合併符號
             if hasattr(self, 'merge_symbol'):
                 self.merge_symbol.place_forget()
 
             self.update_status("已合併所選字幕")
-
         except Exception as e:
             self.logger.error(f"合併字幕時出錯: {e}", exc_info=True)
             show_error("錯誤", f"合併字幕失敗: {str(e)}", self.master)
+
+    def _save_combine_operation_state(self, original_state, original_correction, original_items_data, new_item, new_item_index):
+        """保存合併操作的狀態"""
+        # 獲取當前狀態
+        current_state = self.get_current_state()
+        current_correction = self.correction_service.serialize_state()
+
+        # 獲取所有選中項目的詳細信息（用於還原）
+        selected_items_details = []
+        for item_data in original_items_data:
+            selected_items_details.append({
+                'id': item_data.get('id'),
+                'values': item_data.get('values'),
+                'tags': item_data.get('tags'),
+                'position': item_data.get('position'),
+                'use_word': item_data.get('use_word', False)
+            })
+
+        # 保存操作狀態
+        self.save_operation_state(
+            'combine_sentences',
+            '合併字幕',
+            {
+                'original_state': original_state,
+                'original_correction': original_correction,
+                'selected_items_details': selected_items_details,
+                'new_item': new_item,
+                'new_item_index': new_item_index
+            }
+        )
 
     def _validate_combine_selection(self) -> bool:
         """驗證是否有足夠的選中項用於合併"""

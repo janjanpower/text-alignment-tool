@@ -547,140 +547,62 @@ class CorrectionService:
 
         self.logger.info(f"已轉移 {len(new_states)} 個項目的校正狀態")
 
-
-    def add_correction_state(self, index: str, original_text: str, corrected_text: str, state: str = 'correct') -> None:
+    def toggle_correction_icon(self, tree_view, item: str, index: str, text: str, display_mode: str) -> None:
         """
-        添加項目的校正狀態 (set_correction_state 的別名)
-        :param index: 項目索引
-        :param original_text: 原始文本
-        :param corrected_text: 校正後文本
-        :param state: 校正狀態 ('correct' 或 'error')
-        """
-        return self.set_correction_state(index, original_text, corrected_text, state)
-
-    def toggle_correction_icon(self, item: str, index: str, text: str) -> None:
-        """
-        切換校正圖標狀態
+        切換校正圖標狀態 - 集中處理界面和邏輯
 
         Args:
+            tree_view: 樹狀視圖控件
             item: 樹狀視圖項目ID
             index: 項目索引
             text: 當前文本
+            display_mode: 顯示模式
         """
         try:
             self.logger.debug(f"切換校正圖標開始: 索引={index}, 項目ID={item}")
 
-            # 保存操作前的狀態
-            original_state = self.get_current_state()
-            original_correction = self.correction_service.serialize_state()
-
-            # 記錄切換前的校正狀態
-            before_state = self.correction_service.get_correction_state(index)
-            self.logger.debug(f"切換前校正狀態: {before_state}")
-
-            # 獲取當前項目的值
-            values = list(self.tree.item(item, "values"))
-            if not values:
-                self.logger.warning(f"項目 {item} 沒有值，無法切換校正狀態")
-                return
+            # 獲取當前校正狀態
+            current_state = self.get_correction_state(index)
 
             # 檢查文本是否需要校正
-            needs_correction, corrected_text, original_text, _ = self.correction_service.check_text_for_correction(text)
+            needs_correction, corrected_text, original_text, _ = self.check_text_for_correction(text)
 
             if not needs_correction:
                 self.logger.debug(f"文本不需要校正，不做任何更改: {text}")
                 return
 
-            # 獲取當前校正圖標
-            correction_mark = values[-1] if values else ''
+            # 獲取文本位置索引
+            text_index = self._get_text_index_for_mode(display_mode)
+
+            # 獲取當前值
+            values = list(tree_view.item(item, "values"))
+            if not values:
+                self.logger.warning(f"項目 {item} 沒有值，無法切換校正狀態")
+                return
 
             # 切換校正狀態
-            if correction_mark == '✅':
-                # 從已校正切換到未校正
-                values[-1] = '❌'
+            new_state = 'error' if current_state == 'correct' else 'correct'
 
-                # 獲取文本位置索引
-                text_index = None
-                if self.display_mode == self.DISPLAY_MODE_ALL:
-                    text_index = 4
-                elif self.display_mode == self.DISPLAY_MODE_AUDIO_SRT:
-                    text_index = 4
-                elif self.display_mode == self.DISPLAY_MODE_SRT_WORD:
-                    text_index = 3
-                else:  # SRT 模式
-                    text_index = 3
+            # 更新顯示
+            values[-1] = '❌' if new_state == 'error' else '✅'
+            if text_index is not None and text_index < len(values):
+                values[text_index] = original_text if new_state == 'error' else corrected_text
 
-                # 更新顯示文本為原始文本
-                if text_index is not None and text_index < len(values):
-                    values[text_index] = original_text
-
-                # 更新校正狀態
-                self.correction_service.set_correction_state(
-                    index,
-                    original_text,
-                    corrected_text,
-                    'error'  # 設置為未校正狀態
-                )
-            else:  # correction_mark == '❌' 或空白
-                # 從未校正或無狀態切換到已校正
-                values[-1] = '✅'
-
-                # 獲取文本位置索引
-                text_index = None
-                if self.display_mode == self.DISPLAY_MODE_ALL:
-                    text_index = 4
-                elif self.display_mode == self.DISPLAY_MODE_AUDIO_SRT:
-                    text_index = 4
-                elif self.display_mode == self.DISPLAY_MODE_SRT_WORD:
-                    text_index = 3
-                else:  # SRT 模式
-                    text_index = 3
-
-                # 更新顯示文本為校正後文本
-                if text_index is not None and text_index < len(values):
-                    values[text_index] = corrected_text
-
-                # 更新校正狀態
-                self.correction_service.set_correction_state(
-                    index,
-                    original_text,
-                    corrected_text,
-                    'correct'  # 設置為已校正狀態
-                )
+            # 更新校正狀態
+            self.set_correction_state(index, original_text, corrected_text, new_state)
 
             # 更新樹狀圖顯示
-            self.tree.item(item, values=tuple(values))
-
-            # 記錄切換後的校正狀態
-            after_state = self.correction_service.get_correction_state(index)
-            self.logger.debug(f"切換後校正狀態: {after_state}")
-
-            # 更新 SRT 數據
-            self.update_srt_data_from_treeview()
-
-            # 保存當前狀態，包含完整的操作信息和校正狀態
-            current_state = self.get_current_state()
-            current_correction = self.correction_service.serialize_state()
-
-            # 創建操作信息
-            operation_info = {
-                'type': 'toggle_correction',
-                'description': '切換校正狀態',
-                'item_id': item,
-                'index': index,
-                'before_state': before_state,
-                'after_state': after_state,
-                'original_state': original_state,
-                'original_correction': original_correction
-            }
-
-            # 保存到狀態管理器
-            self.state_manager.save_state(current_state, operation_info, current_correction)
-
-            self.logger.debug(f"校正圖標切換完成: 索引={index}, 項目ID={item}")
-
+            tree_view.item(item, values=tuple(values))
         except Exception as e:
             self.logger.error(f"切換校正圖標時出錯: {e}", exc_info=True)
+
+    def _get_text_index_for_mode(self, display_mode: str) -> Optional[int]:
+        """獲取特定顯示模式下文本的索引位置"""
+        if display_mode in ["all", "audio_srt"]:
+            return 4
+        elif display_mode in ["srt", "srt_word"]:
+            return 3
+        return None
 
     def create_correction_states_for_split_items(self, original_index, texts, new_indices):
         """為拆分後的項目創建校正狀態

@@ -129,6 +129,10 @@ class FileManager:
             else:
                 messagebox.showinfo("成功", f"已成功載入SRT檔案：\n{os.path.basename(file_path)}", parent=self.parent)
 
+
+            # 更新所有相關狀態和界面
+            self._update_all_related_states(srt_data, file_path)
+
             return srt_data
 
         except Exception as e:
@@ -139,6 +143,21 @@ class FileManager:
                 messagebox.showerror("錯誤", f"無法載入 SRT 檔案: {str(e)}", parent=self.parent)
             return None
 
+    def _update_all_related_states(self, srt_data, file_path):
+        """更新所有狀態，集中處理各種狀態更新"""
+        # 更新內部狀態
+        self.srt_file_path = file_path
+        self.srt_imported = True
+
+        # 調用回調更新界面
+        if self.callbacks['on_srt_loaded']:
+            self.callbacks['on_srt_loaded'](srt_data, file_path)
+
+        if self.callbacks['on_file_info_updated']:
+            self.callbacks['on_file_info_updated']()
+
+        if self.callbacks['on_status_updated']:
+            self.callbacks['on_status_updated'](f"已載入SRT檔案：{os.path.basename(file_path)}")
 
     def save_srt(self, event: Optional[tk.Event] = None) -> bool:
         """
