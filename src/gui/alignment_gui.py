@@ -1763,21 +1763,7 @@ class AlignmentGUI(BaseWindow):
     def on_tree_click(self, event: tk.Event) -> None:
         """處理樹狀圖的點擊事件"""
         try:
-            # 如果圖標已固定且點擊的不是圖標，則取消固定
-            if hasattr(self, 'floating_icon_fixed') and self.floating_icon_fixed:
-                if hasattr(self, 'floating_icon'):
-                    # 檢查點擊是否在圖標上
-                    icon_x = self.floating_icon.winfo_x()
-                    icon_y = self.floating_icon.winfo_y()
-                    icon_width = self.floating_icon.winfo_width()
-                    icon_height = self.floating_icon.winfo_height()
-
-                    # 如果點擊不在圖標區域內，取消固定
-                    if (event.x < icon_x or event.x > icon_x + icon_width or
-                        event.y < icon_y or event.y > icon_y + icon_height):
-                        self.floating_icon.place_forget()
-                        self.floating_icon_fixed = False
-
+            # 獲取點擊區域、欄位和項目信息
             region = self.tree.identify("region", event.x, event.y)
             column = self.tree.identify_column(event.x)
             item = self.tree.identify_row(event.y)
@@ -1787,6 +1773,9 @@ class AlignmentGUI(BaseWindow):
             if not (region and column and item):
                 return
 
+            # 檢查是否是選中的項目
+            is_selected = item in self.tree.selection()
+
             # 獲取列名
             column_idx = int(column[1:]) - 1
             if column_idx >= len(self.tree["columns"]):
@@ -1795,6 +1784,53 @@ class AlignmentGUI(BaseWindow):
             column_name = self.tree["columns"][column_idx]
             self.logger.debug(f"點擊的列名: {column_name}")
 
+            # 處理文本列點擊事件（SRT Text 或 Word Text）
+            if region == "cell" and is_selected and column_name in ["SRT Text", "Word Text"]:
+                # 檢查是否點擊了與當前懸停文本不同的項目
+                if (hasattr(self, 'current_hovering_item') and
+                    (self.current_hovering_item != item or self.current_hovering_column != column_name)):
+                    # 隱藏之前的圖標
+                    if hasattr(self, 'floating_icon'):
+                        self.floating_icon.place_forget()
+                        self.floating_icon_fixed = False
+
+                # 獲取值
+                values = list(self.tree.item(item)["values"])
+                if not values or len(values) <= column_idx:
+                    return
+
+                selected_text = values[column_idx]
+                if not selected_text:
+                    return
+
+                # 更新當前懸停信息
+                self.current_hovering_text = selected_text
+                self.current_hovering_item = item
+                self.current_hovering_column = column_name
+
+                # 如果已有圖標，固定它
+                if hasattr(self, 'floating_icon'):
+                    self.floating_icon_fixed = True
+                    # 更新圖標位置（放在點擊位置）
+                    self.floating_icon.place(x=event.x + 10, y=event.y - 10)
+                else:
+                    # 創建新圖標
+                    self.floating_icon = tk.Label(
+                        self.tree,
+                        text="✚",  # 使用十字形加號
+                        bg="#E0F7FA",  # 淺藍色背景
+                        fg="#00796B",  # 深綠色前景
+                        font=("Arial", 12),
+                        cursor="hand2",
+                        relief=tk.RAISED,  # 突起的外觀
+                        borderwidth=1,  # 添加邊框
+                        padx=3,  # 水平內邊距
+                        pady=1   # 垂直內邊距
+                    )
+                    self.floating_icon_fixed = True
+                    self.floating_icon.bind("<Button-1>", self.on_icon_click)
+                    self.floating_icon.place(x=event.x + 10, y=event.y - 10)
+
             # 隱藏合併符號
             if hasattr(self, 'merge_symbol'):
                 self.merge_symbol.place_forget()
@@ -1802,6 +1838,7 @@ class AlignmentGUI(BaseWindow):
             # 隱藏時間滑桿（如果有）
             if hasattr(self, 'hide_time_slider'):
                 self.hide_time_slider()
+
 
             # 處理時間欄位的點擊
             if column_name in ["Start", "End"] and region == "cell":
@@ -2002,6 +2039,24 @@ class AlignmentGUI(BaseWindow):
 
         except Exception as e:
             self.logger.error(f"處理樹狀圖點擊事件時出錯: {e}", exc_info=True)
+
+    def on_icon_click(self, event):
+        """當圖標被點擊時的處理，打開添加視窗"""
+        try:
+            # 顯示添加校正對話框
+            if hasattr(self, 'current_hovering_text') and self.current_hovering_text:
+                self.show_add_correction_dialog(self.current_hovering_text)
+            else:
+                self.logger.warning("找不到當前懸停文本，無法打開校正對話框")
+
+        except Exception as e:
+            self.logger.error(f"圖標點擊處理時出錯: {e}", exc_info=True)
+
+    def reset_floating_icon_state(self):
+        """重置浮動圖標的狀態"""
+        if hasattr(self, 'floating_icon'):
+            self.floating_icon.place_forget()
+            self.floating_icon_fixed = False
 
     def toggle_correction_icon(self, item: str, index: str, text: str) -> None:
         """
@@ -5836,25 +5891,40 @@ class AlignmentGUI(BaseWindow):
             raise
 
     def show_floating_correction_icon(self, event):
-        """顯示跟隨游標的校正圖標"""
+        """顯示跟隨游標的校正圖標，但只在選中的文本項目上"""
         try:
             # 獲取游標所在位置的區域和欄位
             region = self.tree.identify("region", event.x, event.y)
             column = self.tree.identify_column(event.x)
             item = self.tree.identify_row(event.y)
 
-            # 只有在文本欄位上顯示圖標，無論是否被選取
+            # 如果游標移到新的項目或列，且之前有固定的圖標，則隱藏它
+            if hasattr(self, 'current_hovering_item') and hasattr(self, 'current_hovering_column'):
+                if (item != self.current_hovering_item or
+                    (column and int(column[1:]) - 1 != self.get_column_index(self.current_hovering_column))):
+                    if hasattr(self, 'floating_icon'):
+                        self.floating_icon.place_forget()
+                        self.floating_icon_fixed = False
+
+            # 如果圖標已固定，不再移動
+            if hasattr(self, 'floating_icon_fixed') and self.floating_icon_fixed:
+                return
+
+            # 檢查是否為選中的項目
+            is_selected = item in self.tree.selection()
+
+            # 只有在文本欄位上且是被選中的項目才顯示圖標
             is_text_column = False
-            if region == "cell" and column and item:
+            if region == "cell" and column and item and is_selected:
                 column_idx = int(column[1:]) - 1
                 if column_idx >= 0 and column_idx < len(self.tree["columns"]):
                     column_name = self.tree["columns"][column_idx]
                     if column_name in ["SRT Text", "Word Text"]:
                         is_text_column = True
 
-            # 如果不在文本欄位上，隱藏圖標，但不隱藏已固定的圖標
-            if not is_text_column:
-                if hasattr(self, 'floating_icon') and not (hasattr(self, 'floating_icon_fixed') and self.floating_icon_fixed):
+            # 如果不在文本欄位上或不是被選中的項目，隱藏圖標
+            if not is_text_column or not is_selected:
+                if hasattr(self, 'floating_icon') and not self.floating_icon_fixed:
                     self.floating_icon.place_forget()
                 return
 
@@ -5874,49 +5944,36 @@ class AlignmentGUI(BaseWindow):
 
             # 創建或更新浮動圖標
             if not hasattr(self, 'floating_icon'):
-                # 創建一個簡單的圖標
+                # 創建一個表示"添加"的圖標，使用統一的樣式
                 self.floating_icon = tk.Label(
                     self.tree,
-                    text="✎",  # 簡單的鉛筆圖標
-                    bg="#FFFFFF",  # 白色背景
-                    fg="#0078D7",  # 藍色前景
+                    text="✚",  # 使用十字形加號
+                    bg="#E0F7FA",  # 淺藍色背景
+                    fg="#00796B",  # 深綠色前景
                     font=("Arial", 12),
-                    cursor="hand2"
+                    cursor="hand2",
+                    relief=tk.RAISED,  # 突起的外觀
+                    borderwidth=1,  # 添加邊框
+                    padx=3,  # 水平內邊距
+                    pady=1   # 垂直內邊距
                 )
-                self.floating_icon.bind("<Button-1>", self.on_icon_click)
-                # 初始化 floating_icon_fixed 狀態
+                # 初始化圖標固定狀態
                 self.floating_icon_fixed = False
+                # 添加點擊事件
+                self.floating_icon.bind("<Button-1>", self.on_icon_click)
 
-            # 如果圖標已固定，則不更新位置
-            if not hasattr(self, 'floating_icon_fixed') or not self.floating_icon_fixed:
-                # 更新圖標位置跟隨游標
-                self.floating_icon.place(x=event.x + 10, y=event.y - 10)
+            # 更新圖標位置跟隨游標
+            self.floating_icon.place(x=event.x + 10, y=event.y - 10)
 
         except Exception as e:
             self.logger.error(f"顯示浮動校正圖標時出錯: {e}", exc_info=True)
 
-    def on_icon_click(self, event):
-        """當圖標被點擊時的處理"""
-        try:
-            # 切換固定狀態
-            if not hasattr(self, 'floating_icon_fixed'):
-                self.floating_icon_fixed = False
-
-            # 切換固定狀態
-            self.floating_icon_fixed = not self.floating_icon_fixed
-
-            if self.floating_icon_fixed:
-                # 固定圖標位置時，改變外觀以指示它已被固定
-                self.floating_icon.config(bg="#E0E0E0", relief=tk.RAISED)  # 變更背景色和邊框樣式
-                # 如果是第一次固定，顯示提示信息
-                self.floating_icon.after(2000, lambda: self.show_add_correction_dialog(self.current_hovering_text))
-            else:
-                # 取消固定時，恢復原來的外觀
-                self.floating_icon.config(bg="#FFFFFF", relief=tk.FLAT)
-                # 隱藏圖標
-                self.floating_icon.place_forget()
-        except Exception as e:
-            self.logger.error(f"圖標點擊處理時出錯: {e}", exc_info=True)
+    def get_column_index(self, column_name):
+        """獲取列名對應的索引"""
+        for i, col in enumerate(self.tree["columns"]):
+            if col == column_name:
+                return i
+        return -1
 
     def show_add_correction_dialog(self, text):
         """顯示添加校正對話框"""
@@ -5934,8 +5991,14 @@ class AlignmentGUI(BaseWindow):
 
                 # 更新現有的樹狀視圖
                 self.update_correction_display()
+
+            # 重置圖標狀態，使其能夠再次跟隨游標
+            self.reset_floating_icon_state()
+
         except Exception as e:
             self.logger.error(f"顯示添加校正對話框時出錯: {e}", exc_info=True)
+            # 確保即使發生錯誤也重置圖標狀態
+            self.reset_floating_icon_state()
 
     def on_mouse_leave_tree(self, event):
         """當鼠標離開樹狀視圖時的處理"""
