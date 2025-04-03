@@ -725,9 +725,9 @@ class AlignmentGUI(BaseWindow):
         """隱藏時間調整滑桿"""
         # 應用變更 (如果尚未應用)
         if self.slider_active and self.slider_target:
-            # 確保應用時間變更，但不重複調用 hide_time_slider 避免遞迴
+            # 避免遞歸調用
             if hasattr(self, '_hide_time_slider_in_progress') and self._hide_time_slider_in_progress:
-                pass  # 避免遞迴調用
+                pass  # 避免遞歸調用
             else:
                 self._hide_time_slider_in_progress = True
                 self.apply_time_change()
@@ -746,9 +746,10 @@ class AlignmentGUI(BaseWindow):
 
         # 解除綁定
         try:
-            self.master.unbind("<Button-1>")  # 移除特定的回調函數標識符
+            self.master.unbind("<Button-1>")
         except:
             pass
+
     def remember_mouse_position(self, event):
         """記錄當前滑鼠位置"""
         self.last_mouse_x = event.x_root - self.tree.winfo_rootx()
@@ -2067,7 +2068,12 @@ class AlignmentGUI(BaseWindow):
             index: 項目索引
             text: 當前文本
         """
+        # 添加遞歸保護
+        if hasattr(self, '_toggling_correction_icon') and self._toggling_correction_icon:
+            return
+
         try:
+            self._toggling_correction_icon = True
             self.logger.debug(f"切換校正圖標開始: 索引={index}, 項目ID={item}")
 
             # 保存操作前的狀態
@@ -2169,8 +2175,13 @@ class AlignmentGUI(BaseWindow):
                 }
             )
 
-        except Exception as e:
-            self.logger.error(f"切換校正圖標時出錯: {e}", exc_info=True)
+            # 更新 SRT 數據但禁止觸發校正狀態更新
+            self._skip_correction_on_update = True
+            self.update_srt_data_from_treeview()
+            self._skip_correction_on_update = False
+
+        finally:
+            self._toggling_correction_icon = False
 
     def get_text_position_in_values(self):
         """獲取文本在值列表中的位置"""
@@ -3187,7 +3198,13 @@ class AlignmentGUI(BaseWindow):
             self.correction_service.set_database_file(database_file)
 
         # 載入校正規則
-        return self.correction_service.load_corrections()
+        corrections = self.correction_service.load_corrections()
+
+        # 如果有項目，自動應用校正
+        if hasattr(self, 'tree') and self.tree.get_children():
+            self.update_correction_display()
+
+        return corrections
 
     # 修改 correct_text 方法，使用 CorrectionService
     def correct_text(self, text: str, corrections: Dict[str, str]) -> str:
@@ -3330,7 +3347,12 @@ class AlignmentGUI(BaseWindow):
     # 在修改 Treeview 數據的同時更新 SRT 數據
     def update_srt_data_from_treeview(self) -> None:
         """從 Treeview 更新 SRT 數據"""
+        # 添加遞歸保護
+        if hasattr(self, '_updating_srt_data') and self._updating_srt_data:
+            return
+
         try:
+            self._updating_srt_data = True
             # 創建新的 SRT 數據
             new_srt_data = pysrt.SubRipFile()
 
@@ -3409,19 +3431,16 @@ class AlignmentGUI(BaseWindow):
             self.srt_data = new_srt_data
             self.logger.info(f"從 Treeview 更新 SRT 數據，共 {len(new_srt_data)} 個項目")
 
-            # 更新音頻段落
+            # 更新音頻段落時，禁止觸發校正狀態更新
+            skip_correction_update = True
             if self.audio_imported and hasattr(self, 'audio_player') and self.srt_data:
-                self.logger.info("SRT 數據已更新，正在同步音頻段落...")
-                # 完全重建音頻段落
                 if hasattr(self.audio_player.segment_manager, 'rebuild_segments'):
                     self.audio_player.segment_manager.rebuild_segments(self.srt_data)
                 else:
-                    # 如果沒有重建方法，則使用標準方法
                     self.audio_player.segment_audio(self.srt_data)
 
-        except Exception as e:
-            self.logger.error(f"從 Treeview 更新 SRT 數據時出錯: {e}")
-            show_error("錯誤", f"更新 SRT 數據失敗: {str(e)}", self.master)
+        finally:
+            self._updating_srt_data = False
 
     def combine_sentences(self, event=None):
         """合併字幕"""
@@ -5978,8 +5997,6 @@ class AlignmentGUI(BaseWindow):
     def show_add_correction_dialog(self, text):
         """顯示添加校正對話框"""
         try:
-            # 使用獨立的對話框類
-            from gui.quick_correction_dialog import QuickCorrectionDialog
 
             dialog = QuickCorrectionDialog(self.master, text, self.current_project_path)
             result = dialog.run()
@@ -5989,7 +6006,7 @@ class AlignmentGUI(BaseWindow):
                 if hasattr(self, 'correction_service'):
                     self.correction_service.load_corrections()
 
-                # 更新現有的樹狀視圖
+                # 更新現有的樹狀視圖並應用校正
                 self.update_correction_display()
 
             # 重置圖標狀態，使其能夠再次跟隨游標
@@ -6007,12 +6024,20 @@ class AlignmentGUI(BaseWindow):
             self.floating_icon.place_forget()
 
     def update_correction_display(self):
-        """更新校正顯示"""
+        """更新校正顯示，並立即應用校正"""
+        # 添加遞歸保護
+        if hasattr(self, '_updating_correction_display') and self._updating_correction_display:
+            return
+
         try:
+            self._updating_correction_display = True
             # 獲取所有校正規則
             corrections = self.load_corrections()
             if not corrections:
                 return
+
+            # 需要更新 SRT 數據的標記
+            srt_data_updated = False
 
             # 遍歷所有項目
             for item in self.tree.get_children():
@@ -6030,11 +6055,12 @@ class AlignmentGUI(BaseWindow):
                     index_col = 0
 
                 item_index = str(values[index_col]) if len(values) > index_col else ""
+                current_text = values[text_index]
 
                 # 檢查文本是否需要校正
-                needs_correction, corrected_text, original_text, _ = self.correction_service.check_text_for_correction(values[text_index])
+                needs_correction, corrected_text, original_text, _ = self.correction_service.check_text_for_correction(current_text)
 
-                # 如果需要校正，更新校正狀態
+                # 如果需要校正，更新顯示和校正狀態
                 if needs_correction:
                     # 設置校正狀態
                     self.correction_service.set_correction_state(
@@ -6047,7 +6073,25 @@ class AlignmentGUI(BaseWindow):
                     # 更新 V/X 列
                     values[-1] = '✅'
 
+                    # 關鍵：更新文本為校正後的內容
+                    values[text_index] = corrected_text
+
                     # 更新項目
                     self.tree.item(item, values=tuple(values))
-        except Exception as e:
-            self.logger.error(f"更新校正顯示時出錯: {e}", exc_info=True)
+
+                    # 標記 SRT 數據需要更新
+                    srt_data_updated = True
+
+            # 如果有校正更新，更新 SRT 數據和音頻段落
+            if srt_data_updated:
+                self.update_srt_data_from_treeview()
+
+                # 如果有音頻，更新音頻段落
+                if self.audio_imported and hasattr(self, 'audio_player'):
+                    self.audio_player.segment_audio(self.srt_data)
+
+                # 更新狀態欄
+                self.update_status("已應用最新校正規則")
+
+        finally:
+            self._updating_correction_display = False
