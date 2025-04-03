@@ -154,7 +154,7 @@ class EnhancedStateManager:
             self.logger.debug(f"未找到事件 '{event_name}' 的回調或回調不可調用")
 
     def save_state(self, current_state: Dict[str, Any], operation_info: Dict[str, Any],
-              correction_state: Optional[Dict[str, Any]] = None) -> None:
+            correction_state: Optional[Dict[str, Any]] = None) -> None:
         """
         保存應用狀態
         :param current_state: 當前狀態
@@ -184,14 +184,8 @@ class EnhancedStateManager:
             # 檢查和保存特定操作的信息
             self.record_special_operation(copied_operation)
 
-            # 創建狀態記錄
-            state_record = StateRecord(
-                state=copied_state,
-                operation=copied_operation,
-                timestamp=time.time(),
-                correction_state=copied_correction,
-                display_mode=current_state.get('display_mode')
-            )
+            # 使用 create_state_record 創建狀態記錄
+            state_record = self.create_state_record(copied_state, copied_operation, copied_correction)
 
             # 添加新狀態
             self.states.append(state_record)
@@ -222,7 +216,6 @@ class EnhancedStateManager:
             self.trigger_callback('on_state_change')
         except Exception as e:
             self.logger.error(f"保存狀態時出錯: {e}")
-
     def record_special_operation(self, operation):
         """記錄特殊操作，以便進行特定的撤銷處理"""
         op_type = operation.get('type', '')
@@ -418,8 +411,12 @@ class EnhancedStateManager:
                 original_correction_state = self.gui.correction_service.serialize_state()
 
             # 更新索引
-            self.current_index += 1
-            next_state = self.states[self.current_index]
+            next_index = self.current_index + 1
+            if next_index >= len(self.states):
+                self.logger.error(f"索引超出範圍: {next_index} >= {len(self.states)}")
+                return False
+
+            next_state = self.states[next_index]
 
             # 獲取操作類型
             operation = next_state.operation
@@ -436,26 +433,35 @@ class EnhancedStateManager:
 
             try:
                 # 根據操作類型處理重做
+                success = False
                 if op_type == 'split_srt':
                     # 使用專門的方法處理拆分操作重做
-                    result = self._redo_split_operation(next_state, operation)
+                    success = self._redo_split_operation(next_state, operation)
                     renumbering_done = True  # 標記拆分操作中已完成編號
                 elif op_type == 'combine_sentences':
                     # 使用專門的方法處理合併操作重做
-                    result = self._redo_combine_operation(next_state, operation)
+                    success = self._redo_combine_operation(next_state, operation)
                     renumbering_done = True  # 標記合併操作中已完成編號
                 elif op_type == 'align_end_times':
                     # 使用專門的方法處理時間調整操作重做
-                    result = self._redo_time_adjustment(next_state, operation)
+                    success = self._redo_time_adjustment(next_state, operation)
+                    renumbering_done = True
                 else:
                     # 一般操作使用通用方法處理
-                    result = self.apply_state_safely(next_state.state, next_state.correction_state, operation)
+                    success = self.apply_state_safely(next_state.state, next_state.correction_state, operation)
+
+                if not success:
+                    self.logger.warning(f"重做操作 {op_type} 失敗")
+                    self._restore_backup_data(original_tree_data, original_correction_state)
+                    return False
             except Exception as e:
                 # 如果重做過程出錯，嘗試還原到原始狀態
                 self.logger.error(f"執行重做操作時出錯: {e}", exc_info=True)
                 self._restore_backup_data(original_tree_data, original_correction_state)
-                self.current_index -= 1  # 恢復索引
                 return False
+
+            # 只有在成功應用狀態後才更新當前索引
+            self.current_index = next_index
 
             # 只有在尚未完成編號的情況下才執行編號
             if not renumbering_done:
@@ -485,7 +491,6 @@ class EnhancedStateManager:
         except Exception as e:
             self.logger.error(f"執行重做操作時出錯: {e}", exc_info=True)
             return False
-
     def _redo_split_operation(self, state, operation):
         """重做拆分操作"""
         try:
@@ -506,9 +511,10 @@ class EnhancedStateManager:
 
             # 從狀態數據中還原完整樹視圖
             id_mapping = {}  # 用於追蹤 ID 映射
+            restored_items = []
 
             if 'tree_items' in state.state:
-                # 按位置排序項目
+                # 確保項目按位置順序處理
                 sorted_items = sorted(state.state['tree_items'], key=lambda x: x.get('position', 0))
 
                 for item_data in sorted_items:
@@ -519,37 +525,56 @@ class EnhancedStateManager:
                     original_id = item_data.get('original_id')
 
                     # 插入新項目
-                    new_id = self.gui.insert_item('', position, values=tuple(values))
+                    try:
+                        new_id = self.gui.insert_item('', position, values=tuple(values))
+                        restored_items.append(new_id)
 
-                    # 保存 ID 映射
-                    if original_id:
-                        id_mapping[original_id] = new_id
+                        # 保存 ID 映射
+                        if original_id:
+                            id_mapping[original_id] = new_id
 
-                    # 恢復標籤
-                    if tags:
-                        self.gui.tree.item(new_id, tags=tags)
+                        # 恢復標籤
+                        if tags:
+                            self.gui.tree.item(new_id, tags=tags)
 
-                    # 恢復使用 Word 文本標記
-                    if use_word:
-                        self.gui.use_word_text[new_id] = True
+                        # 恢復使用 Word 文本標記
+                        if use_word:
+                            self.gui.use_word_text[new_id] = True
+                    except Exception as e:
+                        self.logger.error(f"插入樹項目時出錯: {e}, values={values}")
+                        continue
 
             # 恢復 SRT 數據
             if 'srt_data' in state.state and state.state['srt_data']:
-                self.gui.restore_srt_data(state.state['srt_data'])
+                try:
+                    self.gui.restore_srt_data(state.state['srt_data'])
+                except Exception as e:
+                    self.logger.error(f"恢復 SRT 數據時出錯: {e}")
+                    # 繼續執行，不要在這裡返回 False
 
             # 恢復校正狀態 - 使用 ID 映射
             if state.correction_state and hasattr(self.gui, 'correction_service'):
-                self.gui.correction_service.deserialize_state(state.correction_state, id_mapping)
-                # 更新校正狀態顯示
-                self.gui.correction_service.update_display_status(self.gui.tree, self.gui.display_mode)
+                try:
+                    self.gui.correction_service.deserialize_state(state.correction_state, id_mapping)
+                    # 更新校正狀態顯示
+                    self.gui.correction_service.update_display_status(self.gui.tree, self.gui.display_mode)
+                except Exception as e:
+                    self.logger.error(f"恢復校正狀態時出錯: {e}")
+                    # 繼續執行，不要在這裡返回 False
 
-            # 選擇合適的項目
-            self._restore_view_position(None, id_mapping, operation)
+            # 選擇合適的項目 - 如果沒有恢復項目，不要嘗試選擇
+            if restored_items:
+                self._restore_view_position(None, id_mapping, operation)
 
             # 如果有音頻，確保更新音頻段落
             if self.gui.audio_imported and hasattr(self.gui, 'audio_player'):
-                self.gui.audio_player.segment_audio(self.gui.srt_data)
+                try:
+                    self.gui.audio_player.segment_audio(self.gui.srt_data)
+                except Exception as e:
+                    self.logger.error(f"更新音頻段落時出錯: {e}")
+                    # 繼續執行，不要在這裡返回 False
 
+            # 即使有輕微錯誤，也視為成功
             return True
 
         except Exception as e:

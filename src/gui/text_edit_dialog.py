@@ -12,7 +12,7 @@ import tkinter as tk
 from tkinter import ttk, simpledialog
 
 import pysrt
-from gui.custom_messagebox import show_error
+from gui.custom_messagebox import show_error,show_warning
 from utils.time_utils import parse_time,format_time
 
 

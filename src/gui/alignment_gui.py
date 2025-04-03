@@ -27,7 +27,7 @@ from services.file_manager import FileManager
 from services.word_processor import WordProcessor
 from utils.text_utils import simplify_to_traditional
 from utils.time_utils import parse_time
-
+from gui.quick_correction_dialog import QuickCorrectionDialog
 
 # 添加項目根目錄到路徑以確保絕對導入能正常工作
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -852,6 +852,12 @@ class AlignmentGUI(BaseWindow):
         self.audio_imported = False
         self.word_imported = False
 
+        # 添加校正圖標相關屬性
+        self.floating_icon_fixed = False
+        self.current_hovering_text = ""
+        self.current_hovering_item = None
+        self.current_hovering_column = ""
+
         # 為每種模式定義列配置
         self.columns = {
             self.DISPLAY_MODE_SRT: ['Index', 'Start', 'End', 'SRT Text', 'V/X'],
@@ -1631,7 +1637,7 @@ class AlignmentGUI(BaseWindow):
                         )
 
                         if dialog.result:
-                            self.process_word_edit_result(dialog.result, item, srt_index)
+                            self.process_word_text_edit(dialog.result, item, srt_index)
                     else:
                         # 其他列不進行編輯
                         return
@@ -1674,7 +1680,7 @@ class AlignmentGUI(BaseWindow):
                         )
 
                         if dialog.result:
-                            self.process_word_edit_result(dialog.result, item, srt_index)
+                            self.process_word_text_edit(dialog.result, item, srt_index)
 
                     else:
                         # 其他列不進行編輯
@@ -1757,6 +1763,21 @@ class AlignmentGUI(BaseWindow):
     def on_tree_click(self, event: tk.Event) -> None:
         """處理樹狀圖的點擊事件"""
         try:
+            # 如果圖標已固定且點擊的不是圖標，則取消固定
+            if hasattr(self, 'floating_icon_fixed') and self.floating_icon_fixed:
+                if hasattr(self, 'floating_icon'):
+                    # 檢查點擊是否在圖標上
+                    icon_x = self.floating_icon.winfo_x()
+                    icon_y = self.floating_icon.winfo_y()
+                    icon_width = self.floating_icon.winfo_width()
+                    icon_height = self.floating_icon.winfo_height()
+
+                    # 如果點擊不在圖標區域內，取消固定
+                    if (event.x < icon_x or event.x > icon_x + icon_width or
+                        event.y < icon_y or event.y > icon_y + icon_height):
+                        self.floating_icon.place_forget()
+                        self.floating_icon_fixed = False
+
             region = self.tree.identify("region", event.x, event.y)
             column = self.tree.identify_column(event.x)
             item = self.tree.identify_row(event.y)
@@ -2095,6 +2116,18 @@ class AlignmentGUI(BaseWindow):
 
         except Exception as e:
             self.logger.error(f"切換校正圖標時出錯: {e}", exc_info=True)
+
+    def get_text_position_in_values(self):
+        """獲取文本在值列表中的位置"""
+        if self.display_mode == self.DISPLAY_MODE_ALL:
+            return 4  # SRT Text 在 ALL 模式下的索引
+        elif self.display_mode == self.DISPLAY_MODE_AUDIO_SRT:
+            return 4  # SRT Text 在 AUDIO_SRT 模式下的索引
+        elif self.display_mode == self.DISPLAY_MODE_SRT_WORD:
+            return 3  # SRT Text 在 SRT_WORD 模式下的索引
+        else:  # SRT 模式
+            return 3  # SRT Text 在 SRT 模式下的索引
+        return None
 
     def check_text_correction(self, text: str, corrections: dict) -> tuple[bool, str, str, list]:
         """檢查文本是否需要校正，並返回校正資訊"""
@@ -2628,7 +2661,7 @@ class AlignmentGUI(BaseWindow):
             # 返回簡單的備選值，避免完全失敗
             return [str(new_srt_index), new_start, new_end, text, ""]
 
-    def process_word_edit_result(self, result, item, srt_index):
+    def process_word_text_edit(self, result, item, srt_index):
         """
         處理 Word 文本編輯結果
         :param result: 編輯結果
@@ -2647,10 +2680,10 @@ class AlignmentGUI(BaseWindow):
 
                 # 調用處理 Word 文本斷句的方法
                 word_index = -1  # 設置適當的 Word 文檔索引
-                if hasattr(self, 'handle_word_text_split'):
-                    self.handle_word_text_split(result, word_index, srt_index, current_values, item)
+                if hasattr(self, 'process_word_text_split'):
+                    self.process_word_text_split(result, word_index, srt_index, current_values, item)
                 else:
-                    self.logger.warning("未找到 handle_word_text_split 方法，無法處理 Word 文本斷句")
+                    self.logger.warning("未找到 process_word_text_split 方法，無法處理 Word 文本斷句")
             else:
                 # 單一文本編輯結果
                 text = result
@@ -2707,7 +2740,7 @@ class AlignmentGUI(BaseWindow):
             self.logger.error(f"處理 Word 編輯結果時出錯: {e}", exc_info=True)
             show_error("錯誤", f"更新文本失敗: {str(e)}", self.master)
 
-    def handle_word_text_split(self, result, word_index, srt_index, original_values, original_item):
+    def process_word_text_split(self, result, word_index, srt_index, original_values, original_item):
         """處理Word文本的斷句"""
         try:
             # 保存操作前的狀態供撤銷使用
@@ -2862,6 +2895,7 @@ class AlignmentGUI(BaseWindow):
 
     def bind_all_events(self) -> None:
         """綁定所有事件"""
+        # 原有的事件綁定
         # 綁定視窗關閉事件
         self.master.protocol("WM_DELETE_WINDOW", self.on_closing)
 
@@ -2873,9 +2907,15 @@ class AlignmentGUI(BaseWindow):
 
         # 綁定 Treeview 特定事件
         if hasattr(self, 'tree'):
-            self.tree.bind('<Button-1>', self.on_tree_click)  # 使用新的統一點擊處理方法
+            self.tree.bind('<Button-1>', self.on_tree_click)
             self.tree.bind('<Double-1>', self._handle_double_click)
             self.tree.bind('<KeyRelease>', self.on_treeview_change)
+
+            # 添加鼠標移動事件以跟蹤游標位置
+            self.tree.bind('<Motion>', self.show_floating_correction_icon)
+
+            # 添加鼠標離開事件
+            self.tree.bind('<Leave>', self.on_mouse_leave_tree)
 
     def initialize_audio_player(self) -> None:
         """初始化音頻播放器"""
@@ -3443,7 +3483,7 @@ class AlignmentGUI(BaseWindow):
             sorted_items = sorted(selected_items, key=self.tree.index)
 
             # 獲取列索引配置
-            column_indices = self._get_column_indices()
+            column_indices = self.get_column_indices_for_current_mode()
 
             # 第一個項目作為基礎
             base_item = sorted_items[0]
@@ -3540,8 +3580,11 @@ class AlignmentGUI(BaseWindow):
             show_error("錯誤", f"合併操作失敗: {str(e)}", self.master)
             return False, None, None
 
-    def _get_column_indices(self) -> dict:
-        """獲取當前顯示模式的列索引配置"""
+    def get_column_indices_for_current_mode(self) -> Dict[str, int]:
+        """
+        獲取當前顯示模式下各種列的索引位置
+        :return: 列名稱到索引的映射
+        """
         if self.display_mode == self.DISPLAY_MODE_SRT:
             return {
                 'index': 0,
@@ -5791,3 +5834,148 @@ class AlignmentGUI(BaseWindow):
         except Exception as e:
             self.logger.error(f"更新SRT數據時出錯: {e}", exc_info=True)
             raise
+
+    def show_floating_correction_icon(self, event):
+        """顯示跟隨游標的校正圖標"""
+        try:
+            # 獲取游標所在位置的區域和欄位
+            region = self.tree.identify("region", event.x, event.y)
+            column = self.tree.identify_column(event.x)
+            item = self.tree.identify_row(event.y)
+
+            # 只有在文本欄位上顯示圖標
+            is_text_column = False
+            if region == "cell" and column and item:
+                column_idx = int(column[1:]) - 1
+                if column_idx >= 0 and column_idx < len(self.tree["columns"]):
+                    column_name = self.tree["columns"][column_idx]
+                    if column_name in ["SRT Text", "Word Text"]:
+                        is_text_column = True
+
+            # 如果不在文本欄位上，隱藏圖標
+            if not is_text_column:
+                if hasattr(self, 'floating_icon'):
+                    self.floating_icon.place_forget()
+                return
+
+            # 獲取文本內容
+            values = self.tree.item(item, "values")
+            if not values or len(values) <= column_idx:
+                return
+
+            selected_text = values[column_idx]
+            if not selected_text:
+                return
+
+            # 保存相關信息
+            self.current_hovering_text = selected_text
+            self.current_hovering_item = item
+            self.current_hovering_column = column_name
+
+            # 創建或更新浮動圖標
+            if not hasattr(self, 'floating_icon'):
+                # 創建一個簡單的圖標
+                self.floating_icon = tk.Label(
+                    self.tree,
+                    text="✎",  # 簡單的鉛筆圖標
+                    bg="#FFFFFF",  # 白色背景
+                    fg="#0078D7",  # 藍色前景
+                    font=("Arial", 12),
+                    cursor="hand2"
+                )
+                self.floating_icon.bind("<Button-1>", self.on_icon_click)
+
+            # 更新圖標位置跟隨游標
+            self.floating_icon.place(x=event.x + 10, y=event.y - 10)
+
+        except Exception as e:
+            self.logger.error(f"顯示浮動校正圖標時出錯: {e}", exc_info=True)
+
+    def on_icon_click(self, event):
+        """當圖標被點擊時的處理"""
+        try:
+            # 將圖標固定在當前位置
+            if hasattr(self, 'floating_icon_fixed') and self.floating_icon_fixed:
+                # 如果已經固定，則再次點擊啟動校正對話框
+                self.show_add_correction_dialog(self.current_hovering_text)
+                # 隱藏圖標
+                self.floating_icon.place_forget()
+                self.floating_icon_fixed = False
+            else:
+                # 固定圖標位置
+                self.floating_icon_fixed = True
+                # 改變圖標外觀以指示它已被固定
+                self.floating_icon.config(bg="#E0E0E0")  # 變更背景色
+        except Exception as e:
+            self.logger.error(f"圖標點擊處理時出錯: {e}", exc_info=True)
+
+    def show_add_correction_dialog(self, text):
+        """顯示添加校正對話框"""
+        try:
+            # 使用獨立的對話框類
+            from gui.quick_correction_dialog import QuickCorrectionDialog
+
+            dialog = QuickCorrectionDialog(self.master, text, self.current_project_path)
+            result = dialog.run()
+
+            if result:
+                # 重新載入校正資料庫
+                if hasattr(self, 'correction_service'):
+                    self.correction_service.load_corrections()
+
+                # 更新現有的樹狀視圖
+                self.update_correction_display()
+        except Exception as e:
+            self.logger.error(f"顯示添加校正對話框時出錯: {e}", exc_info=True)
+
+    def on_mouse_leave_tree(self, event):
+        """當鼠標離開樹狀視圖時的處理"""
+        # 如果圖標未固定，則隱藏
+        if hasattr(self, 'floating_icon') and not (hasattr(self, 'floating_icon_fixed') and self.floating_icon_fixed):
+            self.floating_icon.place_forget()
+
+    def update_correction_display(self):
+        """更新校正顯示"""
+        try:
+            # 獲取所有校正規則
+            corrections = self.load_corrections()
+            if not corrections:
+                return
+
+            # 遍歷所有項目
+            for item in self.tree.get_children():
+                values = list(self.tree.item(item, "values"))
+
+                # 獲取文本列索引
+                text_index = self.get_text_position_in_values()
+                if text_index is None or text_index >= len(values):
+                    continue
+
+                # 獲取索引列索引
+                if self.display_mode in [self.DISPLAY_MODE_ALL, self.DISPLAY_MODE_AUDIO_SRT]:
+                    index_col = 1
+                else:  # SRT 或 SRT_WORD 模式
+                    index_col = 0
+
+                item_index = str(values[index_col]) if len(values) > index_col else ""
+
+                # 檢查文本是否需要校正
+                needs_correction, corrected_text, original_text, _ = self.correction_service.check_text_for_correction(values[text_index])
+
+                # 如果需要校正，更新校正狀態
+                if needs_correction:
+                    # 設置校正狀態
+                    self.correction_service.set_correction_state(
+                        item_index,
+                        original_text,
+                        corrected_text,
+                        'correct'  # 默認為已校正狀態
+                    )
+
+                    # 更新 V/X 列
+                    values[-1] = '✅'
+
+                    # 更新項目
+                    self.tree.item(item, values=tuple(values))
+        except Exception as e:
+            self.logger.error(f"更新校正顯示時出錯: {e}", exc_info=True)
