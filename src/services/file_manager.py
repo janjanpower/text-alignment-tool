@@ -165,36 +165,8 @@ class FileManager:
         :param event: 事件對象（可選）
         :return: 是否成功儲存
         """
-        if not self.srt_file_path:
-            return self.save_srt_as()
-
-        try:
-            # 獲取當前SRT數據
-            srt_data = None
-            if self.callbacks['get_srt_data']:
-                srt_data = self.callbacks['get_srt_data']()
-
-            if not srt_data:
-                if 'show_error' in self.callbacks and self.callbacks['show_error']:
-                    self.callbacks['show_error']("錯誤", "無法獲取SRT數據")
-                else:
-                    show_error("錯誤", "無法獲取SRT數據", self.parent)
-                return False
-
-            # 保存文件
-            srt_data.save(self.srt_file_path, encoding='utf-8')
-
-            if self.callbacks['on_status_updated']:
-                self.callbacks['on_status_updated'](f"已儲存文件：{os.path.basename(self.srt_file_path)}")
-
-            return True
-        except Exception as e:
-            self.logger.error(f"儲存 SRT 檔案時出錯: {e}", exc_info=True)
-            if 'show_error' in self.callbacks and self.callbacks['show_error']:
-                self.callbacks['show_error']("錯誤", f"儲存檔案失敗: {str(e)}")
-            else:
-                show_error("錯誤", f"儲存檔案失敗: {str(e)}", self.parent)
-            return False
+        # 直接調用 export_srt 方法，參數為 False 表示不是從工具列呼叫
+        return self.export_srt(from_toolbar=False)
 
     def save_srt_as(self) -> bool:
         """
@@ -246,11 +218,13 @@ class FileManager:
 
     def export_srt(self, from_toolbar: bool = False) -> bool:
         """
-        匯出 SRT 檔案
-        :param from_toolbar: 是否從工具列呼叫
+        匯出 SRT 檔案 - 直接覆蓋原始檔案
+        :param from_toolbar: 不再使用此參數，保留僅為兼容性
         :return: 是否成功匯出
         """
         try:
+            self.logger.info("開始匯出 SRT 檔案")
+
             # 檢查是否有數據可匯出
             if self.callbacks['get_tree_data'] and not self.callbacks['get_tree_data']():
                 if 'show_warning' in self.callbacks and self.callbacks['show_warning']:
@@ -259,26 +233,16 @@ class FileManager:
                     show_warning("警告", "沒有可匯出的資料！", self.parent)
                 return False
 
-            if from_toolbar:
-                # 從工具列呼叫時，使用另存新檔對話框
-                file_path = filedialog.asksaveasfilename(
-                    defaultextension=".srt",
-                    filetypes=[("SubRip 字幕檔", "*.srt")],
-                    initialdir=os.path.dirname(self.srt_file_path) if self.srt_file_path else None,
-                    title="匯出 SRT 檔案",
-                    parent=self.parent
-                )
-                if not file_path:
-                    return False
-            else:
-                # 直接更新原始檔案
-                if not self.srt_file_path:
-                    if 'show_warning' in self.callbacks and self.callbacks['show_warning']:
-                        self.callbacks['show_warning']("警告", "找不到原始檔案路徑！")
-                    else:
-                        show_warning("警告", "找不到原始檔案路徑！", self.parent)
-                    return False
-                file_path = self.srt_file_path
+            # 檢查原始文件路徑
+            if not self.srt_file_path:
+                if 'show_warning' in self.callbacks and self.callbacks['show_warning']:
+                    self.callbacks['show_warning']("警告", "找不到原始檔案路徑！")
+                else:
+                    show_warning("警告", "找不到原始檔案路徑！", self.parent)
+                return False
+
+            file_path = self.srt_file_path
+            self.logger.info(f"將覆蓋原始檔案: {file_path}")
 
             # 獲取當前SRT數據
             srt_data = None
@@ -294,18 +258,13 @@ class FileManager:
 
             # 保存文件
             srt_data.save(file_path, encoding='utf-8')
+            self.logger.info(f"已成功覆蓋 SRT 檔案，項目數: {len(srt_data)}")
 
             # 顯示成功訊息
-            if from_toolbar:
-                if 'show_info' in self.callbacks and self.callbacks['show_info']:
-                    self.callbacks['show_info']("成功", f"SRT 檔案已匯出至：\n{file_path}")
-                else:
-                    show_info("成功", f"SRT 檔案已匯出至：\n{file_path}", self.parent)
+            if 'show_info' in self.callbacks and self.callbacks['show_info']:
+                self.callbacks['show_info']("成功", f"SRT 檔案已更新：\n{file_path}")
             else:
-                if 'show_info' in self.callbacks and self.callbacks['show_info']:
-                    self.callbacks['show_info']("成功", "SRT 檔案已更新")
-                else:
-                    show_info("成功", "SRT 檔案已更新", self.parent)
+                show_info("成功", f"SRT 檔案已更新：\n{file_path}", self.parent)
 
             return True
         except Exception as e:

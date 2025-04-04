@@ -97,18 +97,50 @@ class CorrectionService:
         if os.path.exists(database_file):
             self.load_corrections()
 
-    def add_correction(self, error: str, correction: str) -> bool:
+    def add_correction(self, error: str, correction: str, apply_to_existing: bool = False) -> int:
         """
-        添加校正對照
-        :param error: 錯誤字
-        :param correction: 校正字
-        :return: 是否成功添加
+        添加校正對照，並可選擇應用到現有文本
+
+        Args:
+            error: 錯誤字
+            correction: 校正字
+            apply_to_existing: 是否應用到現有文本
+
+        Returns:
+            int: 如果 apply_to_existing 為 True，返回更新的項目數量；否則返回 1 表示成功添加，0 表示失敗
         """
         if not error or not correction:
-            return False
+            return 0
 
+        # 添加校正規則
         self.corrections[error] = correction
-        return True
+
+        # 如果不需要應用到現有文本，直接返回
+        if not apply_to_existing:
+            return 1
+
+        # 計數更新的項目
+        updated_count = 0
+
+        # 檢查並更新所有現有的文本
+        for index in list(self.original_texts.keys()):
+            original_text = self.original_texts.get(index, "")
+
+            if error in original_text:
+                # 應用新的校正規則
+                corrected_text = original_text.replace(error, correction)
+
+                # 只有當校正結果不同時才更新
+                if corrected_text != original_text:
+                    # 更新校正文本
+                    self.corrected_texts[index] = corrected_text
+
+                    # 確保狀態設為 'correct'
+                    self.correction_states[index] = 'correct'
+
+                    updated_count += 1
+
+        return updated_count
 
     def remove_correction(self, error: str) -> bool:
         """
@@ -120,6 +152,33 @@ class CorrectionService:
             del self.corrections[error]
             return True
         return False
+
+    def apply_new_correction(self, error: str, correction: str) -> None:
+        """
+        應用新添加的校正規則並更新界面
+
+        Args:
+            error: 錯誤字
+            correction: 校正字
+        """
+        if not hasattr(self, 'correction_service'):
+            return
+
+        # 應用新的校正規則，並應用到現有文本
+        updated_count = self.correction_service.add_correction(error, correction, apply_to_existing=True)
+
+        # 更新界面顯示
+        self.update_correction_display()
+
+        # 更新 SRT 數據
+        self.update_srt_data_from_treeview()
+
+        # 如果有音頻，更新音頻段落
+        if self.audio_imported and hasattr(self, 'audio_player'):
+            self.audio_player.segment_audio(self.srt_data)
+
+        # 更新狀態欄
+        self.update_status(f"已添加新校正規則並更新 {updated_count} 個項目")
 
     def update_display_status(self, tree_view, display_mode):
         """
@@ -163,7 +222,7 @@ class CorrectionService:
         except Exception as e:
             self.logger.error(f"更新校正狀態顯示時出錯: {e}")
 
-    def correct_text(self, text: str, corrections: Optional[Dict[str, str]] = None) -> Tuple[bool, str, str]:
+    def correct_text(self, text: str, corrections: Optional[Dict[str, str]] = None) -> Tuple[bool, str, str, List]:
         """
         根據校正對照表修正文本中的錯誤字
 
@@ -172,7 +231,7 @@ class CorrectionService:
             corrections: 校正對照表，如果為 None 則使用內部的校正表
 
         Returns:
-            tuple: (是否需要校正, 校正後的文本, 原始文本)
+            tuple: (是否需要校正, 校正後的文本, 原始文本, 實際應用的校正列表)
         """
         # 如果未提供校正表，使用內部儲存的
         if corrections is None:
@@ -180,13 +239,15 @@ class CorrectionService:
 
         corrected_text = text
         needs_correction = False
+        actual_corrections = []  # 添加這一行，記錄實際應用的校正
 
         for error_char, correction_char in corrections.items():
             if error_char in corrected_text:
                 corrected_text = corrected_text.replace(error_char, correction_char)
                 needs_correction = True
+                actual_corrections.append((error_char, correction_char))  # 記錄應用的校正
 
-        return needs_correction, corrected_text, text
+        return needs_correction, corrected_text, text, actual_corrections  # 返回4個值
 
     def set_correction_state(self, index: str, original_text: str, corrected_text: str, state: str = 'correct') -> None:
         """
@@ -392,29 +453,20 @@ class CorrectionService:
         self.original_texts.clear()
         self.corrected_texts.clear()
 
-    def check_text_for_correction(self, text):  # 確保方法接受 text 參數
+    def check_text_for_correction(self, text):
         """檢查文本是否需要校正，並返回校正資訊"""
-
-        # 添加遞歸保護
-        if hasattr(self, '_checking_text') and self._checking_text:
-            return False, text, text, []
-
         try:
+            # 添加遞歸保護
+            if hasattr(self, '_checking_text') and self._checking_text:
+                return False, text, text, []
+
             self._checking_text = True
+
             if not text:  # 確保 text 不為空
                 return False, "", "", []
 
             # 確保使用字符串類型
             text = str(text)
-
-            # 檢查是否有載入校正數據
-            if not hasattr(self, 'corrections') or not self.corrections:
-                self.logger.debug("無校正數據，重新載入")
-                self.load_corrections()
-
-            if not self.corrections:
-                self.logger.debug("沒有校正規則可用")
-                return False, text, text, []
 
             corrected_text = text
             actual_corrections = []
@@ -424,19 +476,13 @@ class CorrectionService:
                 if error in text:
                     corrected_text = corrected_text.replace(error, correction)
                     actual_corrections.append((error, correction))
-                    self.logger.debug(f"找到需要校正的文本: '{error}' -> '{correction}'")
 
             needs_correction = len(actual_corrections) > 0 and corrected_text != text
 
-            # 記錄結果
-            if needs_correction:
-                self.logger.debug(f"文本需要校正: 原文='{text}', 校正後='{corrected_text}', 替換數={len(actual_corrections)}")
-            else:
-                self.logger.debug(f"文本無需校正: '{text}'")
-
-            return needs_correction, corrected_text, text, actual_corrections
+            return needs_correction, corrected_text, text, actual_corrections  # 返回4個值
         finally:
-            self._checking_text = False
+            if hasattr(self, '_checking_text'):
+                self._checking_text = False
 
     def update_correction_states_after_split(self, original_index: str, new_texts: List[str]) -> None:
         """
