@@ -392,7 +392,7 @@ class CorrectionService:
         self.original_texts.clear()
         self.corrected_texts.clear()
 
-    def check_text_for_correction(self, text):
+    def check_text_for_correction(self, text):  # 確保方法接受 text 參數
         """檢查文本是否需要校正，並返回校正資訊"""
 
         # 添加遞歸保護
@@ -400,41 +400,41 @@ class CorrectionService:
             return False, text, text, []
 
         try:
-                self._checking_text = True
-                if not text:
-                    return False, "", "", []
+            self._checking_text = True
+            if not text:  # 確保 text 不為空
+                return False, "", "", []
 
-                # 確保使用字符串類型
-                text = str(text)
+            # 確保使用字符串類型
+            text = str(text)
 
-                # 檢查是否有載入校正數據
-                if not hasattr(self, 'corrections') or not self.corrections:
-                    self.logger.debug("無校正數據，重新載入")
-                    self.load_corrections()
+            # 檢查是否有載入校正數據
+            if not hasattr(self, 'corrections') or not self.corrections:
+                self.logger.debug("無校正數據，重新載入")
+                self.load_corrections()
 
-                if not self.corrections:
-                    self.logger.debug("沒有校正規則可用")
-                    return False, text, text, []
+            if not self.corrections:
+                self.logger.debug("沒有校正規則可用")
+                return False, text, text, []
 
-                corrected_text = text
-                actual_corrections = []
+            corrected_text = text
+            actual_corrections = []
 
-                # 記錄進行了哪些替換
-                for error, correction in self.corrections.items():
-                    if error in text:
-                        corrected_text = corrected_text.replace(error, correction)
-                        actual_corrections.append((error, correction))
-                        self.logger.debug(f"找到需要校正的文本: '{error}' -> '{correction}'")
+            # 記錄進行了哪些替換
+            for error, correction in self.corrections.items():
+                if error in text:
+                    corrected_text = corrected_text.replace(error, correction)
+                    actual_corrections.append((error, correction))
+                    self.logger.debug(f"找到需要校正的文本: '{error}' -> '{correction}'")
 
-                needs_correction = len(actual_corrections) > 0 and corrected_text != text
+            needs_correction = len(actual_corrections) > 0 and corrected_text != text
 
-                # 記錄結果
-                if needs_correction:
-                    self.logger.debug(f"文本需要校正: 原文='{text}', 校正後='{corrected_text}', 替換數={len(actual_corrections)}")
-                else:
-                    self.logger.debug(f"文本無需校正: '{text}'")
+            # 記錄結果
+            if needs_correction:
+                self.logger.debug(f"文本需要校正: 原文='{text}', 校正後='{corrected_text}', 替換數={len(actual_corrections)}")
+            else:
+                self.logger.debug(f"文本無需校正: '{text}'")
 
-                return needs_correction, corrected_text, text, actual_corrections
+            return needs_correction, corrected_text, text, actual_corrections
         finally:
             self._checking_text = False
 

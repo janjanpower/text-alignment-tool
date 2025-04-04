@@ -254,6 +254,9 @@ class AlignmentGUI(BaseWindow):
             self.audio_file_path = file_path
             self.audio_imported = True
 
+            # 添加明確的日誌
+            self.logger.info(f"音頻已成功載入，路徑: {file_path}, 匯入狀態: {self.audio_imported}")
+
             # 確保音頻播放器已初始化
             if not hasattr(self, 'audio_player'):
                 self.initialize_audio_player()
@@ -264,6 +267,7 @@ class AlignmentGUI(BaseWindow):
                 audio_loaded = self.audio_player.load_audio(file_path)
                 if not audio_loaded:
                     self.logger.error(f"音頻加載失敗: {file_path}")
+                    self.audio_imported = False  # 重置狀態
                     show_error("錯誤", "音頻加載失敗，請檢查文件格式", self.master)
                     return
 
@@ -287,8 +291,14 @@ class AlignmentGUI(BaseWindow):
             # 確保顯示模式的一致性
             self.check_display_mode_consistency()
 
+            # 同步 FileManager 的狀態
+            if hasattr(self, 'file_manager'):
+                self.file_manager.audio_imported = True
+                self.file_manager.audio_file_path = file_path
+
         except Exception as e:
             self.logger.error(f"處理音頻載入回調時出錯: {e}", exc_info=True)
+            self.audio_imported = False  # 確保在出錯時重置狀態
             show_error("錯誤", f"處理音頻載入失敗: {str(e)}", self.master)
 
     def _on_word_loaded(self, file_path) -> None:
@@ -1522,16 +1532,19 @@ class AlignmentGUI(BaseWindow):
         self.logger.debug("Treeview 創建完成")
 
     def setup_treeview_columns(self) -> None:
-        """設置 Treeview 列配置 - 簡化版"""
+        """設置 Treeview 列配置"""
         try:
             # 獲取當前模式的列配置
             columns = self.columns.get(self.display_mode, [])
 
+            # 添加診斷日誌
+            self.logger.debug(f"設置樹狀視圖列，顯示模式: {self.display_mode}, 列: {columns}")
+
             # 更新 Treeview 列
             self.tree["columns"] = columns
-            self.tree['show'] = 'headings'
+            self.tree['show'] = 'headings'  # 確保顯示所有列標題
 
-            # 配置每一列 - 使用預設配置，不計算列寬
+            # 配置每一列
             for col in columns:
                 config = self.column_config.COLUMNS.get(col, {
                     'width': 100,
@@ -1539,17 +1552,18 @@ class AlignmentGUI(BaseWindow):
                     'anchor': 'w' if col in ['SRT Text', 'Word Text'] else 'center'
                 })
 
-                self.tree_manager.set_column_config(col,
-                    width=config['width'],
-                    stretch=config['stretch'],
-                    anchor=config['anchor'])
-                self.tree_manager.set_heading(col, text=col, anchor='center')
+                # 明確設置每列的寬度、拉伸和錨點
+                self.tree.column(col, width=config['width'], stretch=config['stretch'], anchor=config['anchor'])
+                self.tree.heading(col, text=col, anchor='center')
 
-            # 調試輸出
-            self.logger.debug(f"Treeview 列配置完成，顯示模式: {self.display_mode}, 列: {columns}")
+                # 對於 SRT Text 列，確保它可見並有適當的寬度
+                if col == 'SRT Text':
+                    self.tree.column(col, width=300, stretch=True, anchor='w')
+                    self.logger.debug(f"設置 SRT Text 列: width=300, stretch=True")
 
-            self.tree.tag_configure('mismatch', background='#FFDDDD')  # 淺紅色背景標記不匹配項目
-            self.tree.tag_configure('use_word_text', background='#00BFFF')  # 淺藍色背景標記使用 Word 文本的項目
+            # 確保標籤設置
+            self.tree.tag_configure('mismatch', background='#FFDDDD')
+            self.tree.tag_configure('use_word_text', background='#00BFFF')
 
         except Exception as e:
             self.logger.error(f"設置樹狀視圖列時出錯: {str(e)}")
@@ -2028,7 +2042,17 @@ class AlignmentGUI(BaseWindow):
                 return
 
             # 處理音頻播放列的點擊
-            elif column_name == 'V.O' and self.audio_imported:
+            elif column_name == 'V.O':
+                # 先檢查音頻是否已匯入
+                if not self.audio_imported:
+                    show_warning("警告", "未匯入音頻，請先匯入音頻檔案", self.master)
+                    return
+
+                # 檢查音頻播放器是否已初始化
+                if not hasattr(self, 'audio_player') or not self.audio_player.audio:
+                    show_warning("警告", "音頻播放器未初始化或音頻未載入", self.master)
+                    return
+
                 try:
                     if self.display_mode == self.DISPLAY_MODE_ALL:
                         index = int(values[1])
@@ -2388,9 +2412,21 @@ class AlignmentGUI(BaseWindow):
             self.tree.bind('<Leave>', self.on_mouse_leave_tree)
 
     def initialize_audio_player(self) -> None:
-        """初始化音頻播放器"""
-        self.audio_player = AudioPlayer(self.main_frame)
-        self.master.bind("<<AudioLoaded>>", self.handle_audio_loaded)
+        """初始化音頻服務和播放器"""
+        from audio.audio_service import AudioService
+
+        self.audio_service = AudioService(self)  # 傳入 self 作為 gui_reference
+        self.audio_player = self.audio_service.initialize_player(self.main_frame)
+
+        # 設置音頻載入回調
+        def on_audio_loaded_callback(file_path):
+            self.audio_file_path = file_path
+            self.audio_imported = True
+            self.update_display_mode()
+            self.update_file_info()
+            # 其他需要的處理...
+
+        self.on_audio_loaded_callback = on_audio_loaded_callback
 
     def on_treeview_change(self, event: tk.Event) -> None:
         """
@@ -2428,16 +2464,14 @@ class AlignmentGUI(BaseWindow):
         try:
             self.logger.info(f"===== 嘗試播放索引 {index} 的音頻段落 =====")
 
-            # 檢查音頻是否已匯入
-            if not self.audio_imported:
-                show_warning("警告", "未匯入音頻，請先匯入音頻檔案", self.master)
-                return
-
             # 檢查音頻播放器是否已初始化
             if not hasattr(self, 'audio_player'):
                 self.logger.error("音頻播放器未初始化")
-                show_error("錯誤", "音頻播放器未初始化", self.master)
-                return
+                # 嘗試初始化播放器
+                self.initialize_audio_player()
+                if not hasattr(self, 'audio_player'):
+                    show_error("錯誤", "無法初始化音頻播放器", self.master)
+                    return
 
             # 檢查播放器的音頻是否已載入
             if not hasattr(self.audio_player, 'audio') or self.audio_player.audio is None:
@@ -2446,22 +2480,21 @@ class AlignmentGUI(BaseWindow):
                 # 嘗試重新載入音頻
                 if hasattr(self, 'audio_file_path') and self.audio_file_path:
                     self.logger.info(f"嘗試重新載入音頻文件: {self.audio_file_path}")
-                    self.audio_player.load_audio(self.audio_file_path)
+                    loaded = self.audio_player.load_audio(self.audio_file_path)
 
-                    # 再次檢查
-                    if not hasattr(self.audio_player, 'audio') or self.audio_player.audio is None:
-                        show_warning("警告", "無法播放音訊：音訊未載入或為空", self.master)
+                    if not loaded or not self.audio_player.audio:
+                        show_warning("警告", "無法載入音頻，請重新匯入音頻檔案", self.master)
                         return
                 else:
                     show_warning("警告", "無法播放音訊：音訊未載入或為空", self.master)
                     return
 
-            # 嘗試播放指定段落
             success = self.audio_player.play_segment(index)
 
             # 如果播放失敗，記錄錯誤
             if not success:
                 self.logger.error(f"播放索引 {index} 的音頻段落失敗")
+                show_warning("警告", f"播放索引 {index} 的音頻段落失敗", self.master)
 
         except Exception as e:
             self.logger.error(f"播放音頻段落時出錯: {e}", exc_info=True)
@@ -2607,122 +2640,12 @@ class AlignmentGUI(BaseWindow):
         return corrected_text if needs_correction else text
 
     def prepare_and_insert_subtitle_item(self, sub, corrections=None, tags=None, use_word=False):
-        """
-        準備並插入字幕項目到樹狀視圖
-
-        Args:
-            sub: 字幕項目
-            corrections: 校正對照表，如果為 None 則自動載入
-            tags: 要應用的標籤
-            use_word: 是否使用 Word 文本
-
-        Returns:
-            新插入項目的 ID
-        """
-        try:
-            # 如果未提供校正表，自動載入
-            if corrections is None:
-                corrections = self.load_corrections()
-
-            # 轉換文本為繁體中文
-            text = simplify_to_traditional(sub.text.strip())
-
-            # 檢查校正需求
-            needs_correction, corrected_text, original_text, _ = self.correction_service.check_text_for_correction(text)
-
-            # 獲取 Word 文本和匹配狀態（僅在相關模式下）
-            word_text = ""
-            match_status = ""
-
-            if self.display_mode in [self.DISPLAY_MODE_SRT_WORD, self.DISPLAY_MODE_ALL] and self.word_imported:
-                # 從 word_comparison_results 獲取對應結果
-                if hasattr(self, 'word_comparison_results') and sub.index in self.word_comparison_results:
-                    result = self.word_comparison_results[sub.index]
-                    word_text = result.get('word_text', '')
-                    match_status = result.get('difference', '')
-
-            # 根據顯示模式準備值
-            if self.display_mode == self.DISPLAY_MODE_ALL:
-                values = [
-                    self.PLAY_ICON,
-                    str(sub.index),
-                    str(sub.start),
-                    str(sub.end),
-                    corrected_text if needs_correction else text,
-                    word_text,
-                    match_status,
-                    '✅' if needs_correction else ''
-                ]
-            elif self.display_mode == self.DISPLAY_MODE_SRT_WORD:
-                values = [
-                    str(sub.index),
-                    str(sub.start),
-                    str(sub.end),
-                    corrected_text if needs_correction else text,
-                    word_text,
-                    match_status,
-                    '✅' if needs_correction else ''
-                ]
-            elif self.display_mode == self.DISPLAY_MODE_AUDIO_SRT:
-                values = [
-                    self.PLAY_ICON,
-                    str(sub.index),
-                    str(sub.start),
-                    str(sub.end),
-                    corrected_text if needs_correction else text,
-                    '✅' if needs_correction else ''
-                ]
-            else:  # SRT 模式
-                values = [
-                    str(sub.index),
-                    str(sub.start),
-                    str(sub.end),
-                    corrected_text if needs_correction else text,
-                    '✅' if needs_correction else ''
-                ]
-
-            # 插入項目
-            item_id = self.insert_item('', 'end', values=tuple(values))
-
-            # 應用標籤
-            if tags:
-                self.tree.item(item_id, tags=tags)
-
-            # 設置使用 Word 文本標記
-            if use_word:
-                self.use_word_text[item_id] = True
-
-                # 確保標籤中有 use_word_text
-                current_tags = list(self.tree.item(item_id, "tags") or ())
-                if "use_word_text" not in current_tags:
-                    current_tags.append("use_word_text")
-                    self.tree.item(item_id, tags=tuple(current_tags))
-
-            # 如果需要校正，設置校正狀態
-            if needs_correction:
-                self.correction_service.set_correction_state(
-                    str(sub.index),
-                    original_text,
-                    corrected_text,
-                    'correct'  # 默認為已校正狀態
-                )
-
-            return item_id
-
-        except Exception as e:
-            self.logger.error(f"準備並插入字幕項目時出錯: {e}", exc_info=True)
-            return None
+        """準備並插入字幕項目到樹狀視圖"""
+        return self.split_service.prepare_and_insert_subtitle_item(sub, corrections, tags, use_word)
 
     def process_srt_entries(self, srt_data, corrections):
         """處理 SRT 條目"""
-        self.logger.debug(f"開始處理 SRT 條目，數量: {len(srt_data) if srt_data else 0}")
-
-        if not srt_data:
-            self.logger.warning("SRT 數據為空，無法處理")
-            return
-
-        for sub in srt_data:
-            self.prepare_and_insert_subtitle_item(sub, corrections)
+        self.split_service.process_srt_entries(srt_data, corrections)
 
     def update_audio_segments(self) -> None:
         """完全重建音頻段落映射，確保與當前 SRT 數據一致"""
@@ -4729,52 +4652,7 @@ class AlignmentGUI(BaseWindow):
 
         return None
 
-    def _create_restored_values_with_correction(self, display_text, original_text, corrected_text,
-                                      start, end, srt_index, correction_icon, needs_correction, word_text=""):
-        """
-        為拆分還原創建值列表，包含校正狀態和Word文本
-        """
-        # 根據顯示模式準備值
-        if self.display_mode == self.DISPLAY_MODE_ALL:
-            values = [
-                self.PLAY_ICON,
-                str(srt_index),
-                start,
-                end,
-                display_text,
-                word_text,  # 使用傳入的Word文本
-                "",  # Match
-                correction_icon
-            ]
-        elif self.display_mode == self.DISPLAY_MODE_SRT_WORD:
-            values = [
-                str(srt_index),
-                start,
-                end,
-                display_text,
-                word_text,  # 使用傳入的Word文本
-                "",  # Match
-                correction_icon
-            ]
-        elif self.display_mode == self.DISPLAY_MODE_AUDIO_SRT:
-            values = [
-                self.PLAY_ICON,
-                str(srt_index),
-                start,
-                end,
-                display_text,
-                correction_icon
-            ]
-        else:  # SRT模式
-            values = [
-                str(srt_index),
-                start,
-                end,
-                display_text,
-                correction_icon
-            ]
 
-        return values
 
     def _create_restored_values(self, text, start, end, srt_index):
         """
@@ -4835,39 +4713,7 @@ class AlignmentGUI(BaseWindow):
 
         return values
 
-    def _update_srt_for_undo_split(self, srt_index, text, start, end):
-        """
-        為拆分撤銷更新SRT數據
-        """
-        try:
-            # 將所有大於等於srt_index+1的項目從SRT數據中刪除，但保留原始索引
-            i = 0
-            while i < len(self.srt_data):
-                if self.srt_data[i].index > srt_index:
-                    self.srt_data.pop(i)
-                else:
-                    i += 1
 
-            # 更新或新增拆分還原的項目
-            if srt_index <= len(self.srt_data):
-                # 更新現有項目
-                sub = self.srt_data[srt_index - 1]
-                sub.text = text
-                sub.start = parse_time(start)
-                sub.end = parse_time(end)
-            else:
-                # 新增項目
-                sub = pysrt.SubRipItem(
-                    index=srt_index,
-                    start=parse_time(start),
-                    end=parse_time(end),
-                    text=text
-                )
-                self.srt_data.append(sub)
-
-        except Exception as e:
-            self.logger.error(f"更新SRT數據時出錯: {e}", exc_info=True)
-            raise
 
     def show_floating_correction_icon(self, event):
         """顯示跟隨游標的校正圖標，但只在選中的文本項目上"""
