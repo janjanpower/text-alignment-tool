@@ -290,9 +290,9 @@ class SplitService:
                         continue
 
                 # 如果有音頻，更新音頻段落
-                if self.gui.audio_imported and hasattr(self.gui, 'audio_player'):
+                if self.audio_imported and hasattr(self, 'audio_player'):
                     # 首先嘗試使用單個區域切分方法
-                    self.gui.audio_player.segment_single_audio(
+                    self.audio_player.segment_single_audio(
                         start_time,
                         end_time,
                         new_start_times,
@@ -301,8 +301,7 @@ class SplitService:
                     )
 
                     # 然後重新對整個 SRT 數據進行分割以確保一致性
-                    # 這樣確保即使單個區域切分出現問題，整體音頻段落仍然是同步的
-                    self.gui.audio_player.segment_audio(self.gui.srt_data)
+                    self.audio_player.segment_audio(self.srt_data)
                     self.logger.info(f"已重新分割全部音頻段落，確保與 SRT 同步")
 
                 # 重新編號
@@ -591,3 +590,88 @@ class SplitService:
             ]
 
         return values
+
+    def prepare_values_for_split_item(self, text, new_start, new_end, srt_index, part_index):
+        """
+        為拆分項目準備值列表
+
+        Args:
+            text: 拆分後的文本
+            new_start: 開始時間
+            new_end: 結束時間
+            srt_index: 原始 SRT 索引
+            part_index: 拆分後的部分索引
+
+        Returns:
+            tuple: 值列表，適用於當前顯示模式
+        """
+        try:
+            # 處理索引值 - 第一個部分保持原索引，其他部分則增加
+            new_srt_index = srt_index + part_index if part_index > 0 else srt_index
+
+            # 載入校正數據庫
+            corrections = self.gui.load_corrections()
+
+            # 檢查文本是否需要校正
+            needs_correction, corrected_text, original_text, _ = self.gui.correction_service.check_text_for_correction(text)
+            correction_icon = '✅' if needs_correction else ''
+
+            # 按照當前顯示模式準備值
+            if self.gui.display_mode == self.gui.DISPLAY_MODE_ALL:
+                # [V.O, Index, Start, End, SRT Text, Word Text, Match, V/X]
+                values = [
+                    self.gui.PLAY_ICON,
+                    str(new_srt_index),
+                    new_start,
+                    new_end,
+                    text,  # 保持原始文本，校正狀態由圖標表示
+                    part_index == 0 and self.gui.word_processor.get_paragraph_text(srt_index - 1) or "",  # 第一個部分保留 Word 文本
+                    "",  # 匹配資訊清空
+                    correction_icon
+                ]
+            elif self.gui.display_mode == self.gui.DISPLAY_MODE_SRT_WORD:
+                # [Index, Start, End, SRT Text, Word Text, Match, V/X]
+                values = [
+                    str(new_srt_index),
+                    new_start,
+                    new_end,
+                    text,
+                    part_index == 0 and self.gui.word_processor.get_paragraph_text(srt_index - 1) or "",  # 第一個部分保留 Word 文本
+                    "",  # 匹配資訊清空
+                    correction_icon
+                ]
+            elif self.gui.display_mode == self.gui.DISPLAY_MODE_AUDIO_SRT:
+                # [V.O, Index, Start, End, SRT Text, V/X]
+                values = [
+                    self.gui.PLAY_ICON,
+                    str(new_srt_index),
+                    new_start,
+                    new_end,
+                    text,
+                    correction_icon
+                ]
+            else:  # SRT 模式
+                # [Index, Start, End, SRT Text, V/X]
+                values = [
+                    str(new_srt_index),
+                    new_start,
+                    new_end,
+                    text,
+                    correction_icon
+                ]
+
+            # 如果需要校正，設置校正狀態
+            if needs_correction:
+                self.gui.correction_service.set_correction_state(
+                    str(new_srt_index),
+                    original_text,
+                    corrected_text,
+                    'correct'  # 默認為已校正狀態
+                )
+
+            return values
+
+        except Exception as e:
+            self.gui.logger.error(f"準備拆分項目值時出錯: {e}", exc_info=True)
+            # 返回簡單的備選值，避免完全失敗
+            return [str(new_srt_index), new_start, new_end, text, ""]

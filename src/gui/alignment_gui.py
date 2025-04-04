@@ -2130,91 +2130,6 @@ class AlignmentGUI(BaseWindow):
         """處理 SRT 文本編輯結果 - 轉發到 split_service"""
         self.split_service.process_srt_edit_result(result, item, srt_index, start_time, end_time)
 
-    def prepare_values_for_split_item(self, text, new_start, new_end, srt_index, part_index):
-        """
-        為拆分項目準備值列表
-
-        Args:
-            text: 拆分後的文本
-            new_start: 開始時間
-            new_end: 結束時間
-            srt_index: 原始 SRT 索引
-            part_index: 拆分後的部分索引
-
-        Returns:
-            tuple: 值列表，適用於當前顯示模式
-        """
-        try:
-            # 處理索引值 - 第一個部分保持原索引，其他部分則增加
-            new_srt_index = srt_index + part_index if part_index > 0 else srt_index
-
-            # 載入校正數據庫
-            corrections = self.load_corrections()
-
-            # 檢查文本是否需要校正
-            # 注意：根據錯誤訊息，我們修正了調用方式
-            needs_correction, corrected_text, original_text, _ = self.correction_service.check_text_for_correction(text)
-            correction_icon = '✅' if needs_correction else ''
-
-            # 按照當前顯示模式準備值
-            if self.display_mode == self.DISPLAY_MODE_ALL:
-                # [V.O, Index, Start, End, SRT Text, Word Text, Match, V/X]
-                values = [
-                    self.PLAY_ICON,
-                    str(new_srt_index),
-                    new_start,
-                    new_end,
-                    text,  # 保持原始文本，校正狀態由圖標表示
-                    part_index == 0 and self.word_processor.get_paragraph_text(srt_index - 1) or "",  # 第一個部分保留 Word 文本
-                    "",  # 匹配資訊清空
-                    correction_icon
-                ]
-            elif self.display_mode == self.DISPLAY_MODE_SRT_WORD:
-                # [Index, Start, End, SRT Text, Word Text, Match, V/X]
-                values = [
-                    str(new_srt_index),
-                    new_start,
-                    new_end,
-                    text,
-                    part_index == 0 and self.word_processor.get_paragraph_text(srt_index - 1) or "",  # 第一個部分保留 Word 文本
-                    "",  # 匹配資訊清空
-                    correction_icon
-                ]
-            elif self.display_mode == self.DISPLAY_MODE_AUDIO_SRT:
-                # [V.O, Index, Start, End, SRT Text, V/X]
-                values = [
-                    self.PLAY_ICON,
-                    str(new_srt_index),
-                    new_start,
-                    new_end,
-                    text,
-                    correction_icon
-                ]
-            else:  # SRT 模式
-                # [Index, Start, End, SRT Text, V/X]
-                values = [
-                    str(new_srt_index),
-                    new_start,
-                    new_end,
-                    text,
-                    correction_icon
-                ]
-
-            # 如果需要校正，設置校正狀態
-            if needs_correction:
-                self.correction_service.set_correction_state(
-                    str(new_srt_index),
-                    original_text,
-                    corrected_text,
-                    'correct'  # 默認為已校正狀態
-                )
-
-            return values
-
-        except Exception as e:
-            self.logger.error(f"準備拆分項目值時出錯: {e}", exc_info=True)
-            # 返回簡單的備選值，避免完全失敗
-            return [str(new_srt_index), new_start, new_end, text, ""]
 
     def process_word_text_edit(self, result, item, srt_index):
         """
@@ -3864,6 +3779,7 @@ class AlignmentGUI(BaseWindow):
             # 根據操作類型分別處理
             if op_type == 'split_srt':
                 self.restore_from_split_operation(operation)
+
             elif op_type == 'combine_sentences':
                 # 使用保存的原始樹狀態還原
                 if 'original_tree_state' in operation:
@@ -3911,6 +3827,10 @@ class AlignmentGUI(BaseWindow):
         except Exception as e:
             self.logger.error(f"重做狀態時出錯: {e}", exc_info=True)
             show_error("錯誤", f"重做操作失敗: {str(e)}", self.master)
+
+    def restore_from_split_operation(self, operation):
+        """從拆分操作恢復狀態 - 基於完整原始狀態的復原"""
+        self.split_service.restore_from_split_operation(operation)
 
     def clear_current_treeview(self):
         """清除當前樹狀視圖 - 簡化版，僅清除樹狀視圖項目"""
