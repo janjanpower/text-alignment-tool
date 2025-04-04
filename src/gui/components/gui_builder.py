@@ -114,7 +114,7 @@ class GUIBuilder:
                 style='Custom.TLabel',
                 anchor='center'  # 文字置中
             )
-            self.file_info_label.pack(fill=tk.X, pady=5)
+            self.file_info_label.pack(fill=tk.X, pady=0)
         except Exception as e:
             self.logger.error(f"創建檔案資訊區域時出錯: {e}")
 
@@ -130,7 +130,7 @@ class GUIBuilder:
                 textvariable=self.status_var,
                 style='Custom.TLabel'
             )
-            self.status_label.pack(side=tk.BOTTOM, fill=tk.X, pady=2)
+            self.status_label.pack(side=tk.BOTTOM, fill=tk.X, pady=0)
         except Exception as e:
             self.logger.error(f"創建狀態列時出錯: {e}")
 

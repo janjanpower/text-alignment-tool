@@ -30,6 +30,8 @@ from utils.time_utils import parse_time
 from gui.quick_correction_dialog import QuickCorrectionDialog
 from gui.components.tree_view_manager import TreeViewManager
 from gui.components.gui_builder import GUIBuilder
+from services.combine_service import CombineService
+from services.split_service import SplitService
 
 # 添加項目根目錄到路徑以確保絕對導入能正常工作
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -64,6 +66,9 @@ class AlignmentGUI(BaseWindow):
 
         # 初始化校正服務
         self.correction_service = CorrectionService()
+        # 初始化合併服務
+        self.combine_service = CombineService(self)
+        self.split_service = SplitService(self)
 
         # 初始化增強狀態管理器
         self.initialize_state_manager()
@@ -212,7 +217,7 @@ class AlignmentGUI(BaseWindow):
                     description = f"Loaded SRT file: {os.path.basename(file_path)}"
 
                 self.logger.debug("保存初始狀態")
-                self.state_manager.save_state(self.get_current_state(), {
+                self.save_operation_state(self.get_current_state(), {
                     'type': 'load_srt',
                     'description': description
                 })
@@ -651,7 +656,7 @@ class AlignmentGUI(BaseWindow):
                 self.logger.info("時間調整後已更新音頻段落")
 
             # 保存狀態
-            self.state_manager.save_state(self.get_current_state(), {
+            self.save_operation_state(self.get_current_state(), {
                 'type': 'time_adjust',
                 'description': '調整時間軸'
             })
@@ -1076,13 +1081,21 @@ class AlignmentGUI(BaseWindow):
         except Exception as e:
             self.logger.error(f"更新校正狀態顯示時出錯: {e}", exc_info=True)
 
-
-    def restore_tree_data(self, data):
+    def restore_tree_data(self, data, source_mode="any", target_mode=None):
         """
-        恢復先前保存的樹狀視圖數據
-        :param data: 之前保存的數據列表
+        統一的樹狀視圖數據恢復方法
+
+        Args:
+            data: 之前保存的數據列表
+            source_mode: 源模式 ("any" 表示自動檢測)
+            target_mode: 目標模式 (None 表示使用當前模式)
         """
         try:
+            if target_mode is None:
+                target_mode = self.display_mode
+
+            self.logger.debug(f"開始恢復樹狀視圖數據: 源模式={source_mode}, 目標模式={target_mode}")
+
             # 清空當前樹狀視圖
             self.tree_manager.clear_all()
 
@@ -1094,7 +1107,7 @@ class AlignmentGUI(BaseWindow):
                 values = item_data.get('values', [])
 
                 # 調整值以適應新的顯示模式
-                adjusted_values = self.adjust_values_for_mode(values, "any", self.display_mode)
+                adjusted_values = self.adjust_values_for_mode(values, source_mode, target_mode)
 
                 # 插入新項目
                 item_id = self.insert_item('', 'end', values=tuple(adjusted_values))
@@ -1109,32 +1122,38 @@ class AlignmentGUI(BaseWindow):
                 if use_word:
                     self.use_word_text[item_id] = True
 
+                    # 確保標籤中有 use_word_text
+                    current_tags = list(self.tree.item(item_id, "tags") or ())
+                    if "use_word_text" not in current_tags:
+                        current_tags.append("use_word_text")
+                        self.tree.item(item_id, tags=tuple(current_tags))
+
                 # 恢復校正狀態
                 correction = item_data.get('correction')
-                if correction and 'state' in correction and correction['state']:
+                if correction:
                     # 確定新的索引位置
-                    if self.display_mode == self.DISPLAY_MODE_ALL or self.display_mode == self.DISPLAY_MODE_AUDIO_SRT:
-                        idx = str(adjusted_values[1])
+                    if target_mode in [self.DISPLAY_MODE_ALL, self.DISPLAY_MODE_AUDIO_SRT]:
+                        idx = str(adjusted_values[1]) if len(adjusted_values) > 1 else ""
                     else:
-                        idx = str(adjusted_values[0])
+                        idx = str(adjusted_values[0]) if adjusted_values else ""
 
-                    # 恢復校正狀態
-                    self.correction_service.set_correction_state(
-                        idx,
-                        correction.get('original', ''),
-                        correction.get('corrected', ''),
-                        correction.get('state', 'correct')
-                    )
+                    if idx and 'state' in correction:
+                        # 恢復校正狀態
+                        self.correction_service.set_correction_state(
+                            idx,
+                            correction.get('original', ''),
+                            correction.get('corrected', ''),
+                            correction.get('state', 'correct')
+                        )
 
             # 設置樣式
             self.tree.tag_configure('mismatch', background='#FFDDDD')  # 淺紅色背景標記不匹配項目
             self.tree.tag_configure('use_word_text', background='#00BFFF')  # 淺藍色背景標記使用 Word 文本的項目
 
-            self.logger.info(f"已恢復 {len(data)} 個項目的數據到 {self.display_mode} 模式")
+            self.logger.info(f"已恢復 {len(data)} 個項目的數據到 {target_mode} 模式")
 
         except Exception as e:
             self.logger.error(f"恢復樹狀視圖數據時出錯: {e}", exc_info=True)
-
 
 
     def get_mode_description(self, mode: str) -> str:
@@ -2060,10 +2079,6 @@ class AlignmentGUI(BaseWindow):
             return 3  # SRT Text 在 SRT 模式下的索引
         return None
 
-    def check_text_correction(self, text: str, corrections: dict) -> tuple[bool, str, str, list]:
-        """檢查文本是否需要校正，並返回校正資訊"""
-        return self.correction_service.check_text_for_correction(text)
-
     def insert_text_segment(self, insert_position: int, text: str, start: str, end: str,
                    corrections: dict, show_correction_info: bool = True) -> str:
         """
@@ -2072,7 +2087,7 @@ class AlignmentGUI(BaseWindow):
         """
         try:
             # 檢查文本是否需要校正
-            needs_correction, original_text, corrected_text = self.check_text_correction(text, corrections)
+            needs_correction, corrected_text, original_text, _ = self.correction_service.check_text_for_correction(text)
             correction_icon = '✅' if needs_correction and show_correction_info else ''
 
             # 準備新的值列表
@@ -2112,399 +2127,8 @@ class AlignmentGUI(BaseWindow):
             return ""
 
     def process_srt_edit_result(self, result, item, srt_index, start_time, end_time):
-        """
-        處理 SRT 文本編輯結果
-        :param result: 編輯結果
-        :param item: 樹項目 ID
-        :param srt_index: SRT 索引
-        :param start_time: 開始時間
-        :param end_time: 結束時間
-        """
-        try:
-            # 保存全局樹狀態，用於後續復原
-            original_tree_state = []
-            for tree_item in self.tree_manager.get_all_items():
-                original_tree_state.append({
-                    'id': tree_item,
-                    'values': self.tree.item(tree_item, 'values'),
-                    'tags': self.tree.item(tree_item, 'tags'),
-                    'position': self.tree.index(tree_item),
-                    'use_word': self.use_word_text.get(tree_item, False)
-                })
-
-            # 保存 SRT 數據的快照
-            original_srt_data = []
-            if hasattr(self, 'srt_data'):
-                for sub in self.srt_data:
-                    original_srt_data.append({
-                        'index': sub.index,
-                        'start': str(sub.start),
-                        'end': str(sub.end),
-                        'text': sub.text
-                    })
-
-            # 保存操作前的狀態供撤銷使用
-            original_state = self.get_current_state()
-            original_correction = self.correction_service.serialize_state() if hasattr(self, 'correction_service') else None
-
-            # 保存原始樹狀視圖項目的完整信息
-            original_item_info = {
-                'id': item,
-                'values': self.tree_manager.get_item_values(item),
-                'tags': self.tree_manager.get_item_tags(item),
-                'position': self.tree_manager.get_item_position(item),
-                'use_word': self.use_word_text.get(item, False)
-            }
-
-            # 在檢測到文本拆分結果後的處理部分
-            if isinstance(result, list) and len(result) > 0 and isinstance(result[0], tuple):
-                # 這是文本拆分結果 - 處理文本拆分和時間軸分配
-                self.logger.debug(f"檢測到文本拆分結果，共 {len(result)} 個片段")
-                # 記錄這是一次分割操作
-
-                # 獲取原始文本和時間信息
-                original_text = original_item_info['values'][3 if self.display_mode in [self.DISPLAY_MODE_SRT, self.DISPLAY_MODE_SRT_WORD] else 4]
-
-                # 獲取Word文本（如果存在）
-                original_word_text = ""
-                if self.display_mode in [self.DISPLAY_MODE_ALL, self.DISPLAY_MODE_SRT_WORD]:
-                    word_text_index = 5 if self.display_mode == self.DISPLAY_MODE_ALL else 4
-                    if len(original_item_info['values']) > word_text_index:
-                        original_word_text = original_item_info['values'][word_text_index]
-
-                self.last_split_operation = {
-                    'timestamp': time.time(),
-                    'srt_index': srt_index,
-                    'split_result': result,
-                    'original_text': original_text,
-                    'original_start': start_time,
-                    'original_end': end_time,
-                    'display_mode': self.display_mode,
-                    'original_correction_state': self.correction_service.serialize_state() if hasattr(self, 'correction_service') else {},
-                    'original_word_text': original_word_text  # 保存Word文本
-                }
-
-                # 記錄該項目的原始校正狀態
-                if hasattr(self, 'correction_service'):
-                    index_to_check = str(srt_index)
-                    if index_to_check in self.correction_service.correction_states:
-                        self.last_split_operation['original_item_correction'] = {
-                            'state': self.correction_service.correction_states[index_to_check],
-                            'original': self.correction_service.original_texts.get(index_to_check, ''),
-                            'corrected': self.correction_service.corrected_texts.get(index_to_check, '')
-                        }
-
-                # 載入校正數據庫
-                corrections = self.load_corrections()
-
-                # 先檢查項目是否存在
-                if not self.tree.exists(item):
-                    self.logger.error(f"項目 {item} 不存在")
-                    return
-
-                # 保存當前標籤狀態和刪除位置
-                try:
-                    tags = self.tree_manager.get_item_tags(item)
-                    delete_position = self.tree_manager.get_item_position(item)
-                    values = self.tree.item(item)['values']
-
-                    # 獲取當前 Word 文本和 Match 狀態（如果有）
-                    word_text = ""
-                    match_status = ""
-
-                    if self.display_mode in [self.DISPLAY_MODE_SRT_WORD, self.DISPLAY_MODE_ALL]:
-                        word_text_index = 5 if self.display_mode == self.DISPLAY_MODE_ALL else 4
-                        match_index = 6 if self.display_mode == self.DISPLAY_MODE_ALL else 5
-
-                        if len(values) > word_text_index:
-                            word_text = values[word_text_index]
-                        if len(values) > match_index:
-                            match_status = values[match_index]
-
-                    # 檢查原始項目的校正狀態
-                    # 獲取 V/X 欄位的值
-                    correction_state = ''
-                    if self.display_mode == self.DISPLAY_MODE_ALL and len(values) > 7:
-                        correction_state = values[7]
-                    elif self.display_mode == self.DISPLAY_MODE_SRT_WORD and len(values) > 6:
-                        correction_state = values[6]
-                    elif self.display_mode == self.DISPLAY_MODE_AUDIO_SRT and len(values) > 5:
-                        correction_state = values[5]
-                    elif len(values) > 4:  # SRT 模式
-                        correction_state = values[4]
-
-                    # 判斷是否為未校正狀態
-                    is_uncorrected = (correction_state == '❌')
-
-                except Exception as e:
-                    self.logger.error(f"獲取項目信息失敗: {e}")
-                    return
-
-                # 準備新的時間列表
-                new_start_times = []
-                new_end_times = []
-
-                # 將結果轉換為列表，避免 tuple 可能引起的問題
-                result_list = list(result)
-
-                # 刪除原始項目 - 在刪除後不再使用 item 引用
-                try:
-                    self.tree_manager.delete_item(item)
-                except Exception as e:
-                    self.logger.error(f"刪除項目失敗: {e}")
-                    return
-
-                # 創建 ID 映射表
-                id_mapping = {'original': item}
-                new_items = []
-
-                # 處理每個分割後的文本段落
-                for i, (text, new_start, new_end) in enumerate(result_list):
-                    # 收集新的時間
-                    new_start_times.append(new_start)
-                    new_end_times.append(new_end)
-
-                    try:
-                        # 為新段落準備值
-                        new_srt_index = srt_index + i if i > 0 else srt_index
-
-                        # 檢查文本是否需要校正
-                        needs_correction, corrected_text, original_text, _ = self.correction_service.check_text_for_correction(text)
-
-                        # 根據原始校正狀態決定圖標和顯示文本
-                        if needs_correction:
-                            if is_uncorrected:
-                                correction_icon = '❌'
-                                display_text = text  # 未校正狀態顯示原始文本
-                            else:
-                                correction_icon = '✅'
-                                display_text = corrected_text  # 已校正狀態顯示校正後文本
-                        else:
-                            correction_icon = ''
-                            display_text = text
-
-                        # 根據顯示模式構建值列表
-                        if self.display_mode == self.DISPLAY_MODE_ALL:
-                            # [V.O, Index, Start, End, SRT Text, Word Text, Match, V/X]
-                            values = [
-                                self.PLAY_ICON,
-                                str(new_srt_index),
-                                new_start,
-                                new_end,
-                                display_text,
-                                i == 0 and word_text or "",  # 只有第一個段落保留 Word 文本
-                                i == 0 and match_status or "",  # 只有第一個段落保留 Match 狀態
-                                correction_icon     # V/X 根據校正需要設置
-                            ]
-                        elif self.display_mode == self.DISPLAY_MODE_SRT_WORD:
-                            # [Index, Start, End, SRT Text, Word Text, Match, V/X]
-                            values = [
-                                str(new_srt_index),
-                                new_start,
-                                new_end,
-                                display_text,
-                                i == 0 and word_text or "",  # 只有第一個段落保留 Word 文本
-                                i == 0 and match_status or "",  # 只有第一個段落保留 Match 狀態
-                                correction_icon     # V/X 根據校正需要設置
-                            ]
-                        elif self.display_mode == self.DISPLAY_MODE_AUDIO_SRT:
-                            # [V.O, Index, Start, End, SRT Text, V/X]
-                            values = [
-                                self.PLAY_ICON,
-                                str(new_srt_index),
-                                new_start,
-                                new_end,
-                                display_text,
-                                correction_icon   # V/X 根據校正需要設置
-                            ]
-                        else:  # SRT 模式
-                            # [Index, Start, End, SRT Text, V/X]
-                            values = [
-                                str(new_srt_index),
-                                new_start,
-                                new_end,
-                                display_text,
-                                correction_icon   # V/X 根據校正需要設置
-                            ]
-
-                        # 使用安全的插入方法
-                        pos = delete_position + i
-                        new_item = self.insert_item('', pos, values=tuple(values))
-                        new_items.append(new_item)
-
-                        # 保存 ID 映射
-                        id_mapping[f'part_{i}'] = new_item
-                        if i == 0:
-                            id_mapping['first_new'] = new_item
-
-                        # 如果有標籤，應用到新項目，但移除不需要的標籤如 'mismatch'
-                        if tags:
-                            clean_tags = tuple(tag for tag in tags if tag != 'mismatch')
-                            self.tree.item(new_item, tags=clean_tags)
-
-                        # 如果需要校正，保存校正狀態
-                        if needs_correction:
-                            state = 'error' if is_uncorrected else 'correct'
-                            self.correction_service.set_correction_state(
-                                str(new_srt_index),
-                                original_text,
-                                corrected_text,
-                                state
-                            )
-
-                        # 更新 SRT 數據以反映變化
-                        if i == 0:
-                            # 更新原有項目
-                            if srt_index - 1 < len(self.srt_data):
-                                self.srt_data[srt_index - 1].text = display_text
-                                self.srt_data[srt_index - 1].start = parse_time(new_start)
-                                self.srt_data[srt_index - 1].end = parse_time(new_end)
-                        else:
-                            # 創建新的 SRT 項目
-                            new_srt_item = pysrt.SubRipItem(
-                                index=new_srt_index,
-                                start=parse_time(new_start),
-                                end=parse_time(new_end),
-                                text=display_text
-                            )
-                            # 插入到 SRT 數據中
-                            if srt_index < len(self.srt_data):
-                                self.srt_data.insert(srt_index + i - 1, new_srt_item)
-                            else:
-                                self.srt_data.append(new_srt_item)
-
-                    except Exception as e:
-                        self.logger.error(f"插入新項目失敗: {e}")
-                        continue
-
-                # 如果有音頻，更新音頻段落
-                if self.audio_imported and hasattr(self, 'audio_player'):
-                    # 首先嘗試使用單個區域切分方法
-                    self.audio_player.segment_single_audio(
-                        start_time,
-                        end_time,
-                        new_start_times,
-                        new_end_times,
-                        srt_index
-                    )
-
-                    # 然後重新對整個 SRT 數據進行分割以確保一致性
-                    # 這樣確保即使單個區域切分出現問題，整體音頻段落仍然是同步的
-                    self.audio_player.segment_audio(self.srt_data)
-                    self.logger.info(f"已重新分割全部音頻段落，確保與 SRT 同步")
-
-                # 重新編號
-                self.renumber_items()
-
-                # 更新音頻段落的索引
-                if self.audio_imported:
-                    self.update_audio_segments()
-
-                # 選中新創建的項目
-                if new_items:
-                    self.tree_manager.set_selection(new_items[0])
-                    self.tree_manager.select_and_see(new_items[0])
-
-                # 保存完整的操作狀態，包含所有復原所需的信息
-                full_operation_info = {
-                    'type': 'split_srt',
-                    'description': '拆分 SRT 文本',
-                    'original_tree_state': original_tree_state,  # 完整樹狀態
-                    'original_srt_data': original_srt_data,  # 完整SRT數據
-                    'original_item_info': original_item_info,  # 被拆分項目的信息
-                    'original_state': original_state,
-                    'original_correction': original_correction,
-                    'split_result': result,  # 拆分結果
-                    'new_items': new_items,  # 新創建的項目
-                    'id_mapping': id_mapping,  # ID 映射
-                    'srt_index': srt_index,
-                    'start_time': start_time,
-                    'end_time': end_time,
-                    'is_split_operation': True,  # 標記這是分割操作
-                    'target_item_id': new_items[0] if new_items else None  # 目標恢復位置
-                }
-
-                # 保存狀態
-                if hasattr(self, 'state_manager'):
-                    # 使用當前狀態和完整的操作信息保存
-                    current_state = self.get_current_state()
-                    current_correction = self.correction_service.serialize_state() if hasattr(self, 'correction_service') else None
-                    self.state_manager.save_state(current_state, full_operation_info, current_correction)
-
-                # 重新綁定事件
-                self.bind_all_events()
-
-                # 更新介面
-                self.update_status("已更新並拆分文本")
-
-            else:
-                # 處理單一文本編輯（非拆分）結果的部分保持不變
-                # 這是單一文本字串結果
-                text = result
-                if isinstance(text, list):
-                    if len(text) > 0:
-                        text = str(text[0])
-                    else:
-                        text = ""
-
-                # 確保文本是字串類型
-                text = str(text)
-
-                # 獲取當前值
-                values = list(self.tree_manager.get_item_values(item))
-
-                # 更新 SRT 文本
-                if self.display_mode == self.DISPLAY_MODE_ALL:
-                    values[4] = text
-                elif self.display_mode == self.DISPLAY_MODE_SRT_WORD:
-                    values[3] = text
-                elif self.display_mode == self.DISPLAY_MODE_AUDIO_SRT:
-                    values[4] = text
-                else:  # SRT 模式
-                    values[3] = text
-
-                # 更新 SRT 數據
-                if 0 <= srt_index - 1 < len(self.srt_data):
-                    self.srt_data[srt_index - 1].text = text
-
-                # 更新樹狀視圖，保留原有標籤
-                self.tree.item(item, values=tuple(values), tags=self.tree_manager.get_item_tags(item))
-
-                # 標記 SRT 欄位被編輯
-                i = srt_index - 1
-                if i not in self.edited_text_info:
-                    self.edited_text_info[i] = {'edited': []}
-
-                if 'srt' not in self.edited_text_info[i]['edited']:
-                    self.edited_text_info[i]['edited'].append('srt')
-
-                # 更新音頻段落
-                if self.audio_imported and hasattr(self, 'audio_player'):
-                    # 即使只修改了文本，也重新同步音頻段落，以確保一致性
-                    self.audio_player.segment_audio(self.srt_data)
-                    self.logger.debug("文本編輯後更新音頻段落")
-
-                # 保存當前狀態
-                self.save_operation_state(
-                    'edit_text',
-                    '編輯文本',
-                    {
-                        'original_state': original_state,
-                        'original_correction': original_correction,
-                        'item_id': item,
-                        'srt_index': srt_index,
-                        'old_text': original_item_info['values'][3 if self.display_mode in [self.DISPLAY_MODE_SRT, self.DISPLAY_MODE_SRT_WORD] else 4],
-                        'new_text': text
-                    }
-                )
-
-                # 更新狀態
-                self.update_status("已更新 SRT 文本")
-                self.update_srt_data_from_treeview()
-
-        except Exception as e:
-            self.logger.error(f"處理 SRT 編輯結果時出錯: {e}", exc_info=True)
-            show_error("錯誤", f"更新文本失敗: {str(e)}", self.master)
+        """處理 SRT 文本編輯結果 - 轉發到 split_service"""
+        self.split_service.process_srt_edit_result(result, item, srt_index, start_time, end_time)
 
     def prepare_values_for_split_item(self, text, new_start, new_end, srt_index, part_index):
         """
@@ -2655,7 +2279,7 @@ class AlignmentGUI(BaseWindow):
                 current_state = self.get_current_state()
                 current_correction = self.correction_service.serialize_state()
 
-                self.state_manager.save_state(current_state, {
+                self.save_operation_state(current_state, {
                     'type': 'edit_word_text',
                     'description': '編輯 Word 文本',
                     'original_state': original_state,
@@ -2815,7 +2439,7 @@ class AlignmentGUI(BaseWindow):
 
             # 使用 save_state 保存狀態
             if hasattr(self, 'state_manager'):
-                self.state_manager.save_state(current_state, operation_info, current_correction)
+                self.save_operation_state(current_state, operation_info, current_correction)
 
             # 更新狀態
             self.update_status("已分割 Word 文本")
@@ -3062,11 +2686,10 @@ class AlignmentGUI(BaseWindow):
         return corrections
 
     # 修改 correct_text 方法，使用 CorrectionService
-    def correct_text(self, text: str, corrections: Dict[str, str]) -> str:
+    def correct_text(self, text: str, corrections: Dict[str, str] = None) -> str:
         """根據校正數據庫修正文本"""
-        corrected_text = self.correction_service.correct_text(text, corrections)
-        return corrected_text
-
+        needs_correction, corrected_text, _, _ = self.correction_service.correct_text(text, corrections)
+        return corrected_text if needs_correction else text
 
     def prepare_and_insert_subtitle_item(self, sub, corrections=None, tags=None, use_word=False):
         """
@@ -3299,230 +2922,7 @@ class AlignmentGUI(BaseWindow):
 
     def combine_sentences(self, event=None):
         """合併字幕"""
-        try:
-            # 檢查是否有足夠的選中項
-            if not self._validate_combine_selection():
-                return
-
-            # 記錄合併前的狀態
-            self.logger.info("=== 開始合併字幕 ===")
-
-            # 保存合併前的狀態
-            original_state, original_correction, original_items_data, selected_indices = self._prepare_combine_state()
-
-            # 執行實際的合併操作 - 包含所有後續處理
-            success, new_item, new_item_index = self._execute_combine(original_items_data, selected_indices)
-
-            if not success:
-                return
-
-            # 保存操作後的狀態
-            self._save_combine_operation_state(original_state, original_correction, original_items_data, new_item, new_item_index)
-
-            # 隱藏合併符號
-            if hasattr(self, 'merge_symbol'):
-                self.merge_symbol.place_forget()
-
-            self.update_status("已合併所選字幕")
-        except Exception as e:
-            self.logger.error(f"合併字幕時出錯: {e}", exc_info=True)
-            show_error("錯誤", f"合併字幕失敗: {str(e)}", self.master)
-
-    def _save_combine_operation_state(self, original_state, original_correction, original_items_data, new_item, new_item_index):
-        """保存合併操作的狀態"""
-        # 獲取當前狀態
-        current_state = self.get_current_state()
-        current_correction = self.correction_service.serialize_state()
-
-        # 獲取所有選中項目的詳細信息（用於還原）
-        selected_items_details = []
-        for item_data in original_items_data:
-            selected_items_details.append({
-                'id': item_data.get('id'),
-                'values': item_data.get('values'),
-                'tags': item_data.get('tags'),
-                'position': item_data.get('position'),
-                'use_word': item_data.get('use_word', False)
-            })
-
-        # 保存操作狀態
-        self.save_operation_state(
-            'combine_sentences',
-            '合併字幕',
-            {
-                'original_state': original_state,
-                'original_correction': original_correction,
-                'selected_items_details': selected_items_details,
-                'new_item': new_item,
-                'new_item_index': new_item_index
-            }
-        )
-
-    def _validate_combine_selection(self) -> bool:
-        """驗證是否有足夠的選中項用於合併"""
-        if not hasattr(self, 'current_selected_items') or len(self.current_selected_items) < 2:
-            show_warning("警告", "請選擇至少兩個字幕項目", self.master)
-            return False
-        return True
-
-    def _prepare_combine_state(self) -> tuple:
-        """準備合併操作的狀態數據"""
-        # 保存操作前的完整狀態
-        original_state = self.get_current_state()
-        original_correction = self.correction_service.serialize_state()
-
-        # 保存合併前所有選中項目的完整信息
-        original_items_data = []
-        selected_indices = []  # 記錄要被合併的索引
-
-        # 根據索引排序項目
-        sorted_items = sorted(self.current_selected_items, key=self.tree.index)
-
-        # 獲取所有選中項目的詳細信息
-        for sel_item in sorted_items:
-            values = self.tree.item(sel_item, 'values')
-            tags = self.tree.item(sel_item, 'tags')
-            position = self.tree.index(sel_item)
-
-            # 獲取索引
-            index_pos = 1 if self.display_mode in [self.DISPLAY_MODE_ALL, self.DISPLAY_MODE_AUDIO_SRT] else 0
-            item_index = str(values[index_pos]) if len(values) > index_pos else ""
-            selected_indices.append(item_index)  # 記錄索引
-
-            # 獲取校正狀態
-            correction_info = None
-            if item_index and item_index in self.correction_service.correction_states:
-                correction_info = {
-                    'state': self.correction_service.correction_states[item_index],
-                    'original': self.correction_service.original_texts.get(item_index, ''),
-                    'corrected': self.correction_service.corrected_texts.get(item_index, '')
-                }
-
-            original_items_data.append({
-                'id': sel_item,
-                'values': values,
-                'tags': tags,
-                'position': position,
-                'use_word': self.use_word_text.get(sel_item, False),
-                'correction': correction_info
-            })
-
-        # 記錄這是一次合併操作
-        if hasattr(self, 'state_manager') and hasattr(self.state_manager, 'last_combine_operation'):
-            self.state_manager.last_combine_operation = {
-                'timestamp': time.time(),
-                'original_items_data': original_items_data,
-                'display_mode': self.display_mode
-            }
-
-        return original_state, original_correction, original_items_data, selected_indices
-
-    def _execute_combine(self, original_items_data, selected_indices):
-        """執行實際的合併操作"""
-        try:
-            # 使用所有選中的項目進行合併
-            selected_items = self.current_selected_items
-
-            # 根據索引排序項目
-            sorted_items = sorted(selected_items, key=self.tree.index)
-
-            # 獲取列索引配置
-            column_indices = self.get_column_indices_for_current_mode()
-
-            # 第一個項目作為基礎
-            base_item = sorted_items[0]
-            base_values = list(self.tree.item(base_item, 'values'))
-            base_tags = self.tree.item(base_item, 'tags')
-            base_position = self.tree.index(base_item)
-
-            # 收集合併前的信息
-            all_texts = []
-            all_word_texts = []
-            for item in sorted_items:
-                values = self.tree_manager.get_item_values(item)
-                if column_indices['text'] < len(values):
-                    all_texts.append(values[column_indices['text']])
-                if column_indices['word_text'] is not None and column_indices['word_text'] < len(values):
-                    all_word_texts.append(values[column_indices['word_text']])
-
-            # 合併文本
-            combined_text = " ".join(text for text in all_texts if text)
-            combined_word_text = " ".join(text for text in all_word_texts if text)
-
-            # 獲取時間範圍
-            first_start = base_values[column_indices['start']]
-            last_item = sorted_items[-1]
-            last_values = self.tree.item(last_item, 'values')
-            last_end = last_values[column_indices['end']] if column_indices['end'] < len(last_values) else ""
-
-            # 清除被合併項目的校正狀態
-            for item_index in selected_indices:
-                if item_index and item_index in self.correction_service.correction_states:
-                    self.correction_service.remove_correction_state(item_index)
-                    self.logger.debug(f"已清除索引 {item_index} 的校正狀態")
-
-            # 檢查合併後的文本是否需要校正 - 修正的呼叫方式
-            needs_correction, corrected_text, original_text, _ = self._check_combined_text_correction(combined_text)
-
-            # 刪除所有原始項目
-            for item in sorted_items:
-                self.tree_manager.delete_item(item)
-
-            # 構建合併後的值
-            combined_values = base_values.copy()
-            combined_values[column_indices['text']] = combined_text
-            combined_values[column_indices['end']] = last_end
-            if column_indices['word_text'] is not None:
-                combined_values[column_indices['word_text']] = combined_word_text
-            if column_indices['match'] is not None:
-                combined_values[column_indices['match']] = ""
-
-            # 設置校正圖標
-            combined_values[column_indices['vx']] = '✅' if needs_correction else ''
-
-            # 插入新合併項目
-            new_item = self.insert_item('', base_position, values=tuple(combined_values))
-
-            # 確定新項目的索引
-            if self.display_mode in [self.DISPLAY_MODE_ALL, self.DISPLAY_MODE_AUDIO_SRT]:
-                new_item_index = str(combined_values[1])
-            else:
-                new_item_index = str(combined_values[0])
-
-            # 設置標籤
-            if base_tags:
-                self.tree.item(new_item, tags=base_tags)
-
-            # 設置校正狀態
-            if needs_correction:
-                self.correction_service.set_correction_state(
-                    new_item_index,
-                    original_text,
-                    corrected_text,
-                    'correct'  # 默認為已校正狀態
-                )
-
-            # 更新 SRT 數據
-            self.update_srt_data_from_treeview()
-
-            # 更新音頻段落 - 不再使用原始項目
-            if self.audio_imported and hasattr(self, 'audio_player'):
-                # 直接更新整個 SRT 數據的音頻段落
-                self.audio_player.segment_audio(self.srt_data)
-
-            # 重新編號
-            self.renumber_items()
-
-            # 選中新合併的項目
-            self.tree_manager.set_selection(new_item)
-            self.tree_manager.select_and_see(new_item)
-
-            return True, new_item, new_item_index
-
-        except Exception as e:
-            self.logger.error(f"執行合併操作時出錯: {e}", exc_info=True)
-            show_error("錯誤", f"合併操作失敗: {str(e)}", self.master)
-            return False, None, None
+        self.combine_service.combine_sentences(event)
 
     def get_column_indices_for_current_mode(self) -> Dict[str, int]:
         """
@@ -3637,20 +3037,6 @@ class AlignmentGUI(BaseWindow):
         self.logger.debug(f"合併Word文本: {combined_word_text}")
 
         return combined_values
-
-    def _check_combined_text_correction(self, text, column_indices=None):
-        """
-        檢查合併後的文本是否需要校正
-
-        Args:
-            text: 合併後的文本
-            column_indices: 列索引配置 (可選)
-
-        Returns:
-            tuple: (是否需要校正, 校正後的文本, 原始文本, 實際校正項目)
-        """
-        # 使用 correction_service 檢查文本是否需要校正
-        return self.correction_service.check_text_for_correction(text)
 
     def _create_merged_item(self, sorted_items, combined_values, needs_correction, corrected_text, base_tags, column_indices) -> tuple:
         """創建新的合併項目"""
@@ -3923,7 +3309,7 @@ class AlignmentGUI(BaseWindow):
         }
 
         self.logger.debug(f"正在保存合併操作狀態: 原狀態項數={len(original_state)}, 新狀態項數={len(current_state)}")
-        self.state_manager.save_state(current_state, operation_info, current_correction)
+        self.save_operation_state(current_state, operation_info, current_correction)
 
         # 選中新合併的項目
         self.tree_manager.set_selection(new_item)
@@ -4182,7 +3568,6 @@ class AlignmentGUI(BaseWindow):
                             corrected_text,
                             correction_state
                         )
-                        self.logger.debug(f"索引重編號: {old_index} -> {i}, 校正狀態已轉移")
 
             self.logger.info(f"重新編號完成: {len(items)} 個項目, {len(index_mapping)} 個索引映射")
 
@@ -4303,7 +3688,7 @@ class AlignmentGUI(BaseWindow):
 
     def apply_state(self, state, correction_state, operation):
         """
-        完全應用狀態到應用程序
+        完全應用狀態到應用程序 - 統一的狀態恢復接口
 
         Args:
             state: 要應用的狀態
@@ -4315,133 +3700,143 @@ class AlignmentGUI(BaseWindow):
             visible_item = self.get_visible_item()
             self.logger.debug(f"開始應用狀態，可見項目: {visible_item}")
 
-            # 1. 清除當前狀態
-            self.clear_current_state()
+            # 獲取操作類型
+            op_type = operation.get('type', '')
+            self.logger.debug(f"處理操作類型: {op_type}")
 
-            # 2. 設置顯示模式
-            old_mode = self.display_mode
-            new_mode = state.get('display_mode', self.display_mode)
-            if old_mode != new_mode:
-                self.logger.debug(f"顯示模式變更: {old_mode} -> {new_mode}")
-                self.display_mode = new_mode
-                self.refresh_treeview_structure()
-
-            # 3. 保存要恢復的項目 ID 映射
-            id_mapping = {}
-            if 'original_item_mapping' in operation:
-                id_mapping = operation.get('original_item_mapping', {})
-
-            # 4. 恢復樹狀視圖（確保先恢復樹狀視圖，再恢復SRT數據）
-            new_items = []  # 收集新的項目 ID
-            if 'tree_items' in state:
-                for item_data in state['tree_items']:
-                    values = item_data.get('values', [])
-                    position = item_data.get('position', 'end')
-                    tags = item_data.get('tags')
-                    original_id = item_data.get('original_id')  # 原始項目 ID
-
-                    # 插入項目
-                    new_id = self.insert_item('', position, values=tuple(values))
-                    new_items.append(new_id)
-
-                    # 保存 ID 映射
-                    if original_id:
-                        id_mapping[original_id] = new_id
-
-                    # 恢復標籤
-                    if tags:
-                        self.tree.item(new_id, tags=tags)
-
-                self.logger.debug(f"已恢復樹狀視圖，項目數: {len(state['tree_items'])}")
-
-            # 5. 恢復 SRT 數據
-            if 'srt_data' in state and state['srt_data']:
-                self.restore_srt_data(state['srt_data'])
-                self.logger.debug(f"已恢復 SRT 數據，項目數: {len(state['srt_data'])}")
+            # 根據操作類型選擇不同的處理方式
+            if op_type == 'split_srt':
+                # 使用專門的方法處理拆分操作
+                success = self._apply_split_operation(state, correction_state, operation)
+                if not success:
+                    self.logger.warning(f"應用拆分操作失敗")
+                    return False
+            elif op_type == 'combine_sentences':
+                # 使用專門的方法處理合併操作
+                success = self._apply_combine_operation(state, correction_state, operation)
+                if not success:
+                    self.logger.warning(f"應用合併操作失敗")
+                    return False
+            elif op_type == 'align_end_times':
+                # 使用專門的方法處理時間調整操作
+                success = self._apply_time_adjustment(state, correction_state, operation)
+                if not success:
+                    self.logger.warning(f"應用時間調整操作失敗")
+                    return False
             else:
-                # 如果沒有 SRT 數據，從樹狀視圖重建
-                self.update_srt_data_from_treeview()
-                self.logger.debug("從樹狀視圖重建 SRT 數據")
+                # 一般操作：標準處理流程
 
-            # 6. 恢復使用 Word 文本的標記
-            if 'use_word_text' in state:
-                self.restore_use_word_flags(state['use_word_text'], id_mapping)
-                self.logger.debug(f"已恢復 Word 文本標記，數量: {len(state['use_word_text'])}")
+                # 1. 清除當前狀態
+                self.clear_current_state()
 
-            # 7. 恢復校正狀態
-            if correction_state and hasattr(self, 'correction_service'):
-                self.correction_service.deserialize_state(correction_state, id_mapping)
-                self.logger.debug("已恢復校正狀態")
+                # 2. 設置顯示模式
+                old_mode = self.display_mode
+                new_mode = state.get('display_mode', self.display_mode)
+                if old_mode != new_mode:
+                    self.logger.debug(f"顯示模式變更: {old_mode} -> {new_mode}")
+                    self.display_mode = new_mode
+                    self.refresh_treeview_structure()
 
-            # 8. 更新音頻段落
-            if self.audio_imported and hasattr(self, 'audio_player'):
-                self.audio_player.segment_audio(self.srt_data)
-                self.logger.debug("已更新音頻段落")
+                # 3. 保存要恢復的項目 ID 映射
+                id_mapping = {}
+                if 'item_id_mapping' in state:
+                    id_mapping = state.get('item_id_mapping', {})
 
-            # 9. 更新校正狀態顯示
-            if hasattr(self, 'correction_service'):
-                self.correction_service.update_display_status(self.tree, self.display_mode)
-                self.logger.debug("已更新校正狀態顯示")
+                # 4. 恢復樹狀視圖
+                self._restore_tree_items(state, id_mapping)
 
-            # 10. 恢復視圖位置
-            if visible_item:
-                # 嘗試1: 直接使用保存的項目 ID
-                if self.tree.exists(visible_item):
-                    self.tree_manager.select_and_see(visible_item)
-                    self.tree_manager.set_selection(visible_item)
-                    self.logger.debug(f"已恢復視圖位置至項目 {visible_item}")
-                else:
-                    # 嘗試2: 檢查操作中的 ID 映射
-                    id_mapping = operation.get('id_mapping', {})
-                    if id_mapping and visible_item in id_mapping:
-                        mapped_id = id_mapping[visible_item]
-                        if self.tree.exists(mapped_id):
-                            self.tree_manager.select_and_see(mapped_id)
-                            self.tree_manager.set_selection(mapped_id)
-                            self.logger.debug(f"已通過映射恢復視圖位置: {visible_item} -> {mapped_id}")
-                        else:
-                            # 嘗試3: 查找目標項目 ID
-                            target_id = operation.get('target_item_id')
-                            if target_id and self.tree.exists(target_id):
-                                self.tree_manager.select_and_see(target_id)
-                                self.tree_manager.set_selection(target_id)
-                                self.logger.debug(f"已恢復視圖位置至目標項目 {target_id}")
-                            else:
-                                # 嘗試4: 使用第一個項目
-                                all_items = self.tree_manager.get_all_items()
-                                if all_items:
-                                    self.tree_manager.select_and_see(all_items[0])
-                                    self.tree_manager.set_selection(all_items[0])
-                                    self.logger.debug(f"無法找到原始項目，已恢復視圖位置至第一個項目 {all_items[0]}")
-                                else:
-                                    self.logger.warning("無法恢復視圖位置：樹為空")
+                # 5. 恢復 SRT 數據
+                self._restore_srt_data(state)
 
-            # 11. 觸發狀態應用完成回調
+                # 6. 恢復使用 Word 文本的標記
+                if 'use_word_text' in state:
+                    self.restore_use_word_flags(state['use_word_text'], id_mapping)
+                    self.logger.debug(f"已恢復 Word 文本標記，數量: {len(state['use_word_text'])}")
+
+                # 7. 恢復校正狀態
+                if correction_state and hasattr(self, 'correction_service'):
+                    self.correction_service.deserialize_state(correction_state, id_mapping)
+                    self.logger.debug("已恢復校正狀態")
+
+                # 8. 更新音頻段落
+                self._update_audio_segments()
+
+            # 恢復視圖位置
+            self._restore_view_position(visible_item, id_mapping, operation)
+
+            # 觸發狀態應用完成回調
             if hasattr(self, 'state_manager'):
                 self.state_manager.trigger_callback('on_state_applied')
 
-            # 12. 更新狀態欄
+            # 更新狀態欄
             op_desc = "恢復狀態"
             if operation and 'description' in operation:
                 op_desc = operation['description']
             self.update_status(f"已{op_desc}")
             self.logger.debug(f"狀態應用完成: {op_desc}")
 
-            # 13. 強制更新界面
+            # 強制更新界面
             self.master.update_idletasks()
 
+            return True
         except Exception as e:
             self.logger.error(f"應用狀態時出錯: {e}", exc_info=True)
             show_error("錯誤", f"恢復狀態失敗: {str(e)}", self.master)
+            return False
+
+    def _restore_tree_items(self, state, id_mapping):
+        """恢復樹狀視圖項目"""
+        new_items = []  # 收集新的項目 ID
+        if 'tree_items' in state:
+            for item_data in state['tree_items']:
+                values = item_data.get('values', [])
+                position = item_data.get('position', 'end')
+                tags = item_data.get('tags')
+                original_id = item_data.get('original_id')  # 原始項目 ID
+
+                # 插入項目
+                new_id = self.insert_item('', position, values=tuple(values))
+                new_items.append(new_id)
+
+                # 保存 ID 映射
+                if original_id:
+                    id_mapping[original_id] = new_id
+
+                # 恢復標籤
+                if tags:
+                    self.tree.item(new_id, tags=tags)
+
+            self.logger.debug(f"已恢復樹狀視圖，項目數: {len(state['tree_items'])}")
+
+    def _restore_srt_data(self, state):
+        """恢復 SRT 數據"""
+        if 'srt_data' in state and state['srt_data']:
+            self.restore_srt_data(state['srt_data'])
+            self.logger.debug(f"已恢復 SRT 數據，項目數: {len(state['srt_data'])}")
+        else:
+            # 如果沒有 SRT 數據，從樹狀視圖重建
+            self.update_srt_data_from_treeview()
+            self.logger.debug("從樹狀視圖重建 SRT 數據")
+
+    def _update_audio_segments(self):
+        """更新音頻段落"""
+        if self.audio_imported and hasattr(self, 'audio_player'):
+            self.audio_player.segment_audio(self.srt_data)
+            self.logger.debug("已更新音頻段落")
 
     def on_state_change(self):
         """狀態變更事件處理"""
+        # 添加保護標記
+        if hasattr(self, '_handling_state_change') and self._handling_state_change:
+            return
+
         try:
+            self._handling_state_change = True
             # 更新撤銷/重做按鈕狀態
             self.update_undo_redo_buttons()
             self.update_status("狀態已更新")
-        except Exception as e:
-            self.logger.error(f"處理狀態變更事件時出錯: {e}")
+        finally:
+            self._handling_state_change = False
 
     def update_undo_redo_buttons(self):
         """更新撤銷/重做按鈕狀態"""
@@ -4503,177 +3898,26 @@ class AlignmentGUI(BaseWindow):
     def on_redo_state(self, state, correction_state, operation):
         """
         重做狀態回調處理
-
-        Args:
-            state: 要恢復的狀態
-            correction_state: 校正狀態
-            operation: 操作信息
         """
         try:
-            op_type = operation.get('type', '')
-            self.logger.debug(f"執行重做操作: {op_type} - {operation.get('description', '未知操作')}")
+            self.logger.debug(f"執行重做操作: {operation.get('type', '')} - {operation.get('description', '未知操作')}")
 
-            # 應用狀態
-            self.apply_state(state, correction_state, operation)
-
-            # 更新 SRT 數據
-            self.update_srt_data_from_treeview()
-
-            # 如果有音頻，更新音頻段落
-            if self.audio_imported and hasattr(self, 'audio_player'):
-                self.audio_player.segment_audio(self.srt_data)
+            # 直接執行狀態恢復邏輯，而不是調用 apply_state
+            # 這裡實現核心邏輯，與 apply_state 類似但不調用它
+            self._apply_state_internal(state, correction_state, operation)
 
             self.update_status(f"已重做：{operation.get('description', '未知操作')}")
-            # 強制更新界面
-            self.master.update_idletasks()
+
         except Exception as e:
             self.logger.error(f"重做狀態時出錯: {e}", exc_info=True)
             show_error("錯誤", f"重做操作失敗: {str(e)}", self.master)
-    def restore_from_split_operation(self, operation):
-        """從拆分操作恢復狀態 - 基於完整原始狀態的復原"""
-        try:
-            # 清除當前狀態
-            self.clear_current_treeview()
-
-            # 1. 從保存的原始樹狀態還原
-            if 'original_tree_state' in operation:
-                original_items = operation.get('original_tree_state', [])
-                # 按照原始順序重建樹狀視圖
-                for item_info in original_items:
-                    values = item_info.get('values', [])
-                    position = item_info.get('position', 0)
-                    tags = item_info.get('tags')
-                    use_word = item_info.get('use_word', False)
-
-                    # 插入項目
-                    new_id = self.insert_item('', position, values=tuple(values))
-
-                    # 恢復標籤
-                    if tags:
-                        self.tree.item(new_id, tags=tags)
-
-                    # 恢復使用 Word 文本標記
-                    if use_word:
-                        self.use_word_text[new_id] = True
-
-            # 2. 從保存的原始 SRT 數據還原
-            if 'original_srt_data' in operation:
-                self.srt_data = pysrt.SubRipFile()
-                for item in operation.get('original_srt_data', []):
-                    sub = pysrt.SubRipItem(
-                        index=item['index'],
-                        start=parse_time(item['start']),
-                        end=parse_time(item['end']),
-                        text=item['text']
-                    )
-                    self.srt_data.append(sub)
-
-            # 3. 還原校正狀態
-            if 'original_correction_state' in operation:
-                original_correction = operation.get('original_correction_state')
-                if hasattr(self, 'correction_service') and original_correction:
-                    self.correction_service.clear_correction_states()
-                    self.correction_service.deserialize_state(original_correction)
-
-            # 4. 更新界面狀態
-            self.update_status("已撤銷拆分操作")
-
-            # 5. 如果有音頻，更新音頻段落
-            if self.audio_imported and hasattr(self, 'audio_player'):
-                self.audio_player.segment_audio(self.srt_data)
-
-        except Exception as e:
-            self.logger.error(f"從拆分操作恢復狀態時出錯: {e}", exc_info=True)
-            # 嘗試普通恢復作為備選方案
-            try:
-                if 'original_srt_data' in operation:
-                    # 通過 SRT 數據重建界面
-                    self.rebuild_from_srt_data(operation.get('original_srt_data', []))
-                else:
-                    show_error("錯誤", "無法執行撤銷操作: 找不到原始數據", self.master)
-            except Exception as e2:
-                self.logger.error(f"備選恢復方案也失敗: {e2}", exc_info=True)
-                show_error("錯誤", f"撤銷操作徹底失敗: {str(e2)}", self.master)
-
-    def rebuild_from_srt_data(self, srt_data_list):
-        """從 SRT 數據列表重建界面"""
-        try:
-            # 清除當前樹狀視圖
-            self.clear_current_treeview()
-
-            # 重建 SRT 數據
-            self.srt_data = pysrt.SubRipFile()
-            for item in srt_data_list:
-                sub = pysrt.SubRipItem(
-                    index=item['index'],
-                    start=parse_time(item['start']),
-                    end=parse_time(item['end']),
-                    text=item['text']
-                )
-                self.srt_data.append(sub)
-
-            # 重建樹狀視圖
-            self.refresh_treeview_from_srt()
-
-            # 更新音頻段落
-            if self.audio_imported and hasattr(self, 'audio_player'):
-                self.audio_player.segment_audio(self.srt_data)
-
-            self.logger.debug("已從 SRT 數據重建界面")
-        except Exception as e:
-            self.logger.error(f"從 SRT 數據重建界面時出錯: {e}")
-            raise
-
-    def refresh_treeview_from_srt(self):
-        """從 SRT 數據重新填充樹狀視圖"""
-        try:
-            # 確保樹狀視圖已清空
-            self.tree_manager.clear_all()
-
-            # 載入校正數據
-            corrections = self.load_corrections()
-
-            # 從 SRT 數據填充樹狀視圖
-            for sub in self.srt_data:
-                # 檢查文本是否需要校正
-                needs_correction, corrected_text, original_text, _ = self.correction_service.check_text_for_correction(sub.text)
-
-                # 創建樹項目的值
-                values = self.create_tree_item_values_from_sub(sub, needs_correction)
-
-                # 插入到樹狀視圖
-                item_id = self.insert_item('', 'end', values=tuple(values))
-
-                # 如果需要校正，設置校正狀態
-                if needs_correction:
-                    self.correction_service.set_correction_state(
-                        str(sub.index),
-                        original_text,
-                        corrected_text,
-                        'correct'  # 默認為已校正狀態
-                    )
-
-            self.logger.debug(f"樹狀視圖從 SRT 數據重建完成，項目數: {len(self.srt_data)}")
-        except Exception as e:
-            self.logger.error(f"從 SRT 數據重新填充樹狀視圖時出錯: {e}")
-            raise
-
 
     def clear_current_treeview(self):
-        """徹底清除當前樹狀視圖及相關狀態"""
+        """清除當前樹狀視圖 - 簡化版，僅清除樹狀視圖項目"""
         try:
             # 清除樹狀視圖項目
             self.tree_manager.clear_all()
-
-            # 清除使用 Word 文本的標記
-            if hasattr(self, 'use_word_text'):
-                self.use_word_text.clear()
-
-            # 清除校正狀態
-            if hasattr(self, 'correction_service'):
-                self.correction_service.clear_correction_states()
-
-            self.logger.debug("已清除當前樹狀視圖和相關狀態")
+            self.logger.debug("已清除當前樹狀視圖")
         except Exception as e:
             self.logger.error(f"清除樹狀視圖時出錯: {e}")
 
@@ -4714,7 +3958,7 @@ class AlignmentGUI(BaseWindow):
                 self.logger.debug(f"保存初始狀態，樹項目數: {len(self.tree_manager.get_all_items())}")
 
                 # 保存狀態
-                self.state_manager.save_state(current_state, {
+                self.save_operation_state(current_state, {
                     'type': 'initial',
                     'description': '初始狀態'
                 }, correction_state)
@@ -4955,15 +4199,16 @@ class AlignmentGUI(BaseWindow):
             self.logger.error(f"重做合併操作時出錯: {e}", exc_info=True)
             return False
 
+    # 在 AlignmentGUI 類中保留這個統一的接口
     def save_operation_state(self, operation_type, operation_description, additional_info=None):
         """
         統一保存操作狀態的方法 - 透過狀態管理器
         """
-        if not hasattr(self, 'state_manager'):
-            self.logger.warning("無法保存操作狀態：狀態管理器未初始化")
+        if hasattr(self, '_saving_state') and self._saving_state:
             return
 
         try:
+            self._saving_state = True
             # 獲取當前完整狀態
             current_state = self.get_current_state()
 
@@ -4987,16 +4232,14 @@ class AlignmentGUI(BaseWindow):
                     if key not in operation_info:
                         operation_info[key] = value
 
-            # 保存狀態前添加診斷日誌
-            self.logger.debug(f"正在保存狀態，操作類型: {operation_type}, 狀態管理器狀態數: {len(self.state_manager.states)}")
-
             # 保存狀態
-            self.state_manager.save_state(current_state, operation_info, correction_state)
+            self.save_operation_state(current_state, operation_info, correction_state)
 
             # 保存後再次診斷
             self.logger.debug(f"狀態已保存，當前狀態索引: {self.state_manager.current_index}, 總狀態數: {len(self.state_manager.states)}")
-        except Exception as e:
-            self.logger.error(f"保存操作狀態時出錯: {e}", exc_info=True)
+
+        finally:
+            self._saving_state = False
 
     def _get_appropriate_display_mode(self):
         """根據已匯入的檔案類型確定適當的顯示模式"""
@@ -5088,7 +4331,7 @@ class AlignmentGUI(BaseWindow):
 
             # 恢復數據到樹狀視圖
             old_mode = "any"  # 使用通用模式檢測
-            self.restore_tree_data_with_mode(current_data, old_mode, self.display_mode)
+            self.restore_tree_data(current_data, old_mode, self.display_mode)
 
             # 綁定窗口大小變化事件
             self.master.bind("<Configure>", self.on_window_resize)
@@ -5102,73 +4345,6 @@ class AlignmentGUI(BaseWindow):
         except Exception as e:
             self.logger.error(f"刷新 Treeview 結構時出錯: {e}", exc_info=True)
             show_error("錯誤", f"更新顯示結構失敗: {str(e)}", self.master)
-
-    def restore_tree_data_with_mode(self, data, source_mode, target_mode):
-        """
-        根據指定的源模式和目標模式恢復樹狀視圖數據
-        :param data: 之前保存的數據列表
-        :param source_mode: 源模式
-        :param target_mode: 目標模式
-        """
-        try:
-            # 清空當前樹狀視圖
-            self.tree_manager.clear_all()
-
-            # 清空校正狀態
-            self.correction_service.clear_correction_states()
-
-            # 逐項恢復數據
-            for item_data in data:
-                values = item_data.get('values', [])
-
-                # 調整值以適應新的顯示模式
-                adjusted_values = self.adjust_values_for_mode(values, source_mode, target_mode)
-
-                # 插入新項目
-                item_id = self.insert_item('', 'end', values=tuple(adjusted_values))
-
-                # 恢復標籤
-                tags = item_data.get('tags')
-                if tags:
-                    self.tree.item(item_id, tags=tags)
-
-                # 恢復 use_word_text 狀態
-                use_word = item_data.get('use_word', False)
-                if use_word:
-                    self.use_word_text[item_id] = True
-
-                    # 確保標籤中有 use_word_text
-                    current_tags = list(self.tree.item(item_id, "tags") or ())
-                    if "use_word_text" not in current_tags:
-                        current_tags.append("use_word_text")
-                        self.tree.item(item_id, tags=tuple(current_tags))
-
-                # 恢復校正狀態
-                correction = item_data.get('correction')
-                if correction:
-                    # 確定新的索引位置
-                    if target_mode in [self.DISPLAY_MODE_ALL, self.DISPLAY_MODE_AUDIO_SRT]:
-                        idx = str(adjusted_values[1]) if len(adjusted_values) > 1 else ""
-                    else:
-                        idx = str(adjusted_values[0]) if adjusted_values else ""
-
-                    if idx and 'state' in correction:
-                        # 恢復校正狀態
-                        self.correction_service.set_correction_state(
-                            idx,
-                            correction.get('original', ''),
-                            correction.get('corrected', ''),
-                            correction.get('state', 'correct')
-                        )
-
-            # 設置樣式
-            self.tree.tag_configure('mismatch', background='#FFDDDD')  # 淺紅色背景標記不匹配項目
-            self.tree.tag_configure('use_word_text', background='#00BFFF')  # 淺藍色背景標記使用 Word 文本的項目
-
-            self.logger.info(f"已從 {source_mode} 模式恢復 {len(data)} 個項目的數據到 {target_mode} 模式")
-
-        except Exception as e:
-            self.logger.error(f"恢復樹狀視圖數據時出錯: {e}", exc_info=True)
 
     def on_window_resize(self, event=None) -> None:
         """
@@ -5440,34 +4616,39 @@ class AlignmentGUI(BaseWindow):
         return result
 
     def clear_current_data(self) -> None:
-        """清除當前數據"""
+        """統一的數據清理函數 - 清除所有數據和狀態"""
         try:
+            self.logger.debug("開始清除所有數據和狀態")
+
+            # 1. 清除狀態管理器的狀態
             if hasattr(self, 'state_manager'):
                 self.state_manager.clear_states()
 
+            # 2. 清除樹狀視圖的所有項目
             if hasattr(self, 'tree'):
                 self.tree_manager.clear_all()
 
+            # 3. 清除校正狀態
             if hasattr(self, 'correction_service'):
                 self.correction_service.clear_correction_states()
 
-            # 清除使用 Word 文本的標記
+            # 4. 清除使用 Word 文本的標記
             if hasattr(self, 'use_word_text'):
                 self.use_word_text.clear()
 
-            # 清除編輯文本信息
+            # 5. 清除編輯文本信息
             if hasattr(self, 'edited_text_info'):
                 self.edited_text_info.clear()
 
-            # 清除 Word 比對結果
+            # 6. 清除 Word 比對結果
             if hasattr(self, 'word_comparison_results'):
                 self.word_comparison_results = {}
 
-            # 清除檔案狀態 - 使用 FileManager 進行清理
+            # 7. 清除檔案狀態 - 使用 FileManager 進行清理
             if hasattr(self, 'file_manager'):
                 self.file_manager.clear_file_status()
 
-            # 同步本地狀態變數
+            # 8. 同步本地狀態變數
             self.srt_imported = False
             self.audio_imported = False
             self.word_imported = False
@@ -5476,24 +4657,26 @@ class AlignmentGUI(BaseWindow):
             self.word_file_path = None
             self.srt_data = []
 
-            # 清理音頻資源
+            # 9. 清理音頻資源
             if hasattr(self, 'audio_player'):
                 self.audio_player.cleanup()
 
-            # 重置顯示模式
+            # 10. 重置顯示模式
             self.display_mode = self.DISPLAY_MODE_SRT
 
-            # 確保介面一致
+            # 11. 確保介面一致
             self.refresh_treeview_structure()
             self.update_file_info()
             self.update_status("已清除所有數據")
+
+            self.logger.debug("所有數據清理完成")
 
         except Exception as e:
             self.logger.error(f"清除數據時出錯: {e}")
             show_error("錯誤", f"清除數據失敗: {str(e)}", self.master)
 
     def clear_current_state(self):
-        """徹底清除當前狀態"""
+        """清除當前狀態 - 樹狀視圖和相關狀態"""
         try:
             # 在清除前記錄當前狀態
             tree_items_count = len(self.tree_manager.get_all_items() if hasattr(self, 'tree') else [])
@@ -5882,73 +5065,24 @@ class AlignmentGUI(BaseWindow):
 
     def update_correction_display(self):
         """更新校正顯示，並立即應用校正"""
-        # 添加遞歸保護
-        if hasattr(self, '_updating_correction_display') and self._updating_correction_display:
-            return
-
         try:
-            self._updating_correction_display = True
-            # 獲取所有校正規則
-            corrections = self.load_corrections()
-            if not corrections:
+            # 檢查所需組件是否可用
+            if not hasattr(self, 'tree') or not hasattr(self, 'correction_service'):
+                self.logger.warning("無法更新校正狀態顯示：所需組件不可用")
                 return
 
-            # 需要更新 SRT 數據的標記
-            srt_data_updated = False
+            # 直接調用 correction_service 的方法
+            self.correction_service.update_display_status(self.tree, self.display_mode)
 
-            # 遍歷所有項目
-            for item in self.tree_manager.get_all_items():
-                values = list(self.tree.item(item, "values"))
+            # 更新 SRT 數據以反映變化
+            self.update_srt_data_from_treeview()
 
-                # 獲取文本列索引
-                text_index = self.get_text_position_in_values()
-                if text_index is None or text_index >= len(values):
-                    continue
+            # 如果有音頻，更新音頻段落
+            if self.audio_imported and hasattr(self, 'audio_player'):
+                self.audio_player.segment_audio(self.srt_data)
 
-                # 獲取索引列索引
-                if self.display_mode in [self.DISPLAY_MODE_ALL, self.DISPLAY_MODE_AUDIO_SRT]:
-                    index_col = 1
-                else:  # SRT 或 SRT_WORD 模式
-                    index_col = 0
+            # 更新狀態欄
+            self.update_status("已應用最新校正規則")
 
-                item_index = str(values[index_col]) if len(values) > index_col else ""
-                current_text = values[text_index]
-
-                # 檢查文本是否需要校正
-                needs_correction, corrected_text, original_text, _ = self.correction_service.check_text_for_correction(current_text)
-
-                # 如果需要校正，更新顯示和校正狀態
-                if needs_correction:
-                    # 設置校正狀態
-                    self.correction_service.set_correction_state(
-                        item_index,
-                        original_text,
-                        corrected_text,
-                        'correct'  # 默認為已校正狀態
-                    )
-
-                    # 更新 V/X 列
-                    values[-1] = '✅'
-
-                    # 關鍵：更新文本為校正後的內容
-                    values[text_index] = corrected_text
-
-                    # 更新項目
-                    self.tree_manager.update_item(item, values=tuple(values))
-
-                    # 標記 SRT 數據需要更新
-                    srt_data_updated = True
-
-            # 如果有校正更新，更新 SRT 數據和音頻段落
-            if srt_data_updated:
-                self.update_srt_data_from_treeview()
-
-                # 如果有音頻，更新音頻段落
-                if self.audio_imported and hasattr(self, 'audio_player'):
-                    self.audio_player.segment_audio(self.srt_data)
-
-                # 更新狀態欄
-                self.update_status("已應用最新校正規則")
-
-        finally:
-            self._updating_correction_display = False
+        except Exception as e:
+            self.logger.error(f"更新校正狀態顯示時出錯: {e}", exc_info=True)
