@@ -72,6 +72,7 @@ class ApplicationManager:
             logger.error(f"資料庫初始化失敗: {e}", exc_info=True)
             raise
 
+
     def init_correction_tool(self, project_path: str) -> bool:
         """
         初始化並運行文字校正工具

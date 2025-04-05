@@ -21,19 +21,25 @@ class ConfigManager:
         self.config_file = os.path.join(root_dir, config_file)
         self.config: Dict[str, Any] = {}
         self.logger = logging.getLogger(self.__class__.__name__)
+
+        # 輸出配置文件路徑，便於調試
+        self.logger.debug(f"配置文件路徑: {self.config_file}")
         self.load_config()
 
     def load_config(self) -> None:
         """載入配置文件"""
         try:
             if os.path.exists(self.config_file):
+                self.logger.debug(f"配置文件存在: {self.config_file}")
                 with open(self.config_file, 'r', encoding='utf-8') as f:
                     self.config = json.load(f)
+                    self.logger.debug(f"成功載入配置: {self.config}")
             else:
+                self.logger.warning(f"配置文件不存在，創建默認配置: {self.config_file}")
                 self.config = self.get_default_config()
                 self.save_config()
         except Exception as e:
-            self.logger.error(f"載入配置文件時出錯: {e}")
+            self.logger.error(f"載入配置文件時出錯: {e}", exc_info=True)
             self.config = self.get_default_config()
 
     def save_config(self) -> None:
@@ -84,9 +90,13 @@ class ConfigManager:
             keys = key.split('.')
             value = self.config
             for k in keys:
+                if k not in value:
+                    self.logger.debug(f"配置項不存在: {key}，返回默認值: {default}")
+                    return default
                 value = value[k]
             return value
         except (KeyError, TypeError):
+            self.logger.debug(f"取得配置值出錯: {key}，返回默認值: {default}")
             return default
 
     def set(self, key: str, value: Any) -> None:

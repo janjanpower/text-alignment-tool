@@ -1,6 +1,8 @@
 """登入視窗類別模組"""
 
 import datetime
+import json
+import os
 import tkinter as tk
 from tkinter import ttk
 import logging
@@ -10,6 +12,8 @@ from gui.custom_messagebox import show_info, show_warning, show_error
 from database.db_manager import DatabaseManager
 from database.models import User
 from gui.project_manager import ProjectManager
+from utils.font_manager import FontManager
+from services.config_manager import ConfigManager
 
 class LoginWindow(BaseWindow):
     """登入視窗類別"""
@@ -18,13 +22,34 @@ class LoginWindow(BaseWindow):
         """初始化登入視窗"""
         super().__init__(title="文本對齊工具 - 登入", width=400, height=300, master=master)
 
+        # 確保字型管理器存在
+        if not hasattr(self, 'font_manager'):
+            self.font_manager = FontManager(self.config if hasattr(self, 'config') else None)
+
         # 初始化資料庫連接
         self.db_manager = DatabaseManager()
         self.db_session = self.db_manager.get_session()
         self.current_user = None
 
+        # 設置記住帳號變數（記得先初始化這個變數）
+        self.remember_var = tk.BooleanVar(value=False)
+        self.config = ConfigManager()
+
         # 創建登入介面
         self.create_login_interface()
+
+        # 應用字型設定
+        self.apply_font_settings()
+
+    def apply_font_settings(self):
+        """應用字型設定到所有控制項"""
+        try:
+            for widget in self.main_frame.winfo_children():
+                if isinstance(widget, (tk.Label, ttk.Label, tk.Button, ttk.Button,
+                                      tk.Entry, ttk.Entry)):
+                    self.font_manager.apply_to_widget(widget)
+        except Exception as e:
+            self.logger.error(f"應用字型設定時出錯: {e}")
 
     def create_login_interface(self):
         """創建登入介面"""
@@ -33,34 +58,57 @@ class LoginWindow(BaseWindow):
         main_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=20)
 
         # 標題
-        title_label = ttk.Label(main_frame, text="登入系統", font=("Arial", 16))
+        title_label = ttk.Label(main_frame, text="歡迎使用文本系統", font=("Arial", 13))
         title_label.pack(pady=(0, 20))
 
         # 使用者名稱輸入框
         username_frame = ttk.Frame(main_frame)
-        username_frame.pack(fill=tk.X, pady=5)
-        ttk.Label(username_frame, text="使用者名稱:").pack(side=tk.LEFT)
-        self.username_entry = ttk.Entry(username_frame)
-        self.username_entry.pack(side=tk.RIGHT, fill=tk.X, expand=True, padx=5)
+        username_frame.pack(pady=5)
+        username_label = ttk.Label(username_frame, text="帳號", width=6)
+        username_label.pack(side=tk.LEFT)
+        username_container = ttk.Frame(username_frame)  # 新增一個容器來控制輸入框寬度
+        username_container.pack(side=tk.LEFT, fill=tk.X,  padx=5)
+        self.username_entry = ttk.Entry(username_container, width=25)  # 設定固定寬度
+        self.username_entry.pack(fill=tk.X)
 
         # 密碼輸入框
         password_frame = ttk.Frame(main_frame)
-        password_frame.pack(fill=tk.X, pady=5)
-        ttk.Label(password_frame, text="密碼:").pack(side=tk.LEFT)
-        self.password_entry = ttk.Entry(password_frame, show="*")
-        self.password_entry.pack(side=tk.RIGHT, fill=tk.X, expand=True, padx=5)
+        password_frame.pack(pady=5)
+        password_label = ttk.Label(password_frame, text="密碼", width=6)
+        password_label.pack(side=tk.LEFT)
+        password_container = ttk.Frame(password_frame)  # 新增一個容器來控制輸入框寬度
+        password_container.pack(side=tk.LEFT, fill=tk.X,  padx=5)
+        self.password_entry = ttk.Entry(password_container, show="*", width=25)  # 設定固定寬度
+        self.password_entry.pack(fill=tk.X)
+
+        # 記住帳號勾選框
+        self.remember_var = tk.BooleanVar(value=False)
+        remember_frame = ttk.Frame(main_frame)
+        remember_frame.pack(fill=tk.X, pady=5)
+        remember_checkbox = ttk.Checkbutton(
+            remember_frame,
+            text="記住帳號",
+            variable=self.remember_var,
+            onvalue=True,
+            offvalue=False
+        )
+        remember_checkbox.pack(side=tk.LEFT, padx=(52, 0))  # 與左側標籤對齊
 
         # 按鈕框架
         button_frame = ttk.Frame(main_frame)
         button_frame.pack(fill=tk.X, pady=(20, 0))
 
+        # 內部按鈕容器，用於置中按鈕
+        inner_button_frame = ttk.Frame(button_frame)
+        inner_button_frame.pack(anchor=tk.CENTER)
+
         # 登入按鈕
-        login_button = ttk.Button(button_frame, text="登入", command=self.login)
-        login_button.pack(side=tk.RIGHT, padx=5)
+        login_button = ttk.Button(inner_button_frame, text="登入", command=self.login, width=10)
+        login_button.pack(side=tk.LEFT, padx=5)
 
         # 註冊按鈕
-        register_button = ttk.Button(button_frame, text="註冊", command=self.show_register)
-        register_button.pack(side=tk.RIGHT, padx=5)
+        register_button = ttk.Button(inner_button_frame, text="註冊", command=self.show_register, width=10)
+        register_button.pack(side=tk.LEFT, padx=5)
 
         # 設置焦點和綁定 Enter 鍵
         self.username_entry.focus_set()
@@ -69,6 +117,61 @@ class LoginWindow(BaseWindow):
 
         # 在初始化時重置所有用戶的登入狀態
         self.reset_all_login_states()
+
+    def load_saved_username(self):
+        """載入保存的帳號"""
+        try:
+            # 獲取專案根目錄
+            root_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            saved_file = os.path.join(root_dir, "saved_account.json")
+
+            # 如果文件存在，讀取內容
+            if os.path.exists(saved_file):
+                with open(saved_file, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                    saved_username = data.get('username', '')
+                    remember = data.get('remember', False)
+
+                    if remember and saved_username:
+                        self.username_entry.delete(0, tk.END)
+                        self.username_entry.insert(0, saved_username)
+                        self.remember_var.set(True)
+                        self.logger.info(f"已載入保存的帳號: {saved_username}")
+                    else:
+                        self.remember_var.set(False)
+            else:
+                self.logger.debug("沒有找到保存的帳號文件")
+                self.remember_var.set(False)
+
+        except Exception as e:
+            self.logger.error(f"載入保存的帳號時出錯: {e}", exc_info=True)
+            # 發生錯誤時不要影響登入流程
+            self.remember_var.set(False)
+
+    def save_username(self, username):
+        """保存帳號"""
+        try:
+            # 獲取專案根目錄
+            root_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            saved_file = os.path.join(root_dir, "saved_account.json")
+
+            # 獲取勾選框的值
+            remember = self.remember_var.get()
+
+            # 創建要保存的數據
+            data = {
+                'username': username if remember else '',
+                'remember': remember
+            }
+
+            # 保存到文件
+            with open(saved_file, 'w', encoding='utf-8') as f:
+                json.dump(data, f, ensure_ascii=False, indent=4)
+
+            self.logger.info(f"已保存帳號設置: 用戶名={username if remember else '(已清除)'}, 記住={remember}")
+
+        except Exception as e:
+            self.logger.error(f"保存帳號時出錯: {e}", exc_info=True)
 
     def reset_all_login_states(self):
         """重置所有用戶的登入狀態"""
@@ -130,6 +233,11 @@ class LoginWindow(BaseWindow):
                         show_warning("付費提示", "您的付費已過期，請重新付費後再登入。", self.master)
                         self.logger.info(f"用戶 {username} 的付費已過期")
                         return
+
+                # 保存帳號（在登入成功前先保存）
+                self.save_username(username)
+
+                self.logger.info(f"用戶 {username} 登入成功，記住帳號狀態: {self.remember_var.get()}")
 
                 # 登入成功
                 self.current_user = user

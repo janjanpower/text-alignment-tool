@@ -14,19 +14,21 @@
         "font_size": 12,
         "theme": "default"
     },
-
     "database": {
         "host": "localhost",
         "port": 5432,
         "username": "postgres",
         "password": "35035013",
         "database": "Text_Alignment_Tool"
-      },
+    },
     "recent_projects": [],
     "recent_files": [],
     "language": "zh_TW",
     "auto_save": true,
     "auto_save_interval": 300,
-    "max_undo_steps": 50
-
+    "max_undo_steps": 50,
+    "login": {
+        "remember_username": true,
+        "saved_username": "1"
+    }
 }

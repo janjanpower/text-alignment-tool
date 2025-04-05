@@ -1541,6 +1541,12 @@ class AlignmentGUI(BaseWindow):
         # 創建 Treeview
         self.tree = ttk.Treeview(self.result_frame)
 
+        # 設置 TreeView 字型
+        style = ttk.Style()
+        tree_font = self.font_manager.get_font(size=10)  # 顯式指定較小的字型大小
+        style.configure("Treeview", font=tree_font)
+        style.configure("Treeview.Heading", font=tree_font)
+
         # 初始化 TreeView 管理器
         self.tree_manager = TreeViewManager(self.tree)
 

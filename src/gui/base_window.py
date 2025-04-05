@@ -15,7 +15,7 @@ from typing import Optional, Callable
 
 
 from utils.resource_cleaner import ResourceCleaner
-
+from utils.font_manager import FontManager
 class BaseWindow:
     """基礎視窗類別，提供共用的視窗功能"""
 
@@ -37,6 +37,9 @@ class BaseWindow:
 
         # 設置日誌
         self.logger = logging.getLogger(self.__class__.__name__)
+
+        # 立即初始化字型管理器
+        self.font_manager = FontManager(self.config if hasattr(self, 'config') else None)
 
         # 保存視窗尺寸
         self.window_width = width
@@ -74,15 +77,33 @@ class BaseWindow:
         # 設置樣式
         self.setup_styles()
 
+        # 初始化字型管理器
+        self.font_manager = FontManager(self.config if hasattr(self, 'config') else None)
+
         # 統一設定關閉協議
         self.master.protocol("WM_DELETE_WINDOW", self._handle_close)
 
     def setup_styles(self) -> None:
         """設定通用樣式"""
         style = ttk.Style()
+        style.configure('Custom.TButton', padding=5, font=self.font_manager.get_font(size=9))
+
+        # 使用字型管理器設置樣式
+        self.font_manager.apply_to_style(style, 'Custom.TButton', size=10)
+        self.font_manager.apply_to_style(style, 'Custom.TLabel', size=10)
+
         style.configure('Custom.TButton', padding=5)
         style.configure('Custom.TFrame', background='#f0f0f0')
         style.configure('Custom.TLabel', background='#f0f0f0')
+
+        # 設定標題字型
+        title_font = self.font_manager.get_font(size=11)
+        self.title_label.configure(font=title_font)
+
+        # 設定按鈕字型
+        button_font = self.font_manager.get_font(size=10)
+        self.min_button.configure(font=button_font)
+        self.close_button.configure(font=button_font)
 
     def create_title_bar(self, title: str) -> None:
         """創建標題列"""
