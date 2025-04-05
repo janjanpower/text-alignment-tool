@@ -41,6 +41,9 @@ class LoginWindow(BaseWindow):
         # 應用字型設定
         self.apply_font_settings()
 
+        # 載入已保存的帳號
+        self.load_saved_username()
+
     def apply_font_settings(self):
         """應用字型設定到所有控制項"""
         try:
