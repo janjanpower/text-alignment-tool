@@ -9,29 +9,29 @@ from tkinter import ttk
 from typing import Dict, List, Optional, Any
 
 import pysrt
-from audio.audio_player import AudioPlayer
 from gui.base_window import BaseWindow
 from gui.components.columns import ColumnConfig
+from gui.components.gui_builder import GUIBuilder
+from gui.components.tree_view_manager import TreeViewManager
 from gui.custom_messagebox import (
     show_info,
     show_warning,
     show_error,
     ask_question
 )
+from gui.quick_correction_dialog import QuickCorrectionDialog
 from gui.text_edit_dialog import TextEditDialog
+from services.combine_service import CombineService
 from services.config_manager import ConfigManager
 from services.correction_service import CorrectionService
-from services.enhanced_state_manager import EnhancedStateManager, ApplicationState
-
+from services.enhanced_state_manager import EnhancedStateManager
 from services.file_manager import FileManager
+from services.split_service import SplitService
 from services.word_processor import WordProcessor
+from utils.image_manager import ImageManager
 from utils.text_utils import simplify_to_traditional
 from utils.time_utils import parse_time
-from gui.quick_correction_dialog import QuickCorrectionDialog
-from gui.components.tree_view_manager import TreeViewManager
-from gui.components.gui_builder import GUIBuilder
-from services.combine_service import CombineService
-from services.split_service import SplitService
+
 
 # 添加項目根目錄到路徑以確保絕對導入能正常工作
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -51,7 +51,7 @@ class AlignmentGUI(BaseWindow):
         super().__init__(
             title=window_config['title'],
             width=1000,
-            height=420,
+            height=500,
             master=master
         )
 
@@ -61,7 +61,11 @@ class AlignmentGUI(BaseWindow):
         # 設置日誌
         self.setup_logging()
 
-        # 創建界面元素
+        # 初始化圖片管理器
+
+        self.image_manager = ImageManager()
+
+        # 創建界面元素 (注意這裡的順序很重要)
         self.create_gui_elements()
 
         # 初始化校正服務
@@ -1498,27 +1502,174 @@ class AlignmentGUI(BaseWindow):
             self.gui_builder.update_file_info("尚未載入任何檔案")
 
     def create_toolbar(self) -> None:
-        """創建工具列"""
+        """創建工具列，使用圖片按鈕"""
         self.toolbar_frame = ttk.Frame(self.main_frame)
-        self.toolbar_frame.pack(fill=tk.X, padx=5, pady=5)
+        self.toolbar_frame.pack(fill=tk.X, padx=0, pady=0)
+
+        # 確保 PIL/Pillow 已安裝
+        try:
+            from PIL import Image, ImageTk
+        except ImportError:
+            self.logger.error("缺少 PIL/Pillow 庫，無法使用圖片按鈕，改用文字按鈕")
+            self.create_text_toolbar()
+            return
+
+        # 初始化圖片管理器
+        try:
+
+            self.image_manager = ImageManager()
+        except ImportError:
+            self.logger.error("無法導入 ImageManager，改用文字按鈕")
+            self.create_text_toolbar()
+            return
+
+        # 設置按鈕圖片尺寸（可根據需要調整）
+        button_width = 50  # 按鈕寬度
+        button_height = 50  # 按鈕高度
+
+        # 預載入所有按鈕圖片，指定尺寸
+        self.image_manager.load_button_images(width=button_width, height=button_height)
 
         # 定義工具列按鈕
         buttons = [
-            {"text": "載入 SRT", "command": self.load_srt, "width": 15},
-            {"text": "匯入音頻", "command": self.import_audio, "width": 15},
-            {"text": "載入 Word", "command": self.import_word_document, "width": 15},
-            {"text": "重新比對", "command": self.compare_word_with_srt, "width": 15},
-            {"text": "調整時間", "command": self.align_end_times, "width": 15},
-            {"text": "匯出 SRT", "command": lambda: self.export_srt(from_toolbar=True), "width": 15}
+            {"id": "load_srt", "command": self.load_srt, "tooltip": "載入 SRT 檔案"},
+            {"id": "import_audio", "command": self.import_audio, "tooltip": "匯入音頻檔案"},
+            {"id": "load_word", "command": self.import_word_document, "tooltip": "載入 Word 檔案"},
+            {"id": "adjust_time", "command": self.align_end_times, "tooltip": "調整時間軸"},
+            {"id": "export_srt", "command": lambda: self.export_srt(from_toolbar=True), "tooltip": "匯出 SRT 檔案"}
         ]
 
-        self.gui_builder.create_toolbar(self.toolbar_frame, buttons)
+        # 創建工具列按鈕
+        self.toolbar_buttons = {}
+        for btn_info in buttons:
+            self.create_image_button(btn_info, width=button_width, height=button_height)
+
+    def create_image_button(self, btn_info, width=None, height=None):
+        """
+        創建圖片按鈕
+        :param btn_info: 按鈕信息
+        :param width: 按鈕寬度
+        :param height: 按鈕高度
+        """
+        button_id = btn_info["id"]
+        command = btn_info["command"]
+        tooltip = btn_info.get("tooltip", "")
+
+        # 獲取按鈕圖片
+        normal_img, pressed_img = self.image_manager.get_button_images(button_id, width, height)
+        if not normal_img or not pressed_img:
+            self.logger.error(f"無法加載按鈕圖片: {button_id}")
+            # 如果加載失敗，創建文字按鈕作為備選
+            btn = ttk.Button(self.toolbar_frame, text=tooltip, command=command, width=15)
+            btn.pack(side=tk.LEFT, padx=5)
+            self.toolbar_buttons[button_id] = btn
+            return
+
+        # 創建按鈕框架
+        btn_frame = ttk.Frame(self.toolbar_frame)
+        btn_frame.pack(side=tk.LEFT, padx=5)
+
+        # 創建標籤按鈕 (使用 Label 而不是 Button，以便自定義按下行為)
+        btn = tk.Label(
+            btn_frame,
+            image=normal_img,
+            cursor="hand2"
+        )
+        btn.normal_image = normal_img  # 保存引用以避免垃圾回收
+        btn.pressed_image = pressed_img  # 保存引用以避免垃圾回收
+        btn.pack()
+
+        # 儲存原始命令
+        btn.command = command
+
+        # 只綁定按下和釋放事件
+        btn.bind("<ButtonPress-1>", lambda e, b=btn: self._on_button_press(e, b))
+        btn.bind("<ButtonRelease-1>", lambda e, b=btn: self._on_button_release(e, b))
+
+        # 儲存按鈕引用
+        self.toolbar_buttons[button_id] = btn
+
+        # 添加提示文字
+        if tooltip:
+            self._create_tooltip(btn, tooltip)
+
+    def _on_button_press(self, event, button):
+        """滑鼠按下按鈕事件處理"""
+        if hasattr(button, 'pressed_image'):
+            button.configure(image=button.pressed_image)
+            # 保存按下的位置
+            button.press_x = event.x
+            button.press_y = event.y
+
+    def _on_button_release(self, event, button):
+        """滑鼠釋放按鈕事件處理"""
+        if hasattr(button, 'normal_image'):
+            button.configure(image=button.normal_image)
+
+            # 判斷釋放是否在按鈕範圍內
+            if hasattr(button, 'press_x') and hasattr(button, 'press_y'):
+                # 檢查滑鼠是否仍在按鈕上
+                if (0 <= event.x <= button.winfo_width() and
+                    0 <= event.y <= button.winfo_height()):
+                    # 在按鈕上釋放，執行命令
+                    if hasattr(button, 'command') and callable(button.command):
+                        button.command()
+
+    def _on_button_click(self, event, button):
+        """按鈕點擊事件處理"""
+        if hasattr(button, 'command') and callable(button.command):
+            button.command()
+
+    def create_text_toolbar(self):
+        """創建文字按鈕工具列（備選方案）"""
+        # 定義工具列按鈕
+        buttons = [
+            {"text": "載入 SRT", "command": self.load_srt, "width": 0},
+            {"text": "匯入音頻", "command": self.import_audio, "width": 0},
+            {"text": "載入 Word", "command": self.import_word_document, "width": 0},
+            {"text": "調整時間", "command": self.align_end_times, "width": 0},
+            {"text": "匯出 SRT", "command": lambda: self.export_srt(from_toolbar=True), "width": 0}
+        ]
+
+        self.toolbar_buttons = {}
+        for i, btn_info in enumerate(buttons):
+            btn = ttk.Button(
+                self.toolbar_frame,
+                text=btn_info["text"],
+                command=btn_info["command"],
+                width=btn_info["width"]
+            )
+            btn.pack(side=tk.LEFT, padx=3)
+            self.toolbar_buttons[f"button_{i}"] = btn
+
+    def _create_tooltip(self, widget, text):
+        """為控件創建提示文字"""
+        def enter(event):
+            x, y, _, _ = widget.bbox("insert")
+            x += widget.winfo_rootx() + 0
+            y += widget.winfo_rooty() + 60
+
+            # 創建提示框
+            self.tooltip = tk.Toplevel(widget)
+            self.tooltip.wm_overrideredirect(True)
+            self.tooltip.wm_geometry(f"+{x}+{y}")
+
+            label = ttk.Label(self.tooltip, text=text, background="#ffffe0", relief="solid", borderwidth=3 , padding=(5,2))
+            label.pack()
+
+        def leave(event):
+            if hasattr(self, 'tooltip'):
+                self.tooltip.destroy()
+                delattr(self, 'tooltip')
+
+        widget.bind("<Enter>", enter)
+        widget.bind("<Leave>", leave)
 
     def create_main_content(self) -> None:
         """創建主要內容區域"""
         # 建立內容框架
         self.content_frame = ttk.Frame(self.main_frame)
-        self.content_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+        self.content_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=(2,3))
 
         # 使用 GUI 建構器創建內容容器
         container = self.gui_builder.create_main_content(self.content_frame)

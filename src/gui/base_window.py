@@ -107,7 +107,7 @@ class BaseWindow:
 
     def create_title_bar(self, title: str) -> None:
         """創建標題列"""
-        self.title_bar = tk.Frame(self.master, bg='#404040', height=30)
+        self.title_bar = tk.Frame(self.master, bg='#334D6D', height=30)
         self.title_bar.pack(fill=tk.X)
         self.title_bar.pack_propagate(False)
 
@@ -116,7 +116,7 @@ class BaseWindow:
         if os.path.exists(icon_path):
             try:
                 self.icon = tk.PhotoImage(file=icon_path)
-                icon_label = tk.Label(self.title_bar, image=self.icon, bg='#404040')
+                icon_label = tk.Label(self.title_bar, image=self.icon, bg='#334D6D')
                 icon_label.pack(side=tk.LEFT, padx=5)
                 self._bind_drag(icon_label)
             except Exception as e:
@@ -126,7 +126,7 @@ class BaseWindow:
         self.title_label = tk.Label(
             self.title_bar,
             text=title,
-            bg='#404040',
+            bg='#334D6D',
             fg='white',
             font=('Arial', 10)
         )
@@ -134,7 +134,7 @@ class BaseWindow:
         self._bind_drag(self.title_label)
 
         # 控制按鈕框架
-        btn_frame = tk.Frame(self.title_bar, bg='#404040')
+        btn_frame = tk.Frame(self.title_bar, bg='#334D6D')
         btn_frame.pack(side=tk.RIGHT)
 
         # 最小化按鈕
@@ -142,7 +142,7 @@ class BaseWindow:
             btn_frame,
             text="−",
             command=self._minimize_window,
-            bg='#404040',
+            bg='#334D6D',
             fg='white',
             bd=0,
             font=('Arial', 12),
@@ -156,7 +156,7 @@ class BaseWindow:
             btn_frame,
             text="×",
             command=self.close_window,
-            bg='#404040',
+            bg='#334D6D',
             fg='white',
             bd=0,
             font=('Arial', 12),
@@ -227,7 +227,7 @@ class BaseWindow:
             button.configure(bg=color)
 
         def on_leave(button: tk.Button) -> None:
-            button.configure(bg='#404040')
+            button.configure(bg='#334D6D')
 
         self.min_button.bind('<Enter>', lambda e: on_enter(self.min_button, '#666666'))
         self.min_button.bind('<Leave>', lambda e: on_leave(self.min_button))

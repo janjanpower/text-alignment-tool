@@ -151,14 +151,14 @@ class CustomMessageBox(tk.Toplevel):
 
     def create_title_bar(self, title: str) -> None:
         """創建標題列"""
-        title_bar = tk.Frame(self, bg='#404040', relief='raised', bd=0)
+        title_bar = tk.Frame(self, bg='#334D6D', relief='raised', bd=0)
         title_bar.pack(fill=tk.X)
 
         # 標題
         title_label = tk.Label(
             title_bar,
             text=title,
-            bg='#404040',
+            bg='#334D6D',
             fg='white',
             font=('Arial', 10)
         )
@@ -169,7 +169,7 @@ class CustomMessageBox(tk.Toplevel):
             title_bar,
             text="×",
             command=self.cancel,
-            bg='#404040',
+            bg='#334D6D',
             fg='white',
             bd=0,
             font=('Arial', 12),
@@ -182,7 +182,7 @@ class CustomMessageBox(tk.Toplevel):
         close_button.bind('<Enter>',
             lambda e: close_button.configure(bg='#ff0000'))
         close_button.bind('<Leave>',
-            lambda e: close_button.configure(bg='#404040'))
+            lambda e: close_button.configure(bg='#334D6D'))
 
         # 綁定拖曳事件
         title_bar.bind('<Button-1>', self.start_drag)

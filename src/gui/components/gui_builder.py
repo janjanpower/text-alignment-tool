@@ -89,7 +89,7 @@ class GUIBuilder:
         try:
             # 創建個在內容框架中的容器，用於存放樹狀視圖等控件
             container = ttk.Frame(content_frame)
-            container.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+            container.pack(fill=tk.BOTH, expand=True, padx=5, pady=0)
 
             return container
         except Exception as e:
