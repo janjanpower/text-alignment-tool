@@ -64,6 +64,7 @@ class ApplicationManager:
     def init_database(self):
         """初始化資料庫"""
         logger.info("初始化資料庫")
+
         try:
             db_manager = DatabaseManager()
             db_manager.create_tables()

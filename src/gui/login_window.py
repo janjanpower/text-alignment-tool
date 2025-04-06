@@ -6,6 +6,7 @@ import os
 import tkinter as tk
 from tkinter import ttk
 import logging
+from PIL import Image, ImageTk
 from gui.base_dialog import BaseDialog
 from gui.base_window import BaseWindow
 from gui.custom_messagebox import show_info, show_warning, show_error
@@ -64,36 +65,85 @@ class LoginWindow(BaseWindow):
         title_label = ttk.Label(main_frame, text="SRT文本處理系統", font=("Noto Sans TC", 13))
         title_label.pack(pady=(0, 20))
 
+        # 載入圖標
+        icons_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "icons")
+        account_icon_path = os.path.join(icons_dir, "account.png")
+        password_icon_path = os.path.join(icons_dir, "password.png")
+
+        self.account_icon = None
+        self.password_icon = None
+
+        try:
+            from PIL import Image, ImageTk
+
+            # 載入帳號圖標
+            if os.path.exists(account_icon_path):
+                account_img = Image.open(account_icon_path)
+                account_img = account_img.resize((20, 20), Image.Resampling.LANCZOS)
+                self.account_icon = ImageTk.PhotoImage(account_img)
+
+            # 載入密碼圖標
+            if os.path.exists(password_icon_path):
+                password_img = Image.open(password_icon_path)
+                password_img = password_img.resize((20, 20), Image.Resampling.LANCZOS)
+                self.password_icon = ImageTk.PhotoImage(password_img)
+
+        except Exception as e:
+            self.logger.error(f"載入圖標時出錯: {e}")
+
         # 使用者名稱輸入框
         username_frame = ttk.Frame(main_frame)
         username_frame.pack(pady=5)
-        username_label = ttk.Label(username_frame, text="帳 號", width=6,font=("Noto Sans TC", 10))
+
+        # 帳號圖標框架，確保即使沒有圖標也保留空間
+        account_icon_frame = ttk.Frame(username_frame, width=20)
+        account_icon_frame.pack(side=tk.LEFT, padx=(0, 5))
+        account_icon_frame.pack_propagate(False)  # 防止框架縮小
+
+        # 如果有圖標則顯示
+        if self.account_icon:
+            account_icon_label = ttk.Label(account_icon_frame, image=self.account_icon)
+            account_icon_label.pack(fill=tk.BOTH, expand=True)
+
+        username_label = ttk.Label(username_frame, text="帳 號", width=6, font=("Noto Sans TC", 10))
         username_label.pack(side=tk.LEFT)
-        username_container = ttk.Frame(username_frame)  # 新增一個容器來控制輸入框寬度
-        username_container.pack(side=tk.LEFT, fill=tk.X,  padx=5)
+        username_container = ttk.Frame(username_frame)
+        username_container.pack(side=tk.LEFT, fill=tk.X, padx=5)
         self.username_entry = tk.Entry(
             username_container,
-            bg="#334D6D",     # 背景色設為藍色
-            fg="white",       # 文字顏色設為白色
-            width=25,         # 設定較短的寬度
-            insertbackground="white"  # 游標顏色也設為白色提高可見度
-        )  # 設定固定寬度
+            bg="#334D6D",
+            fg="white",
+            width=25,
+            insertbackground="white"
+        )
         self.username_entry.pack(fill=tk.X)
 
         # 密碼輸入框
         password_frame = ttk.Frame(main_frame)
         password_frame.pack(pady=5)
-        password_label = ttk.Label(password_frame, text="密 碼", width=6,font=("Noto Sans TC", 10))
+
+        # 密碼圖標框架
+        password_icon_frame = ttk.Frame(password_frame, width=20)
+        password_icon_frame.pack(side=tk.LEFT, padx=(0, 5))
+        password_icon_frame.pack_propagate(False)  # 防止框架縮小
+
+        # 如果有圖標則顯示
+        if self.password_icon:
+            password_icon_label = ttk.Label(password_icon_frame, image=self.password_icon)
+            password_icon_label.pack(fill=tk.BOTH, expand=True)
+
+        password_label = ttk.Label(password_frame, text="密 碼", width=6, font=("Noto Sans TC", 10))
         password_label.pack(side=tk.LEFT)
-        password_container = ttk.Frame(password_frame)  # 新增一個容器來控制輸入框寬度
-        password_container.pack(side=tk.LEFT, fill=tk.X,  padx=5)
+        password_container = ttk.Frame(password_frame)
+        password_container.pack(side=tk.LEFT, fill=tk.X, padx=5)
         self.password_entry = tk.Entry(
             password_container,
-            bg="#334D6D",     # 背景色設為藍色
-            fg="white",       # 文字顏色設為白色
-            width=25,         # 設定較短的寬度
-            insertbackground="white"  # 游標顏色也設為白色提高可見度
-        )  # 設定固定寬度  # 設定固定寬度
+            bg="#334D6D",
+            fg="white",
+            width=25,
+            insertbackground="white",
+            show="*"  # 確保密碼顯示為 * 號
+        )
         self.password_entry.pack(fill=tk.X)
 
         # 記住帳號勾選框
@@ -132,6 +182,49 @@ class LoginWindow(BaseWindow):
 
         # 在初始化時重置所有用戶的登入狀態
         self.reset_all_login_states()
+
+    def load_icons(self):
+        """載入登入相關的圖標"""
+
+        # 取得圖標檔案的目錄路徑
+        icons_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "icons")
+
+        try:
+            # 檢查圖標目錄是否存在
+            if not os.path.exists(icons_dir):
+                os.makedirs(icons_dir)
+                self.logger.warning(f"圖標目錄不存在，已創建: {icons_dir}")
+
+            # 定義圖標檔案的完整路徑
+            account_icon_path = os.path.join(icons_dir, "account.png")
+            password_icon_path = os.path.join(icons_dir, "password.png")
+
+            # 設置圖標大小（根據你的UI需求調整）
+            icon_size = (24, 24)
+
+            # 載入帳號圖標
+            if os.path.exists(account_icon_path):
+                img = Image.open(account_icon_path)
+                img = img.resize(icon_size, Image.Resampling.LANCZOS)
+                self.account_icon = ImageTk.PhotoImage(img)
+            else:
+                self.logger.warning(f"找不到帳號圖標: {account_icon_path}")
+                self.account_icon = tk.PhotoImage()  # 創建空圖標
+
+            # 載入密碼圖標
+            if os.path.exists(password_icon_path):
+                img = Image.open(password_icon_path)
+                img = img.resize(icon_size, Image.Resampling.LANCZOS)
+                self.password_icon = ImageTk.PhotoImage(img)
+            else:
+                self.logger.warning(f"找不到密碼圖標: {password_icon_path}")
+                self.password_icon = tk.PhotoImage()  # 創建空圖標
+
+        except Exception as e:
+            self.logger.error(f"載入登入圖標時出錯: {str(e)}")
+            # 確保即使圖標載入失敗，程序仍能繼續運行
+            self.account_icon = tk.PhotoImage()
+            self.password_icon = tk.PhotoImage()
 
     def load_saved_username(self):
         """載入保存的帳號"""

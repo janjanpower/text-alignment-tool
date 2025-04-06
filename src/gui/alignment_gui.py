@@ -47,6 +47,9 @@ class AlignmentGUI(BaseWindow):
         self.config = ConfigManager()
         window_config = self.config.get_window_config()
 
+        # 保存用戶ID
+        self.user_id = user_id
+
         # 調用父類初始化
         super().__init__(
             title=window_config['title'],
