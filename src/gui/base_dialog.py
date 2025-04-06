@@ -58,7 +58,7 @@ class BaseDialog:
 
     def create_title_bar(self) -> None:
         """創建標題列"""
-        self.title_bar = tk.Frame(self.window, bg='#404040', height=30)
+        self.title_bar = tk.Frame(self.window, bg='#334D6D', height=30)
         self.title_bar.pack(fill=tk.X)
         self.title_bar.pack_propagate(False)
 
@@ -66,9 +66,9 @@ class BaseDialog:
         self.title_label = tk.Label(
             self.title_bar,
             text=self.title_text,
-            bg='#404040',
+            bg='#334D6D',
             fg='white',
-            font=('Arial', 10)
+            font=('Noto Sans TC', 10)
         )
         self.title_label.pack(side=tk.LEFT, padx=5)
 
@@ -77,10 +77,10 @@ class BaseDialog:
             self.title_bar,
             text="×",
             command=self.cancel,
-            bg='#404040',
+            bg='#334D6D',
             fg='white',
             bd=0,
-            font=('Arial', 12),
+            font=('Noto Sans TC', 12),
             width=3,
             cursor='hand2'
         )
@@ -127,7 +127,7 @@ class BaseDialog:
         self.close_button.bind('<Enter>',
             lambda e: self.close_button.configure(bg='#ff0000'))
         self.close_button.bind('<Leave>',
-            lambda e: self.close_button.configure(bg='#404040'))
+            lambda e: self.close_button.configure(bg='#334D6D'))
 
     def ok(self, event: Optional[tk.Event] = None) -> None:
         """確定按鈕事件"""

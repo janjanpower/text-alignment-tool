@@ -24,14 +24,20 @@ class QuickCorrectionDialog(BaseDialog):
     def create_content(self):
         """創建對話框內容"""
         content_frame = ttk.Frame(self.main_frame)
-        content_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
+        content_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=(15,0))
 
         # 錯誤字輸入框
         error_frame = ttk.Frame(content_frame)
         error_frame.pack(fill=tk.X, pady=(5,5))
         ttk.Label(error_frame, text="錯誤字：").pack(side=tk.LEFT)
-        self.error_entry = ttk.Entry(error_frame)
-        self.error_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
+        self.error_entry = tk.Entry(
+            error_frame,
+            bg="#334D6D",     # 背景色設為藍色
+            fg="white",       # 文字顏色設為白色
+            width=35,         # 設定較短的寬度
+            insertbackground="white"  # 游標顏色也設為白色提高可見度
+        )
+        self.error_entry.pack(side=tk.LEFT, padx=5,pady=(10,5))
         # 預先填入選中的文本
         self.error_entry.insert(0, self.selected_text)
 
@@ -39,8 +45,15 @@ class QuickCorrectionDialog(BaseDialog):
         correction_frame = ttk.Frame(content_frame)
         correction_frame.pack(fill=tk.X, pady=5)
         ttk.Label(correction_frame, text="校正字：").pack(side=tk.LEFT)
-        self.correction_entry = ttk.Entry(correction_frame)
-        self.correction_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
+        # 使用tk.Entry而非ttk.Entry以便更好地自訂樣式
+        self.correction_entry = tk.Entry(
+            correction_frame,
+            bg="#334D6D",     # 背景色設為藍色
+            fg="white",       # 文字顏色設為白色
+            width=35,         # 設定較短的寬度
+            insertbackground="white"  # 游標顏色也設為白色提高可見度
+        )
+        self.correction_entry.pack(side=tk.LEFT, padx=5)  # 移除fill和expand以控制寬度
 
         # 按鈕區域
         button_frame = ttk.Frame(content_frame)

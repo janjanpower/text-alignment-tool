@@ -71,19 +71,19 @@ class TextEditDialog(simpledialog.Dialog):
     def setup_styles(self):
         style = ttk.Style()
         style.configure("TextEdit.TFrame")
-        style.configure("TextEdit.TLabel", background="#404040", foreground="white",font=("Arial", 10))
+        style.configure("TextEdit.TLabel", background="#334D6D", foreground="white",font=("Arial", 10))
         style.configure("TextEdit.TButton", padding=5)
 
     def create_widgets(self, master, show_word_edit=False):
         # 創建標題列
-        self.title_bar = tk.Frame(self, bg='#404040', relief='raised', bd=0)
+        self.title_bar = tk.Frame(self, bg='#334D6D', relief='raised', bd=0)
         self.title_bar.pack(fill=tk.X)
 
         # 標題標籤 - 注意這裡使用 tk.Label 而不是 ttk.Label
         self.title_label = tk.Label(
             self.title_bar,
             text=self.title(),
-            bg="#404040",  # 設置背景色
+            bg="#334D6D",  # 設置背景色
             fg="white",    # 設置前景色
             font=("Arial", 10)
         )
@@ -94,7 +94,7 @@ class TextEditDialog(simpledialog.Dialog):
             self.title_bar,
             text="×",
             command=self.cancel,
-            bg="#404040",
+            bg="#334D6D",
             fg="white",
             bd=0,
             font=("Arial", 12),

@@ -21,6 +21,7 @@ class BaseWindow:
 
     def __init__(self, title: str = "自定義視窗",
                  width: int = 800, height: int = 600,
+                 corner_radius=20,
                  master: Optional[tk.Tk] = None) -> None:
         """
         初始化基礎視窗
@@ -128,7 +129,8 @@ class BaseWindow:
             text=title,
             bg='#334D6D',
             fg='white',
-            font=('Arial', 10)
+            font=('Noto Sans TC', 10),
+
         )
         self.title_label.pack(side=tk.LEFT, padx=5)
         self._bind_drag(self.title_label)
@@ -145,7 +147,7 @@ class BaseWindow:
             bg='#334D6D',
             fg='white',
             bd=0,
-            font=('Arial', 12),
+            font=('Noto Sans TC', 12),
             width=3,
             cursor='hand2'
         )
@@ -159,7 +161,7 @@ class BaseWindow:
             bg='#334D6D',
             fg='white',
             bd=0,
-            font=('Arial', 12),
+            font=('Noto Sans TC', 12),
             width=3,
             cursor='hand2'
         )

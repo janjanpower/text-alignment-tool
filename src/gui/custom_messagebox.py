@@ -128,7 +128,7 @@ class CustomMessageBox(tk.Toplevel):
         icon_label = ttk.Label(
             content_frame,
             text=icon_text,
-            font=('Arial', 24),
+            font=('Noto Sans TC', 24),
             foreground=self.get_icon_color()
         )
         icon_label.pack(side=tk.LEFT, padx=(0, 20))
@@ -282,7 +282,7 @@ class CustomMessageBox(tk.Toplevel):
     def get_icon_color(self) -> str:
         """獲取圖標顏色"""
         color_map = {
-            "info": "#0078D7",
+            "info": "#334D6D",
             "warning": "#FDB40C",
             "error": "#E81123",
             "question": "#0078D7"

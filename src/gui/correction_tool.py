@@ -28,21 +28,34 @@ class CorrectionInputDialog(BaseDialog):
     def create_content(self):
         """創建對話框內容"""
         content_frame = ttk.Frame(self.main_frame)
-        content_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
+        content_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=(15,0))
 
         # 錯誤字輸入框
         error_frame = ttk.Frame(content_frame)
-        error_frame.pack(fill=tk.X, pady=(5,5))
-        ttk.Label(error_frame, text="錯誤字：").pack(side=tk.LEFT)
-        self.error_entry = ttk.Entry(error_frame)
-        self.error_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
+        error_frame.pack(fill=tk.X, pady=(5,10))
+        ttk.Label(error_frame, text="錯 誤 字").pack(side=tk.LEFT,pady=(5,0))
+        self.error_entry = tk.Entry(
+            error_frame,
+            bg="#334D6D",     # 背景色設為藍色
+            fg="white",       # 文字顏色設為白色
+            width=35,         # 設定較短的寬度
+            insertbackground="white"  # 游標顏色也設為白色提高可見度
+        )
+        self.error_entry.pack(side=tk.LEFT, padx=5,pady=(10,3))
 
         # 校正字輸入框
         correction_frame = ttk.Frame(content_frame)
         correction_frame.pack(fill=tk.X, pady=5)
-        ttk.Label(correction_frame, text="校正字：").pack(side=tk.LEFT)
+        ttk.Label(correction_frame, text="校 正 字").pack(side=tk.LEFT,pady=(5,0))
         self.correction_entry = ttk.Entry(correction_frame)
-        self.correction_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
+        self.correction_entry = tk.Entry(
+            correction_frame,
+            bg="#334D6D",     # 背景色設為藍色
+            fg="white",       # 文字顏色設為白色
+            width=35,         # 設定較短的寬度
+            insertbackground="white"  # 游標顏色也設為白色提高可見度
+        )
+        self.correction_entry.pack(side=tk.LEFT, padx=5,pady=(6,0))
 
         # 按鈕區域
         button_frame = ttk.Frame(content_frame)

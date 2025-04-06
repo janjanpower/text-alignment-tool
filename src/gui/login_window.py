@@ -61,33 +61,45 @@ class LoginWindow(BaseWindow):
         main_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=20)
 
         # 標題
-        title_label = ttk.Label(main_frame, text="歡迎使用文本系統", font=("Arial", 13))
+        title_label = ttk.Label(main_frame, text="SRT文本處理系統", font=("Noto Sans TC", 13))
         title_label.pack(pady=(0, 20))
 
         # 使用者名稱輸入框
         username_frame = ttk.Frame(main_frame)
         username_frame.pack(pady=5)
-        username_label = ttk.Label(username_frame, text="帳號", width=6)
+        username_label = ttk.Label(username_frame, text="帳 號", width=6,font=("Noto Sans TC", 10))
         username_label.pack(side=tk.LEFT)
         username_container = ttk.Frame(username_frame)  # 新增一個容器來控制輸入框寬度
         username_container.pack(side=tk.LEFT, fill=tk.X,  padx=5)
-        self.username_entry = ttk.Entry(username_container, width=25)  # 設定固定寬度
+        self.username_entry = tk.Entry(
+            username_container,
+            bg="#334D6D",     # 背景色設為藍色
+            fg="white",       # 文字顏色設為白色
+            width=25,         # 設定較短的寬度
+            insertbackground="white"  # 游標顏色也設為白色提高可見度
+        )  # 設定固定寬度
         self.username_entry.pack(fill=tk.X)
 
         # 密碼輸入框
         password_frame = ttk.Frame(main_frame)
         password_frame.pack(pady=5)
-        password_label = ttk.Label(password_frame, text="密碼", width=6)
+        password_label = ttk.Label(password_frame, text="密 碼", width=6,font=("Noto Sans TC", 10))
         password_label.pack(side=tk.LEFT)
         password_container = ttk.Frame(password_frame)  # 新增一個容器來控制輸入框寬度
         password_container.pack(side=tk.LEFT, fill=tk.X,  padx=5)
-        self.password_entry = ttk.Entry(password_container, show="*", width=25)  # 設定固定寬度
+        self.password_entry = tk.Entry(
+            password_container,
+            bg="#334D6D",     # 背景色設為藍色
+            fg="white",       # 文字顏色設為白色
+            width=25,         # 設定較短的寬度
+            insertbackground="white"  # 游標顏色也設為白色提高可見度
+        )  # 設定固定寬度  # 設定固定寬度
         self.password_entry.pack(fill=tk.X)
 
         # 記住帳號勾選框
         self.remember_var = tk.BooleanVar(value=False)
         remember_frame = ttk.Frame(main_frame)
-        remember_frame.pack(fill=tk.X, pady=5)
+        remember_frame.pack(fill=tk.X, pady=(10,5))
         remember_checkbox = ttk.Checkbutton(
             remember_frame,
             text="記住帳號",
@@ -95,7 +107,7 @@ class LoginWindow(BaseWindow):
             onvalue=True,
             offvalue=False
         )
-        remember_checkbox.pack(side=tk.LEFT, padx=(52, 0))  # 與左側標籤對齊
+        remember_checkbox.pack(side=tk.LEFT, padx=(55, 0))  # 與左側標籤對齊
 
         # 按鈕框架
         button_frame = ttk.Frame(main_frame)
