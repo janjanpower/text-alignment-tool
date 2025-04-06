@@ -6,7 +6,6 @@ import os
 import tkinter as tk
 from tkinter import ttk
 import logging
-from PIL import Image, ImageTk
 from gui.base_dialog import BaseDialog
 from gui.base_window import BaseWindow
 from gui.custom_messagebox import show_info, show_warning, show_error
@@ -182,49 +181,6 @@ class LoginWindow(BaseWindow):
 
         # 在初始化時重置所有用戶的登入狀態
         self.reset_all_login_states()
-
-    def load_icons(self):
-        """載入登入相關的圖標"""
-
-        # 取得圖標檔案的目錄路徑
-        icons_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "icons")
-
-        try:
-            # 檢查圖標目錄是否存在
-            if not os.path.exists(icons_dir):
-                os.makedirs(icons_dir)
-                self.logger.warning(f"圖標目錄不存在，已創建: {icons_dir}")
-
-            # 定義圖標檔案的完整路徑
-            account_icon_path = os.path.join(icons_dir, "account.png")
-            password_icon_path = os.path.join(icons_dir, "password.png")
-
-            # 設置圖標大小（根據你的UI需求調整）
-            icon_size = (24, 24)
-
-            # 載入帳號圖標
-            if os.path.exists(account_icon_path):
-                img = Image.open(account_icon_path)
-                img = img.resize(icon_size, Image.Resampling.LANCZOS)
-                self.account_icon = ImageTk.PhotoImage(img)
-            else:
-                self.logger.warning(f"找不到帳號圖標: {account_icon_path}")
-                self.account_icon = tk.PhotoImage()  # 創建空圖標
-
-            # 載入密碼圖標
-            if os.path.exists(password_icon_path):
-                img = Image.open(password_icon_path)
-                img = img.resize(icon_size, Image.Resampling.LANCZOS)
-                self.password_icon = ImageTk.PhotoImage(img)
-            else:
-                self.logger.warning(f"找不到密碼圖標: {password_icon_path}")
-                self.password_icon = tk.PhotoImage()  # 創建空圖標
-
-        except Exception as e:
-            self.logger.error(f"載入登入圖標時出錯: {str(e)}")
-            # 確保即使圖標載入失敗，程序仍能繼續運行
-            self.account_icon = tk.PhotoImage()
-            self.password_icon = tk.PhotoImage()
 
     def load_saved_username(self):
         """載入保存的帳號"""
