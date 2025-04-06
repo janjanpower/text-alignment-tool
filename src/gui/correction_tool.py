@@ -340,12 +340,9 @@ class CorrectionTool(BaseWindow):
             # 關閉當前視窗
             self.master.destroy()
 
-            # 創建新的 root 和對齊工具，並傳遞專案路徑和用戶ID
+            # 創建新的 root 和對齊工具，並傳遞專案路徑
             root = tk.Tk()
-            # 獲取用戶ID（如果有）
-            user_id = self.user_id if hasattr(self, 'user_id') else None
-
-            alignment_gui = AlignmentGUI(root, user_id=user_id)
+            alignment_gui = AlignmentGUI(root)
             # 設置專案路徑
             alignment_gui.current_project_path = self.project_path
             alignment_gui.set_title(f"文本管理 - {os.path.basename(self.project_path)}")

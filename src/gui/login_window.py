@@ -65,44 +65,40 @@ class LoginWindow(BaseWindow):
         title_label.pack(pady=(0, 20))
 
         # 載入圖標
-        icons_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "icons")
-        account_icon_path = os.path.join(icons_dir, "account.png")
-        password_icon_path = os.path.join(icons_dir, "password.png")
-
-        self.account_icon = None
-        self.password_icon = None
-
         try:
-            from PIL import Image, ImageTk
+            icons_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "icons")
+            account_icon_path = os.path.join(icons_dir, "account.png")
+            password_icon_path = os.path.join(icons_dir, "password.png")
 
-            # 載入帳號圖標
-            if os.path.exists(account_icon_path):
+            if os.path.exists(account_icon_path) and os.path.exists(password_icon_path):
+                from PIL import Image, ImageTk
+
+                # 載入帳號圖標
                 account_img = Image.open(account_icon_path)
                 account_img = account_img.resize((20, 20), Image.Resampling.LANCZOS)
                 self.account_icon = ImageTk.PhotoImage(account_img)
 
-            # 載入密碼圖標
-            if os.path.exists(password_icon_path):
+                # 載入密碼圖標
                 password_img = Image.open(password_icon_path)
                 password_img = password_img.resize((20, 20), Image.Resampling.LANCZOS)
                 self.password_icon = ImageTk.PhotoImage(password_img)
-
+            else:
+                self.account_icon = None
+                self.password_icon = None
+                self.logger.warning(f"找不到圖標文件: {account_icon_path} 或 {password_icon_path}")
         except Exception as e:
+            self.account_icon = None
+            self.password_icon = None
             self.logger.error(f"載入圖標時出錯: {e}")
 
         # 使用者名稱輸入框
         username_frame = ttk.Frame(main_frame)
         username_frame.pack(pady=5)
 
-        # 帳號圖標框架，確保即使沒有圖標也保留空間
-        account_icon_frame = ttk.Frame(username_frame, width=20)
-        account_icon_frame.pack(side=tk.LEFT, padx=(0, 5))
-        account_icon_frame.pack_propagate(False)  # 防止框架縮小
-
-        # 如果有圖標則顯示
-        if self.account_icon:
-            account_icon_label = ttk.Label(account_icon_frame, image=self.account_icon)
-            account_icon_label.pack(fill=tk.BOTH, expand=True)
+        # 帳號圖標
+        if hasattr(self, 'account_icon') and self.account_icon:
+            account_icon_label = ttk.Label(username_frame, image=self.account_icon)
+            account_icon_label.pack(side=tk.LEFT, padx=(0, 5))
 
         username_label = ttk.Label(username_frame, text="帳 號", width=6, font=("Noto Sans TC", 10))
         username_label.pack(side=tk.LEFT)
@@ -121,15 +117,10 @@ class LoginWindow(BaseWindow):
         password_frame = ttk.Frame(main_frame)
         password_frame.pack(pady=5)
 
-        # 密碼圖標框架
-        password_icon_frame = ttk.Frame(password_frame, width=20)
-        password_icon_frame.pack(side=tk.LEFT, padx=(0, 5))
-        password_icon_frame.pack_propagate(False)  # 防止框架縮小
-
-        # 如果有圖標則顯示
-        if self.password_icon:
-            password_icon_label = ttk.Label(password_icon_frame, image=self.password_icon)
-            password_icon_label.pack(fill=tk.BOTH, expand=True)
+        # 密碼圖標
+        if hasattr(self, 'password_icon') and self.password_icon:
+            password_icon_label = ttk.Label(password_frame, image=self.password_icon)
+            password_icon_label.pack(side=tk.LEFT, padx=(0, 5))
 
         password_label = ttk.Label(password_frame, text="密 碼", width=6, font=("Noto Sans TC", 10))
         password_label.pack(side=tk.LEFT)
@@ -144,7 +135,6 @@ class LoginWindow(BaseWindow):
             show="*"  # 確保密碼顯示為 * 號
         )
         self.password_entry.pack(fill=tk.X)
-
         # 記住帳號勾選框
         self.remember_var = tk.BooleanVar(value=False)
         remember_frame = ttk.Frame(main_frame)
@@ -156,7 +146,7 @@ class LoginWindow(BaseWindow):
             onvalue=True,
             offvalue=False
         )
-        remember_checkbox.pack(side=tk.LEFT, padx=(55, 0))  # 與左側標籤對齊
+        remember_checkbox.pack(side=tk.RIGHT, padx=(0, 45))  # 與左側標籤對齊
 
         # 按鈕框架
         button_frame = ttk.Frame(main_frame)

@@ -41,14 +41,11 @@ if project_root not in sys.path:
 
 class AlignmentGUI(BaseWindow):
     """文本對齊工具主界面類別"""
-    def __init__(self, master: Optional[tk.Tk] = None, user_id=None) -> None:
+    def __init__(self, master: Optional[tk.Tk] = None) -> None:
         """初始化主界面"""
         # 加載配置
         self.config = ConfigManager()
         window_config = self.config.get_window_config()
-
-        # 保存用戶ID
-        self.user_id = user_id
 
         # 調用父類初始化
         super().__init__(
@@ -504,7 +501,7 @@ class AlignmentGUI(BaseWindow):
             # 創建新的應用程式實例並啟動專案管理器
             root = tk.Tk()
             from .project_manager import ProjectManager
-            project_manager = ProjectManager(root, user_id=self.user_id)
+            project_manager = ProjectManager(root)
             project_manager.master.mainloop()
 
         self.file_manager.switch_project(confirm_switch, do_switch)
