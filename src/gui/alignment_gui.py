@@ -168,6 +168,17 @@ class AlignmentGUI(BaseWindow):
 
         self.logger.debug("FileManager 初始化完成")
 
+    def set_user_id(self, user_id):
+        """設置用戶ID"""
+        if user_id:
+            self.user_id = user_id
+            # 同步到 file_manager
+            if hasattr(self, 'file_manager'):
+                self.file_manager.user_id = user_id
+            self.logger.debug(f"設置用戶ID: {user_id}")
+        else:
+            self.logger.warning("嘗試設置空的用戶ID")
+
     def _on_srt_loaded(self, srt_data, file_path, corrections=None) -> None:
         """SRT 載入後的回調"""
         self.logger.debug(f"SRT 數據載入回調開始，檔案: {file_path}")
@@ -498,10 +509,17 @@ class AlignmentGUI(BaseWindow):
             # 關閉當前視窗
             self.master.destroy()
 
+            # 獲取用戶ID - 確保從用戶相關的位置獲取
+            user_id = None
+            if hasattr(self, 'file_manager') and hasattr(self.file_manager, 'user_id'):
+                user_id = self.file_manager.user_id
+            elif hasattr(self, 'current_user') and self.current_user:
+                user_id = self.current_user.id
+
             # 創建新的應用程式實例並啟動專案管理器
             root = tk.Tk()
             from .project_manager import ProjectManager
-            project_manager = ProjectManager(root)
+            project_manager = ProjectManager(root, user_id=user_id)
             project_manager.master.mainloop()
 
         self.file_manager.switch_project(confirm_switch, do_switch)

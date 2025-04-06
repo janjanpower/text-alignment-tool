@@ -11,8 +11,7 @@ from gui.custom_messagebox import show_warning, show_error, ask_question
 from database.db_manager import DatabaseManager
 from database.models import Project, User
 from utils.file_utils import get_current_directory
-
-
+from services.project_service import ProjectService
 class ProjectInputDialog(BaseDialog):
     def __init__(self, parent=None):
         """初始化專案管理器"""
@@ -117,22 +116,19 @@ class ProjectManager(BaseWindow):
         self.result = None
         self.icon_size = icon_size
 
-        # 初始化資料庫連接
-        self.db_manager = DatabaseManager()
-        self.db_session = self.db_manager.get_session()
-        self.user_id = user_id
+        # 初始化專案服務
+        self.project_service = ProjectService()
 
         # 獲取當前使用者
         self.current_user = None
         if user_id:
-            self.current_user = self.db_session.query(User).filter_by(id=user_id).first()
+            self.current_user = self.project_service.db_session.query(User).filter_by(id=user_id).first()
 
         # 載入圖示
         self.load_icons()
 
         # 確保專案目錄存在
-        if not os.path.exists(self.projects_dir):
-            os.makedirs(self.projects_dir)
+        self.project_service.ensure_projects_directory()
 
         # 創建界面元素
         self.create_widgets()
@@ -212,7 +208,7 @@ class ProjectManager(BaseWindow):
             # 定義圖示檔案的完整路徑
             add_normal_path = os.path.join(icons_dir, "add_normal.png")
             add_hover_path = os.path.join(icons_dir, "add_hover.png")
-            delete_path = os.path.join(icons_dir, "delete.png")
+            delete_path = os.path.join(icons_dir, "delete_normal.png")
 
             # 檢查並載入圖示檔案
             if os.path.exists(add_normal_path):
@@ -328,19 +324,17 @@ class ProjectManager(BaseWindow):
         try:
             self.project_combobox.configure(state='disabled')  # 暫時禁用
 
-            # 從資料庫中獲取使用者的專案
-            if self.current_user:
-                projects = self.db_session.query(Project).filter_by(owner_id=self.current_user.id).all()
-                project_names = [project.name for project in projects]
+            # 從專案服務獲取專案列表
+            if self.user_id:
+                project_names = self.project_service.get_user_projects(self.user_id)
             else:
-                # 如果沒有使用者，使用目錄方式尋找專案（向後兼容）
-                projects = [d for d in os.listdir(self.projects_dir)
-                        if os.path.isdir(os.path.join(self.projects_dir, d))]
-                project_names = projects
+                project_names = self.project_service.get_directory_projects()
 
+            # 保存當前選擇
             current = self.selected_project.get()
             self.project_combobox['values'] = project_names
 
+            # 嘗試保持當前選擇，或設置第一個可用項目
             if current and current in project_names:
                 self.project_combobox.set(current)
             elif project_names:
@@ -348,6 +342,8 @@ class ProjectManager(BaseWindow):
             else:
                 self.project_combobox.set('')
 
+        except Exception as e:
+            self.logger.error(f"更新專案列表時出錯: {e}")
         finally:
             self.project_combobox.configure(state='readonly')  # 重新啟用
 
@@ -357,27 +353,20 @@ class ProjectManager(BaseWindow):
             dialog = ProjectInputDialog(parent=self.master)
             project_name = dialog.run()
 
-            if project_name and self.current_user:
-                # 檢查專案名稱是否已存在
-                existing_project = self.db_session.query(Project).filter_by(
-                    name=project_name, owner_id=self.current_user.id).first()
-
-                if existing_project:
-                    show_warning("警告", "專案已存在！", self.master)
-                    return
-
-                # 建立專案目錄
-                project_path = os.path.join(self.projects_dir, project_name)
-                if not os.path.exists(project_path):
+            if project_name:
+                if self.user_id:
+                    # 使用專案服務添加專案
+                    success = self.project_service.add_project(project_name, self.user_id)
+                    if not success:
+                        show_warning("警告", "專案已存在！", self.master)
+                        return
+                else:
+                    # 如果沒有用戶ID，只創建目錄
+                    project_path = os.path.join(self.projects_dir, project_name)
+                    if os.path.exists(project_path):
+                        show_warning("警告", "專案已存在！", self.master)
+                        return
                     os.makedirs(project_path)
-
-                # 在資料庫中建立專案記錄
-                new_project = Project(
-                    name=project_name,
-                    owner_id=self.current_user.id
-                )
-                self.db_session.add(new_project)
-                self.db_session.commit()
 
                 # 更新下拉列表
                 self.update_project_list()
@@ -398,27 +387,32 @@ class ProjectManager(BaseWindow):
             return
 
         if ask_question("確認刪除", f"確定要刪除專案 '{selected}' 嗎？", self.master):
-            project_path = os.path.join(self.projects_dir, selected)
             try:
-                import shutil
-                shutil.rmtree(project_path)
-
-                # 清空當前選擇
-                self.selected_project.set('')
-
-                # 重新載入專案列表
-                projects = [d for d in os.listdir(self.projects_dir)
-                         if os.path.isdir(os.path.join(self.projects_dir, d))]
-
-                # 更新下拉選單的值
-                self.project_combobox['values'] = projects
-
-                # 如果還有其他專案，選擇第一個
-                if projects:
-                    self.project_combobox.set(projects[0])
+                # 使用專案服務刪除專案
+                success = self.project_service.delete_project(selected, self.user_id)
+                if success:
+                    # 清空當前選擇
+                    self.selected_project.set('')
+                    # 重新載入專案列表
+                    self.update_project_list()
+                else:
+                    show_error("錯誤", "刪除專案失敗", self.master)
 
             except Exception as e:
                 show_error("錯誤", f"刪除專案時發生錯誤：{str(e)}", self.master)
+
+    def cleanup(self):
+        """清理資源"""
+        # 關閉專案服務
+        if hasattr(self, 'project_service'):
+            self.project_service.close()
+
+        # 在清理資源時也確保用戶登出
+        if self.user_id:
+            self.update_logout_status(self.user_id)
+
+        # 調用父類清理
+        super().cleanup()
 
     def confirm(self) -> None:
         """確認選擇並按順序開啟工具"""
@@ -446,15 +440,6 @@ class ProjectManager(BaseWindow):
             self.logger.error(f"切換視窗時出錯: {e}")
             show_error("錯誤", f"切換失敗: {str(e)}", self.master)
             sys.exit(1)
-
-    def cleanup(self):
-        """清理資源"""
-        # 在清理資源時也確保用戶登出
-        if self.user_id:
-            self.update_logout_status(self.user_id)
-
-        # 調用父類清理
-        super().cleanup()
 
     def close_window(self, event=None):
         """重寫關閉視窗方法"""
