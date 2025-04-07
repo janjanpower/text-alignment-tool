@@ -101,12 +101,12 @@ class ProjectManager(BaseWindow):
         """
         初始化專案管理器
         :param master: 父視窗
-        :param user_id: 使用者 ID
+        :param user_id: 使用者 ID (本地版本不使用，但保留參數相容性)
         :param icon_size: 圖示大小，格式為 (寬, 高)
         """
         super().__init__(title="專案管理", width=400, height=200, master=master)
 
-        # 保存用戶ID用於登出處理
+        # 保存用戶ID用於相容性
         self.user_id = user_id
 
         # 初始化變數
@@ -119,11 +119,6 @@ class ProjectManager(BaseWindow):
         # 初始化專案服務
         self.project_service = ProjectService()
 
-        # 獲取當前使用者
-        self.current_user = None
-        if user_id:
-            self.current_user = self.project_service.db_session.query(User).filter_by(id=user_id).first()
-
         # 載入圖示
         self.load_icons()
 
@@ -135,9 +130,6 @@ class ProjectManager(BaseWindow):
 
         # 綁定 Enter 鍵
         self.master.bind('<Return>', lambda e: self.confirm())
-
-        # 添加登出按鈕
-        self.add_logout_button()
 
     def add_logout_button(self):
         """添加登出按鈕"""
@@ -208,7 +200,8 @@ class ProjectManager(BaseWindow):
             # 定義圖示檔案的完整路徑
             add_normal_path = os.path.join(icons_dir, "add_normal.png")
             add_hover_path = os.path.join(icons_dir, "add_hover.png")
-            delete_path = os.path.join(icons_dir, "delete_normal.png")
+            delete_normal_path = os.path.join(icons_dir, "delete_normal.png")
+            delete_hover_path = os.path.join(icons_dir, "delete_hover.png")
 
             # 檢查並載入圖示檔案
             if os.path.exists(add_normal_path):
@@ -227,19 +220,28 @@ class ProjectManager(BaseWindow):
                 print(f"找不到新增按鈕懸停圖示: {add_hover_path}")
                 self.add_hover_icon = tk.PhotoImage()
 
-            if os.path.exists(delete_path):
-                img = Image.open(delete_path)
+            if os.path.exists(delete_normal_path):
+                img = Image.open(delete_normal_path)
                 img = img.resize(self.icon_size, Image.Resampling.LANCZOS)
-                self.delete_icon = ImageTk.PhotoImage(img)
+                self.delete_normal_icon = ImageTk.PhotoImage(img)
             else:
-                print(f"找不到刪除按鈕圖示: {delete_path}")
-                self.delete_icon = tk.PhotoImage()
+                print(f"找不到刪除按鈕圖示: {delete_normal_path}")
+                self.delete_normal_icon = tk.PhotoImage()
+
+            if os.path.exists(delete_hover_path):
+                img = Image.open(delete_hover_path)
+                img = img.resize(self.icon_size, Image.Resampling.LANCZOS)
+                self.delete_hover_icon = ImageTk.PhotoImage(img)
+            else:
+                print(f"找不到刪除按鈕圖示: {delete_hover_path}")
+                self.delete_hover_icon = tk.PhotoImage()
 
         except Exception as e:
             print(f"載入圖示時發生錯誤: {str(e)}")
             self.add_icon = tk.PhotoImage()
             self.add_hover_icon = tk.PhotoImage()
-            self.delete_icon = tk.PhotoImage()
+            self.delete_normal_icon = tk.PhotoImage()
+            self.delete_hover_icon = tk.PhotoImage()
 
     def create_widgets(self):
         """創建專案管理界面元素"""
@@ -270,7 +272,7 @@ class ProjectManager(BaseWindow):
         # 刪除專案圖示按鈕
         self.delete_button = tk.Label(
             icon_frame,
-            image=self.delete_icon,
+            image=self.delete_normal_icon,
             cursor="hand2"
         )
         self.delete_button.pack(side=tk.LEFT, padx=2)
@@ -318,6 +320,8 @@ class ProjectManager(BaseWindow):
 
         # 刪除按鈕事件
         self.delete_button.bind('<Button-1>', lambda e: self.delete_project())
+        self.delete_button.bind('<Enter>', lambda e: self.delete_button.configure(image=self.delete_hover_icon))
+        self.delete_button.bind('<Leave>', lambda e: self.delete_button.configure(image=self.delete_normal_icon))
 
     def update_project_list(self):
         """更新專案列表"""
@@ -325,10 +329,7 @@ class ProjectManager(BaseWindow):
             self.project_combobox.configure(state='disabled')  # 暫時禁用
 
             # 從專案服務獲取專案列表
-            if self.user_id:
-                project_names = self.project_service.get_user_projects(self.user_id)
-            else:
-                project_names = self.project_service.get_directory_projects()
+            project_names = self.project_service.get_user_projects(self.user_id)
 
             # 保存當前選擇
             current = self.selected_project.get()
@@ -354,22 +355,15 @@ class ProjectManager(BaseWindow):
             project_name = dialog.run()
 
             if project_name:
-                if self.user_id:
-                    # 使用專案服務添加專案
-                    success = self.project_service.add_project(project_name, self.user_id)
-                    if not success:
-                        show_warning("警告", "專案已存在！", self.master)
-                        return
-                else:
-                    # 如果沒有用戶ID，只創建目錄
-                    project_path = os.path.join(self.projects_dir, project_name)
-                    if os.path.exists(project_path):
-                        show_warning("警告", "專案已存在！", self.master)
-                        return
-                    os.makedirs(project_path)
+                # 使用專案服務添加專案
+                success = self.project_service.add_project(project_name, self.user_id)
+                if not success:
+                    show_warning("警告", "專案已存在！", self.master)
+                    return
 
-                # 更新下拉列表
+                # 更新下拉列表 - 確保這行一定會執行
                 self.update_project_list()
+                # 設定選擇項為新增的專案
                 self.project_combobox.set(project_name)
 
         except Exception as e:
@@ -378,6 +372,8 @@ class ProjectManager(BaseWindow):
                 f"新增專案時發生錯誤：{str(e)}",
                 self.master
             )
+            # 發生錯誤時也嘗試更新列表
+            self.update_project_list()
 
     def delete_project(self):
         """刪除專案"""
@@ -393,13 +389,14 @@ class ProjectManager(BaseWindow):
                 if success:
                     # 清空當前選擇
                     self.selected_project.set('')
-                    # 重新載入專案列表
-                    self.update_project_list()
-                else:
-                    show_error("錯誤", "刪除專案失敗", self.master)
+
+                # 無論成功或失敗，都更新專案列表
+                self.update_project_list()
 
             except Exception as e:
                 show_error("錯誤", f"刪除專案時發生錯誤：{str(e)}", self.master)
+                # 發生錯誤時也嘗試更新列表
+                self.update_project_list()
 
     def cleanup(self):
         """清理資源"""

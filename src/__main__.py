@@ -3,6 +3,7 @@
 import logging
 import os
 import sys
+
 import tkinter as tk
 
 from database.db_manager import DatabaseManager

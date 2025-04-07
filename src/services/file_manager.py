@@ -397,24 +397,8 @@ class FileManager:
             if confirm_callback and not confirm_callback():
                 return
 
-            # 保存用戶ID以便在切換時使用
-            user_id = None
-            if hasattr(self, 'user_id'):
-                user_id = self.user_id
-
             # 如果有切換回調，執行切換
             if switch_callback:
-                # 傳遞用戶ID到回調函數的上下文
-                if user_id and not hasattr(switch_callback, 'user_id'):
-                    # 這裡我們使用函數閭包來傳遞用戶ID
-                    original_switch = switch_callback
-                    def switch_with_user_id():
-                        # 在這裡設置用戶ID到全局上下文
-                        global temp_user_id
-                        temp_user_id = user_id
-                        return original_switch()
-                    switch_callback = switch_with_user_id
-
                 switch_callback()
             else:
                 if 'show_info' in self.callbacks and self.callbacks['show_info']:

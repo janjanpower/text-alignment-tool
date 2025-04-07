@@ -106,11 +106,29 @@ class DatabaseManager:
             self.logger.error(f"創建資料庫表時出錯: {e}")
             return False
 
+    def is_session_active(self, session):
+        """
+        檢查資料庫會話是否有效
+        :param session: 要檢查的會話
+        :return: 會話是否有效
+        """
+        try:
+            # 使用 sqlalchemy.text 來包裝純文本 SQL
+            from sqlalchemy import text
+            session.execute(text("SELECT 1"))
+            return True
+        except Exception as e:
+            self.logger.warning(f"資料庫會話無效: {e}")
+            return False
+
     def get_session(self):
-        """獲取資料庫會話"""
+        """獲取一個新的 session"""
         return self.Session()
 
     def close_session(self, session):
-        """關閉資料庫會話"""
+        """安全關閉 session"""
         if session:
-            session.close()
+            try:
+                session.close()
+            except Exception as e:
+                self.logger.error(f"關閉 session 時出錯: {e}")

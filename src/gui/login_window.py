@@ -308,7 +308,8 @@ class LoginWindow(BaseWindow):
                 project_manager = ProjectManager(root, user_id=user.id)
                 # 綁定關閉事件來確保登出狀態更新
                 root.protocol("WM_DELETE_WINDOW", lambda: self.logout_user(user.id, root))
-                project_manager.run()
+                # 使用 mainloop 替代 run
+                project_manager.master.mainloop()
 
             else:
                 # 登入失敗
