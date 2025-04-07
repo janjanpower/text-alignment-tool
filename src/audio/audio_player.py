@@ -145,6 +145,11 @@ class AudioPlayer(ttk.Frame):
                 )
 
             if file_path:
+                # 檢查是否重複載入相同文件
+                if hasattr(self, 'audio_file') and self.audio_file == file_path:
+                    self.logger.info(f"重複載入相同音頻檔案，跳過處理: {file_path}")
+                    return file_path
+
                 self.logger.info(f"開始載入音頻文件: {file_path}")
                 self.audio_file = file_path
 
@@ -165,16 +170,16 @@ class AudioPlayer(ttk.Frame):
                 # 創建默認段落
                 self.segment_manager.audio_segments[0] = self.audio
 
-                # 產生音頻載入事件
+                # 產生音頻載入事件 - 僅在真正成功載入時觸發
                 if hasattr(self, 'master') and self.master:
-                    self.master.event_generate("<<AudioLoaded>>")
+                    # 使用 after 延遲觸發事件，避免與其他事件沖突
+                    self.master.after(100, lambda: self.master.event_generate("<<AudioLoaded>>"))
 
                 return file_path
 
         except Exception as e:
             self.logger.error(f"載入音頻文件時出錯: {e}", exc_info=True)
             return None
-
     def sync_audio_with_srt(self, srt_data):
         """
         重新同步音頻段落與 SRT 數據
@@ -207,7 +212,6 @@ class AudioPlayer(ttk.Frame):
         # 直接傳遞當前加載的音頻和 SRT 數據
         self.segment_manager.segment_audio(self.audio, srt_data)
         return True
-
     def segment_single_audio(self, original_start_time, original_end_time, new_start_times, new_end_times, original_index):
         """
         根據新的時間軸切分音頻段落

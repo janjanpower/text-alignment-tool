@@ -263,12 +263,25 @@ class AlignmentGUI(BaseWindow):
     def _on_audio_loaded(self, file_path) -> None:
         """音頻載入後的回調"""
         try:
-            # 記錄音頻檔案路徑
+            # 記錄加載前狀態，用於調試
+            prev_audio_state = self.audio_imported
+
+            # 防止重複處理
+            if self.audio_imported and self.audio_file_path == file_path:
+                self.logger.info(f"音頻檔案已載入，跳過重複處理: {file_path}")
+                return
+
+            # 更新音頻文件路徑和狀態
             self.audio_file_path = file_path
             self.audio_imported = True
 
             # 添加明確的日誌
             self.logger.info(f"音頻已成功載入，路徑: {file_path}, 匯入狀態: {self.audio_imported}")
+
+            # 同步 FileManager 的狀態
+            if hasattr(self, 'file_manager'):
+                self.file_manager.audio_imported = True
+                self.file_manager.audio_file_path = file_path
 
             # 確保音頻播放器已初始化
             if not hasattr(self, 'audio_player'):
@@ -295,13 +308,68 @@ class AlignmentGUI(BaseWindow):
                     self.slider_controller = TimeSliderController(self.master, self.tree, callback_manager)
                     self.logger.info("已初始化時間滑桿控制器")
 
-            # 更新顯示模式
-            self.update_display_mode()
+            # 保存當前樹視圖數據
+            current_data = []
 
-            # 同步 FileManager 的狀態
-            if hasattr(self, 'file_manager'):
-                self.file_manager.audio_imported = True
-                self.file_manager.audio_file_path = file_path
+            # 獲取顯示模式
+            old_mode = self.display_mode
+            new_mode = self._get_appropriate_display_mode()
+
+            # 只有在顯示模式需要變更時才更新樹視圖
+            if new_mode != old_mode:
+                self.logger.info(f"顯示模式變更: {old_mode} -> {new_mode}")
+
+                # 收集當前樹視圖數據
+                for item in self.tree_manager.get_all_items():
+                    values = list(self.tree.item(item)['values'])
+                    tags = self.tree.item(item)['tags']
+                    use_word = self.use_word_text.get(item, False)
+
+                    # 獲取校正狀態
+                    correction_info = {}
+                    try:
+                        # 根據不同顯示模式確定索引位置
+                        if old_mode in [self.DISPLAY_MODE_ALL, self.DISPLAY_MODE_AUDIO_SRT]:
+                            idx = str(values[1]) if len(values) > 1 else ""
+                        else:
+                            idx = str(values[0]) if values else ""
+
+                        if idx in self.correction_service.correction_states:
+                            correction_info = {
+                                'state': self.correction_service.correction_states[idx],
+                                'original': self.correction_service.original_texts.get(idx, ""),
+                                'corrected': self.correction_service.corrected_texts.get(idx, "")
+                            }
+                    except Exception as e:
+                        self.logger.error(f"獲取項目校正狀態時出錯: {e}")
+
+                    current_data.append({
+                        'values': values,
+                        'tags': tags,
+                        'use_word': use_word,
+                        'correction': correction_info if correction_info else None
+                    })
+
+                # 清空樹狀視圖
+                self.tree_manager.clear_all()
+
+                # 更新顯示模式
+                self.display_mode = new_mode
+
+                # 更新列配置
+                self.refresh_treeview_structure()
+
+                # 使用收集的數據重新填充樹視圖
+                old_mode_str = "any"  # 使用通用模式檢測
+                self.restore_tree_data(current_data, old_mode_str, new_mode)
+            else:
+                self.logger.info("顯示模式無需變更，保持現有樹視圖")
+
+            # 更新文件信息
+            self.update_file_info()
+
+            # 更新狀態欄
+            self.update_status(f"已載入音頻檔案: {os.path.basename(file_path)}")
 
         except Exception as e:
             self.logger.error(f"處理音頻載入回調時出錯: {e}", exc_info=True)
@@ -2446,6 +2514,11 @@ class AlignmentGUI(BaseWindow):
 
     def initialize_audio_player(self) -> None:
         """初始化音頻服務和播放器"""
+        # 檢查是否已初始化，防止重複初始化
+        if hasattr(self, 'audio_player') and self.audio_player:
+            self.logger.debug("音頻播放器已初始化，跳過重複初始化")
+            return
+
         from audio.audio_service import AudioService
 
         self.audio_service = AudioService(self)  # 傳入 self 作為 gui_reference
@@ -2453,9 +2526,24 @@ class AlignmentGUI(BaseWindow):
 
         # 設置音頻載入回調
         def on_audio_loaded_callback(file_path):
+            # 檢查是否重複處理相同文件
+            if self.audio_file_path == file_path and self.audio_imported:
+                self.logger.debug(f"跳過重複處理相同音頻文件: {file_path}")
+                return
+
             self.audio_file_path = file_path
             self.audio_imported = True
+
+            # 更新顯示模式前先保存當前狀態
+            old_mode = self.display_mode
+
+            # 更新顯示模式
             self.update_display_mode()
+
+            # 如果顯示模式變化，記錄日誌
+            if old_mode != self.display_mode:
+                self.logger.info(f"音頻載入後顯示模式已變更: {old_mode} -> {self.display_mode}")
+
             self.update_file_info()
 
             # 如果有SRT數據，確保立即分割音頻
@@ -2471,6 +2559,36 @@ class AlignmentGUI(BaseWindow):
             callback_manager = self._create_slider_callbacks()
             self.slider_controller = TimeSliderController(self.master, self.tree, callback_manager)
             self.logger.info("已初始化時間滑桿控制器")
+
+    def update_display_mode_without_rebuild(self) -> None:
+        """更新顯示模式但不重建樹狀視圖"""
+        old_mode = self.display_mode
+
+        # 檢查並設置新的顯示模式
+        if not self.srt_imported:
+            return
+
+        # 獲取適當的顯示模式
+        new_mode = self._get_appropriate_display_mode()
+
+        # 如果模式已經改變，僅更新列結構而不清空數據
+        if new_mode != old_mode:
+            self.logger.info(f"顯示模式變更: {old_mode} -> {new_mode}（保留數據）")
+            self.display_mode = new_mode
+
+            # 更新列結構
+            self.setup_treeview_columns()
+
+            # 同步狀態管理器
+            if hasattr(self, 'state_manager'):
+                self.state_manager.display_mode = new_mode
+
+        # 更新SRT數據（不從樹狀視圖重建）
+        if hasattr(self, 'srt_data') and self.srt_data:
+            self.logger.debug("保持SRT數據不變")
+
+        # 更新狀態欄
+        self.update_status(f"顯示模式: {self.get_mode_description(new_mode)}")
 
     def on_treeview_change(self, event: tk.Event) -> None:
         """
@@ -2594,7 +2712,7 @@ class AlignmentGUI(BaseWindow):
                     })
 
                 # 先清空當前樹狀視圖
-                self.tree_manager.clear_all()
+                self.tree_manager.clear_all()  # 問題所在：清空後重建會導致重複
 
                 # 更新顯示模式 (這會改變樹狀視圖的結構)
                 self.update_display_mode()
@@ -2659,6 +2777,29 @@ class AlignmentGUI(BaseWindow):
         except Exception as e:
             self.logger.error(f"處理音頻載入事件時出錯: {e}")
             show_error("錯誤", f"處理音頻載入失敗: {str(e)}", self.master)
+
+    def rebuild_treeview_from_srt_data(self):
+        """直接從 SRT 數據重建樹狀視圖"""
+        # 確保樹狀視圖已清空
+        self.tree_manager.clear_all()
+
+        # 獲取校正數據
+        corrections = self.load_corrections()
+
+        # 設置顯示模式 - 但不觸發樹狀視圖重建
+        self.display_mode = self._get_appropriate_display_mode()
+
+        # 刷新樹狀視圖結構
+        self.refresh_treeview_structure()
+
+        # 從 SRT 數據重建
+        if hasattr(self, 'srt_data') and self.srt_data:
+            for sub in self.srt_data:
+                # 使用 prepare_and_insert_subtitle_item 方法
+                self.prepare_and_insert_subtitle_item(sub, corrections)
+
+        # 日誌記錄樹狀視圖項目數
+        self.logger.info(f"重建樹狀視圖完成，項目數: {len(self.tree_manager.get_all_items())}")
 
     # 修改 load_corrections 方法，使用 CorrectionService
     def load_corrections(self) -> Dict[str, str]:
@@ -4271,16 +4412,17 @@ class AlignmentGUI(BaseWindow):
                     anchor=config['anchor'])
                 self.tree_manager.set_heading(col, text=col, anchor='center')
 
-            # 恢復數據到樹狀視圖
-            old_mode = "any"  # 使用通用模式檢測
-            self.restore_tree_data(current_data, old_mode, self.display_mode)
+            # 只有當有數據時才恢復數據到樹狀視圖
+            if current_data:
+                old_mode = "any"  # 使用通用模式檢測
+                self.restore_tree_data(current_data, old_mode, self.display_mode)
 
             # 綁定窗口大小變化事件
             self.master.bind("<Configure>", self.on_window_resize)
 
             # 設置標籤樣式
             self.tree.tag_configure('mismatch', background='#FFDDDD')  # 淺紅色背景標記不匹配項目
-            self.tree.tag_configure('use_word_text', background='#00BFFF')  # 淺藍色背景標記使用 Word 文本的項目
+            self.tree.tag_configure('use_word_text', background='#00BFFF')  # 淺藍色背景標記使用 Word 文本
 
             self.logger.info(f"樹狀視圖結構刷新完成，共恢復 {len(current_data)} 項數據")
 

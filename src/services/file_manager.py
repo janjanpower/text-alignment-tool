@@ -310,30 +310,23 @@ class FileManager:
                     show_error("錯誤", "選擇的文件不存在", self.parent)
                 return
 
+            # 檢查是否重複匯入相同文件
+            if self.audio_imported and self.audio_file_path == file_path:
+                self.logger.info(f"重複匯入相同音頻檔案，跳過處理: {file_path}")
+                return
+
             # 更新狀態
             self.audio_file_path = file_path
             self.audio_imported = True
             self.logger.info(f"音頻路徑已更新: {file_path}")
             self.logger.info(f"音頻匯入狀態已更新: {self.audio_imported}")
 
-            # 調用回調函數
+            # 調用回調函數 - 使用 after 延遲執行，避免與其他處理衝突
             if self.callbacks['on_audio_loaded']:
                 self.logger.info("調用 on_audio_loaded 回調")
-                self.callbacks['on_audio_loaded'](file_path)
+                self.parent.after(100, lambda: self.callbacks['on_audio_loaded'](file_path))
             else:
                 self.logger.warning("on_audio_loaded 回調未設置")
-
-            if self.callbacks['on_file_info_updated']:
-                self.logger.info("調用 on_file_info_updated 回調")
-                self.callbacks['on_file_info_updated']()
-            else:
-                self.logger.warning("on_file_info_updated 回調未設置")
-
-            # 通知完成音頻載入
-            if 'show_info' in self.callbacks and self.callbacks['show_info']:
-                self.callbacks['show_info']("成功", f"已成功載入音頻檔案：\n{os.path.basename(file_path)}")
-            else:
-                show_info("成功", f"已成功載入音頻檔案：\n{os.path.basename(file_path)}", self.parent)
 
         except Exception as e:
             self.logger.error(f"匯入音頻文件時出錯: {e}", exc_info=True)

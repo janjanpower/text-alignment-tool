@@ -130,10 +130,42 @@ class AudioService:
         except Exception as e:
             self.logger.error(f"清理音頻資源時出錯: {e}", exc_info=True)
 
+    def on_audio_loaded_callback(self, file_path):
+        """音頻載入回調處理"""
+        try:
+            # 檢查是否已經匯入過
+            if hasattr(self, 'audio_file_path') and self.audio_file_path == file_path:
+                self.logger.debug(f"音頻文件 {file_path} 已經載入，避免重複處理")
+                return
+
+            # 更新音頻狀態
+            self.audio_file_path = file_path
+            self.audio_imported = True
+
+            # 更新顯示模式（不清空樹狀視圖）
+            if hasattr(self, 'update_display_mode_without_rebuild'):
+                # 使用不重建樹狀視圖的方法
+                self.update_display_mode_without_rebuild()
+            else:
+                # 向後兼容
+                self.update_display_mode()
+
+            # 更新文件信息
+            self.update_file_info()
+
+            # 如果有SRT數據，確保立即分割音頻
+            if hasattr(self, 'srt_data') and self.srt_data:
+                if hasattr(self.audio_player, 'segment_audio'):
+                    self.audio_player.segment_audio(self.srt_data)
+                    self.logger.info(f"音頻初始化後已分割音頻段落：{len(self.srt_data)}個")
+        except Exception as e:
+            self.logger.error(f"音頻載入回調處理時出錯: {e}")
+
     def handle_audio_loaded(self, event=None):
         """處理音頻載入事件"""
         try:
             if self.gui_reference and hasattr(self.gui_reference, 'on_audio_loaded_callback'):
+                # 僅傳遞文件路徑，不做其他處理
                 self.gui_reference.on_audio_loaded_callback(self.audio_file_path)
         except Exception as e:
             self.logger.error(f"處理音頻載入事件時出錯: {e}", exc_info=True)

@@ -1,6 +1,7 @@
 """音頻段落管理模組"""
 
 import logging
+import time
 from typing import Dict, Any, Optional
 from pydub import AudioSegment
 import os
@@ -175,6 +176,15 @@ class AudioSegmentManager:
         :param srt_data: SRT 數據
         """
         try:
+            # 避免重複處理相同數據
+            if hasattr(self, '_last_segmentation') and self._last_segmentation:
+                last_srt_hash = self._last_segmentation.get('srt_hash')
+                current_srt_hash = hash(str([(sub.index, str(sub.start), str(sub.end)) for sub in srt_data]))
+
+                if last_srt_hash == current_srt_hash and self.has_segments():
+                    self.logger.debug("SRT數據未變化，跳過音頻分割處理")
+                    return True
+
             # 確保音頻數據有效
             if audio is None:
                 self.logger.error("傳入的音頻數據為空")
@@ -182,7 +192,6 @@ class AudioSegmentManager:
 
             # 保存完整音頻供後續使用
             self.full_audio = audio
-
             # 清空現有段落
             self.audio_segments = {}
             total_duration = len(audio)
@@ -239,6 +248,12 @@ class AudioSegmentManager:
                 except Exception as e:
                     self.logger.error(f"切割索引 {sub.index} 的音頻段落時出錯: {e}")
                     error_count += 1
+
+            # 記錄本次分割信息
+            self._last_segmentation = {
+                'srt_hash': hash(str([(sub.index, str(sub.start), str(sub.end)) for sub in srt_data])),
+                'timestamp': time.time()
+            }
 
             self.logger.info(f"音頻分段完成: 成功 {processed_count}, 失敗 {error_count}, 段落數 {len(self.audio_segments)}")
             return True
