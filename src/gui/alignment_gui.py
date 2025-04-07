@@ -30,8 +30,8 @@ from services.split_service import SplitService
 from services.word_processor import WordProcessor
 from utils.image_manager import ImageManager
 from utils.text_utils import simplify_to_traditional
-from utils.time_utils import parse_time
-
+from utils.time_utils import parse_time,time_to_milliseconds, milliseconds_to_time, time_to_seconds
+from gui.slider_controller import TimeSliderController
 
 # 添加項目根目錄到路徑以確保絕對導入能正常工作
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -86,6 +86,9 @@ class AlignmentGUI(BaseWindow):
         # 初始化音頻播放器
         self.initialize_audio_player()
 
+        callback_manager = self._create_slider_callbacks()
+        self.slider_controller = TimeSliderController(self.master, self.tree, callback_manager)
+
         # 綁定事件
         self.bind_all_events()
 
@@ -121,11 +124,6 @@ class AlignmentGUI(BaseWindow):
         # 添加滑鼠移動事件綁定，用於更新合併符號位置
         self.master.bind("<Motion>", self.remember_mouse_position)
 
-        # 添加時間調整滑桿相關變量
-        self.time_slider = None  # 滑桿控件
-        self.slider_active = False  # 滑桿是否激活
-        self.slider_target = None  # 滑桿調整的目標項目和欄位
-        self.slider_start_value = 0  # 滑桿開始值
         self.last_combine_operation = None
         self.last_time_adjust_operation = None
 
@@ -524,213 +522,6 @@ class AlignmentGUI(BaseWindow):
 
         self.file_manager.switch_project(confirm_switch, do_switch)
 
-
-    def show_time_slider(self, event, item, column, column_name):
-        """顯示時間調整滑桿"""
-        # 獲取單元格的位置和大小
-        bbox = self.tree.bbox(item, column)
-        if not bbox:
-            return
-
-        x, y, width, height = bbox
-
-        # 獲取當前值和相關項目
-        values = self.tree.item(item, "values")
-
-        # 獲取樹狀視圖中的所有項目
-        all_items = self.tree_manager.get_all_items()
-        item_index = all_items.index(item)
-
-        # 根據不同模式確定索引、開始時間和結束時間的位置
-        if self.display_mode in [self.DISPLAY_MODE_ALL, self.DISPLAY_MODE_AUDIO_SRT]:
-            index_pos = 1
-            start_pos = 2
-            end_pos = 3
-        else:  # SRT 或 SRT_WORD 模式
-            index_pos = 0
-            start_pos = 1
-            end_pos = 2
-
-        # 創建滑桿控件
-        self.create_time_slider(
-            x, y, width, height,
-            item, column_name,
-            values, item_index, all_items,
-            index_pos, start_pos, end_pos
-        )
-
-    def create_time_slider(self, x, y, width, height, item, column_name, values,
-                        item_index, all_items, index_pos, start_pos, end_pos):
-        """創建時間調整滑桿"""
-        # 創建滑桿框架
-        slider_frame = tk.Frame(self.tree, bg="lightgray", bd=1, relief="raised")
-        slider_frame.place(x=x + width, y=y, width=150, height=height)
-
-        # 獲取當前時間值
-        current_time_str = values[start_pos if column_name == "Start" else end_pos]
-        current_time = parse_time(current_time_str)
-
-        # 計算滑桿範圍
-        # 對於 Start 列，最小值是 0，最大值是當前 End 時間
-        # 對於 End 列，最小值是當前 Start 時間，最大值可以適當增加
-        if column_name == "Start":
-            min_value = 0
-            max_value = self.time_to_seconds(parse_time(values[end_pos])) * 1000
-
-            # 如果有上一行，則最小值是上一行的結束時間
-            if item_index > 0:
-                prev_item = all_items[item_index - 1]
-                prev_values = self.tree.item(prev_item, "values")
-                prev_end_time = parse_time(prev_values[end_pos])
-                min_value = self.time_to_milliseconds(prev_end_time)
-        else:  # End 欄位
-            min_value = self.time_to_milliseconds(parse_time(values[start_pos]))
-            max_value = min_value + 10000  # 增加10秒
-
-            # 如果有下一行，則最大值是下一行的開始時間
-            if item_index < len(all_items) - 1:
-                next_item = all_items[item_index + 1]
-                next_values = self.tree.item(next_item, "values")
-                next_start_time = parse_time(next_values[start_pos])
-                max_value = self.time_to_milliseconds(next_start_time)
-
-        # 當前值
-        current_value = self.time_to_milliseconds(current_time)
-
-        # 創建滑桿
-        self.slider_active = True
-        self.slider_target = {
-            "item": item,
-            "column": column_name,
-            "index": values[index_pos],
-            "item_index": item_index,
-            "all_items": all_items,
-            "index_pos": index_pos,
-            "start_pos": start_pos,
-            "end_pos": end_pos
-        }
-        self.slider_start_value = current_value
-
-        # 創建滑桿和確認按鈕
-        self.time_slider = ttk.Scale(
-            slider_frame,
-            from_=min_value,
-            to=max_value,
-            orient=tk.HORIZONTAL,
-            value=current_value,
-            command=self.on_slider_change
-        )
-        self.time_slider.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=2)
-
-        # 綁定事件，點擊其他區域時隱藏滑桿
-        self.master.bind("<Button-1>", self.check_slider_focus)
-
-    def time_to_seconds(self, time_obj):
-        """將時間對象轉換為秒數"""
-        return time_obj.hours * 3600 + time_obj.minutes * 60 + time_obj.seconds + time_obj.milliseconds / 1000
-
-    def time_to_milliseconds(self, time_obj):
-        """將時間對象轉換為毫秒"""
-        return ((time_obj.hours * 3600 + time_obj.minutes * 60 + time_obj.seconds) * 1000 +
-                time_obj.milliseconds)
-
-    def on_slider_change(self, value):
-        """滑桿值變化時更新時間顯示"""
-        if not self.slider_active or not self.slider_target:
-            return
-
-        # 獲取新的時間值（毫秒）
-        new_value = float(value)
-
-        # 將毫秒轉換為 SubRipTime 對象
-        new_time = self.milliseconds_to_time(new_value)
-
-        # 更新樹狀視圖中的顯示
-        item = self.slider_target["item"]
-        column_name = self.slider_target["column"]
-        values = list(self.tree.item(item, "values"))
-
-        # 更新相應的值
-        if column_name == "Start":
-            values[self.slider_target["start_pos"]] = str(new_time)
-
-            # 如果有上一行，同時更新上一行的結束時間
-            item_index = self.slider_target["item_index"]
-            if item_index > 0:
-                prev_item = self.slider_target["all_items"][item_index - 1]
-                prev_values = list(self.tree.item(prev_item, "values"))
-                prev_values[self.slider_target["end_pos"]] = str(new_time)
-                self.tree.item(prev_item, values=tuple(prev_values))
-        else:  # End 欄位
-            values[self.slider_target["end_pos"]] = str(new_time)
-
-            # 如果有下一行，同時更新下一行的開始時間
-            item_index = self.slider_target["item_index"]
-            if item_index < len(self.slider_target["all_items"]) - 1:
-                next_item = self.slider_target["all_items"][item_index + 1]
-                next_values = list(self.tree.item(next_item, "values"))
-                next_values[self.slider_target["start_pos"]] = str(new_time)
-                self.tree.item(next_item, values=tuple(next_values))
-
-        # 更新當前項目的值
-        self.tree_manager.update_item(item, values=tuple(values))
-
-    def milliseconds_to_time(self, milliseconds):
-        """將毫秒轉換為 SubRipTime 對象"""
-        total_seconds = milliseconds / 1000
-        hours = int(total_seconds // 3600)
-        minutes = int((total_seconds % 3600) // 60)
-        seconds = int(total_seconds % 60)
-        ms = int((total_seconds - int(total_seconds)) * 1000)
-        return pysrt.SubRipTime(hours, minutes, seconds, ms)
-
-    def apply_time_change(self):
-        """應用時間變更並隱藏滑桿"""
-        if not self.slider_active:
-            return
-
-        try:
-            # 保存當前校正狀態
-            correction_states = {}
-            for index, state in self.correction_service.correction_states.items():
-                correction_states[index] = {
-                    'state': state,
-                    'original': self.correction_service.original_texts.get(index, ''),
-                    'corrected': self.correction_service.corrected_texts.get(index, '')
-                }
-
-            # 更新 SRT 數據以反映變更
-            self.update_srt_data_from_treeview()
-
-            # 恢復校正狀態
-            for index, data in correction_states.items():
-                self.correction_service.correction_states[index] = data['state']
-                self.correction_service.original_texts[index] = data['original']
-                self.correction_service.corrected_texts[index] = data['corrected']
-
-            # 如果有音頻，更新音頻段落 (這是關鍵步驟)
-            if self.audio_imported and hasattr(self, 'audio_player') and self.audio_player.audio:
-                # 創建一份當前時間調整的記錄，用於可能的撤銷操作
-                self._record_time_adjustment()
-
-                # 使用 segment_audio 而不是 rebuild_segments 確保完全重建
-                self.audio_player.segment_audio(self.srt_data)
-                self.logger.info("時間調整後已更新音頻段落")
-
-            # 保存狀態
-            self.save_operation_state(self.get_current_state(), {
-                'type': 'time_adjust',
-                'description': '調整時間軸'
-            })
-
-            # 隱藏滑桿
-            self.hide_time_slider()
-
-        except Exception as e:
-            self.logger.error(f"應用時間變更時出錯: {e}", exc_info=True)
-            # 即使出錯也要隱藏滑桿
-            self.hide_time_slider()
-
     def _record_time_adjustment(self):
         """記錄時間調整以便撤銷"""
         # 已有紀錄，就不需要重複記錄
@@ -771,52 +562,6 @@ class AlignmentGUI(BaseWindow):
             'start_index': start_index,
             'end_index': end_index
         }
-
-    def check_slider_focus(self, event):
-        """檢查點擊是否在滑桿外部，如果是則隱藏滑桿"""
-        if not self.slider_active or not self.time_slider:
-            return
-
-        # 獲取滑桿的位置
-        slider_x = self.time_slider.winfo_rootx()
-        slider_y = self.time_slider.winfo_rooty()
-        slider_width = self.time_slider.winfo_width()
-        slider_height = self.time_slider.winfo_height()
-
-        # 檢查點擊是否在滑桿區域外
-        if (event.x_root < slider_x or event.x_root > slider_x + slider_width or
-            event.y_root < slider_y or event.y_root > slider_y + slider_height):
-            # 應用變更並隱藏滑桿
-            self.apply_time_change()
-
-    def hide_time_slider(self):
-        """隱藏時間調整滑桿"""
-        # 應用變更 (如果尚未應用)
-        if self.slider_active and self.slider_target:
-            # 避免遞歸調用
-            if hasattr(self, '_hide_time_slider_in_progress') and self._hide_time_slider_in_progress:
-                pass  # 避免遞歸調用
-            else:
-                self._hide_time_slider_in_progress = True
-                self.apply_time_change()
-                self._hide_time_slider_in_progress = False
-                return  # 提前返回，因為 apply_time_change 會調用本方法
-
-        if hasattr(self, 'time_slider') and self.time_slider:
-            # 獲取滑桿的父框架
-            parent = self.time_slider.master
-            parent.place_forget()
-            parent.destroy()
-            self.time_slider = None
-
-        self.slider_active = False
-        self.slider_target = None
-
-        # 解除綁定
-        try:
-            self.master.unbind("<Button-1>")
-        except:
-            pass
 
     def remember_mouse_position(self, event):
         """記錄當前滑鼠位置"""
@@ -947,6 +692,8 @@ class AlignmentGUI(BaseWindow):
         self.database_file = None
         self.audio_file_path = None
         self.current_style = None
+
+
 
     def update_state_manager(self) -> None:
         """更新狀態管理器的參數"""
@@ -2060,15 +1807,14 @@ class AlignmentGUI(BaseWindow):
                 self.merge_symbol.place_forget()
 
             # 隱藏時間滑桿（如果有）
-            if hasattr(self, 'hide_time_slider'):
-                self.hide_time_slider()
-
+            if hasattr(self, 'slider_controller'):
+                self.slider_controller.hide_slider()
 
             # 處理時間欄位的點擊
             if column_name in ["Start", "End"] and region == "cell":
                 # 顯示時間調整滑桿
-                if hasattr(self, 'show_time_slider'):
-                    self.show_time_slider(event, item, column, column_name)
+                if hasattr(self, 'slider_controller'):
+                    self.slider_controller.show_slider(event, item, column, column_name)
                 return
 
             # 獲取值
@@ -2273,6 +2019,77 @@ class AlignmentGUI(BaseWindow):
 
         except Exception as e:
             self.logger.error(f"處理樹狀圖點擊事件時出錯: {e}", exc_info=True)
+
+    def _create_slider_callbacks(self):
+        """創建滑桿控制器所需的回調函數"""
+        from utils.time_utils import parse_time as parse_time_func
+
+        # 返回一個具有方法屬性的對象，而不是字典
+        class CallbackManager:
+            def __init__(self, gui):
+                self.gui = gui
+
+            def parse_time(self, time_str):
+                """解析時間字串的包裝方法"""
+                try:
+                    return parse_time_func(time_str)
+                except Exception as e:
+                    self.gui.logger.error(f"解析時間字串時出錯: {e}")
+                    return None
+
+            def on_time_change(self):
+                """時間變更後的更新操作"""
+                self.gui.update_after_time_change()
+
+            def get_display_mode(self):
+                """獲取當前顯示模式"""
+                return self.gui.display_mode
+
+        return CallbackManager(self)
+
+    def parse_time(self, time_str):
+        """解析時間字串的包裝方法"""
+        from utils.time_utils import parse_time
+        try:
+            return parse_time(time_str)
+        except Exception as e:
+            self.logger.error(f"解析時間字串時出錯: {e}")
+            return pysrt.SubRipTime(0, 0, 0, 0)
+
+    def update_after_time_change(self):
+        """時間變更後的更新操作"""
+        try:
+            # 保存當前校正狀態
+            correction_states = {}
+            for index, state in self.correction_service.correction_states.items():
+                correction_states[index] = {
+                    'state': state,
+                    'original': self.correction_service.original_texts.get(index, ''),
+                    'corrected': self.correction_service.corrected_texts.get(index, '')
+                }
+
+            # 更新 SRT 數據以反映變更
+            self.update_srt_data_from_treeview()
+
+            # 恢復校正狀態
+            for index, data in correction_states.items():
+                self.correction_service.correction_states[index] = data['state']
+                self.correction_service.original_texts[index] = data['original']
+                self.correction_service.corrected_texts[index] = data['corrected']
+
+            # 如果有音頻，更新音頻段落
+            if self.audio_imported and hasattr(self, 'audio_player') and self.audio_player.audio:
+                # 創建一份當前時間調整的記錄，用於可能的撤銷操作
+                self._record_time_adjustment()
+
+                # 使用 segment_audio 而不是 rebuild_segments 確保完全重建
+                self.audio_player.segment_audio(self.srt_data)
+                self.logger.info("時間調整後已更新音頻段落")
+
+            # 保存狀態
+            self.save_operation_state('time_adjust', '調整時間軸')
+        except Exception as e:
+            self.logger.error(f"更新時間變更後出錯: {e}")
 
     def on_icon_click(self, event):
         """當圖標被點擊時的處理，打開添加視窗"""

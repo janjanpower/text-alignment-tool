@@ -1,7 +1,8 @@
 # time_utils.py
 import logging
 import pysrt
-from typing import Any
+from typing import Any, Union
+
 
 def parse_time(time_str: str) -> Any:
     """
@@ -54,6 +55,7 @@ def parse_time(time_str: str) -> Any:
     except Exception as e:
         raise ValueError(f"時間解析錯誤: {str(e)}")
 
+
 def format_time(time_obj: Any) -> str:
     """
     格式化時間值為字符串
@@ -83,3 +85,53 @@ def format_time(time_obj: Any) -> str:
     except Exception as e:
         logging.error(f"時間格式化錯誤: {e}")
         return "00:00:00,000"
+
+
+def time_to_milliseconds(time_obj: Union[pysrt.SubRipTime, Any]) -> int:
+    """
+    將 SRT 時間轉換為毫秒
+    :param time_obj: SRT 時間對象或其他時間對象
+    :return: 毫秒數
+    """
+    if isinstance(time_obj, pysrt.SubRipTime):
+        return (time_obj.hours * 3600 + time_obj.minutes * 60 + time_obj.seconds) * 1000 + time_obj.milliseconds
+
+    # 如果不是 SubRipTime，嘗試獲取 hours、minutes、seconds、milliseconds 屬性
+    try:
+        return (getattr(time_obj, 'hours', 0) * 3600 +
+                getattr(time_obj, 'minutes', 0) * 60 +
+                getattr(time_obj, 'seconds', 0)) * 1000 + getattr(time_obj, 'milliseconds', 0)
+    except Exception:
+        logging.error(f"時間轉換錯誤，無法處理類型: {type(time_obj)}")
+        return 0
+
+
+def milliseconds_to_time(milliseconds: float) -> pysrt.SubRipTime:
+    """
+    將毫秒轉換為 SubRipTime 對象
+    :param milliseconds: 毫秒數
+    :return: SubRipTime 對象
+    """
+    try:
+        total_seconds = milliseconds / 1000
+        hours = int(total_seconds // 3600)
+        minutes = int((total_seconds % 3600) // 60)
+        seconds = int(total_seconds % 60)
+        ms = int((milliseconds % 1000))
+        return pysrt.SubRipTime(hours, minutes, seconds, ms)
+    except Exception as e:
+        logging.error(f"毫秒轉換為時間對象時出錯: {e}")
+        return pysrt.SubRipTime(0, 0, 0, 0)
+
+
+def time_to_seconds(time_obj: pysrt.SubRipTime) -> float:
+    """
+    將時間對象轉換為秒數
+    :param time_obj: 時間對象
+    :return: 秒數(浮點數)
+    """
+    try:
+        return time_obj.hours * 3600 + time_obj.minutes * 60 + time_obj.seconds + time_obj.milliseconds / 1000
+    except Exception as e:
+        logging.error(f"時間轉換為秒數時出錯: {e}")
+        return 0.0
