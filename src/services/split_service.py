@@ -39,6 +39,11 @@ class SplitService:
         :param end_time: 結束時間
         """
         try:
+
+            # 在操作前添加如下代碼
+            if hasattr(self, 'slider_controller'):
+                self.slider_controller.hide_slider()
+
             # 保存全局樹狀態，用於後續復原
             original_tree_state = []
             for tree_item in self.gui.tree_manager.get_all_items():
@@ -299,20 +304,38 @@ class SplitService:
                         self.logger.error(f"插入新項目失敗: {e}")
                         continue
 
-                # 如果有音頻，更新音頻段落
-                if self.gui.audio_imported and hasattr(self.gui, 'audio_player'):  # 修改這一行
-                    # 首先嘗試使用單個區域切分方法
-                    self.gui.audio_player.segment_single_audio(
-                        start_time,
-                        end_time,
-                        new_start_times,
-                        new_end_times,
-                        srt_index
-                    )
+                # 準備新的時間列表
+                new_start_times = []
+                new_end_times = []
+                for _, new_start, new_end in result:
+                    new_start_times.append(new_start)
+                    new_end_times.append(new_end)
 
-                    # 然後重新對整個 SRT 數據進行分割以確保一致性
-                    self.gui.audio_player.segment_audio(self.gui.srt_data)
-                    self.logger.info(f"已重新分割全部音頻段落，確保與 SRT 同步")
+                # 更新音頻段落 - 使用更明確的錯誤處理
+                if self.gui.audio_imported and hasattr(self.gui, 'audio_player'):
+                    try:
+                        # 首先使用單個區域切分方法
+                        self.gui.audio_player.segment_single_audio(
+                            start_time,
+                            end_time,
+                            new_start_times,
+                            new_end_times,
+                            srt_index
+                        )
+
+                        # 然後重新處理整個 SRT 數據
+                        self.gui.audio_player.segment_audio(self.gui.srt_data)
+                        self.logger.info("已重新分割全部音頻段落")
+
+                        # 隱藏可能顯示的時間滑桿
+                        if hasattr(self.gui, 'slider_controller'):
+                            self.gui.slider_controller.hide_slider()
+
+                        # 重新編號 - 傳遞參數指示是否跳過校正更新
+                        self.gui.renumber_items(skip_correction_update=False)  # 確保更新校正狀態
+
+                    except Exception as e:
+                        self.logger.error(f"更新音頻段落時出錯: {e}", exc_info=True)
 
                 # 重新編號
                 self.gui.renumber_items()
@@ -352,11 +375,16 @@ class SplitService:
                     current_correction = self.gui.correction_service.serialize_state() if hasattr(self.gui, 'correction_service') else None
                     self.gui.state_manager.save_state(current_state, full_operation_info, current_correction)
 
+
                 # 重新綁定事件
                 self.gui.bind_all_events()
 
                 # 更新介面
                 self.gui.update_status("已更新並拆分文本")
+
+                # 處理結束後，更新音頻段落
+                if self.gui.audio_imported and hasattr(self.gui, 'audio_player'):
+                    self.gui.audio_player.segment_audio(self.gui.srt_data)
 
             else:
                 # 處理單一文本編輯（非拆分）結果的部分保持不變

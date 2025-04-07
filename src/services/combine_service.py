@@ -24,17 +24,27 @@ class CombineService:
             if not self._validate_combine_selection():
                 return
 
+            # 在執行合併操作前，確保隱藏任何顯示的時間滑桿
+            if hasattr(self.gui, 'slider_controller'):
+                self.gui.slider_controller.hide_slider()
+
             # 記錄合併前的狀態
             self.logger.info("=== 開始合併字幕 ===")
+
 
             # 保存合併前的狀態
             original_state, original_correction, original_items_data, selected_indices = self._prepare_combine_state()
 
-            # 執行實際的合併操作 - 包含所有後續處理
+            # 執行實際的合併操作
             success, new_item, new_item_index = self._execute_combine(original_items_data, selected_indices)
+
 
             if not success:
                 return
+
+            # 更新音頻段落
+            if self.gui.audio_imported and hasattr(self.gui, 'audio_player'):
+                self.gui.audio_player.segment_audio(self.gui.srt_data)
 
             # 保存操作後的狀態
             self._save_combine_operation_state(original_state, original_correction, original_items_data, new_item, new_item_index)
@@ -46,7 +56,7 @@ class CombineService:
             self.gui.update_status("已合併所選字幕")
         except Exception as e:
             self.logger.error(f"合併字幕時出錯: {e}", exc_info=True)
-            self.gui.show_error("錯誤", f"合併字幕失敗: {str(e)}")
+            self.gui.show_error("錯誤", f"合併字幕失敗: {str(e)}", self.master)
 
     def _validate_combine_selection(self) -> bool:
         """驗證是否有足夠的選中項用於合併"""
@@ -175,6 +185,16 @@ class CombineService:
             # 插入新合併項目
             new_item = self.gui.insert_item('', base_position, values=tuple(combined_values))
 
+            # 更新 SRT 數據以反映變更
+            self.gui.update_srt_data_from_treeview()
+
+            # 隱藏可能顯示的時間滑桿
+            if hasattr(self.gui, 'slider_controller'):
+                self.gui.slider_controller.hide_slider()
+
+            # 重新編號 - 確保與時間滑桿協調工作
+            self.gui.renumber_items()
+
             # 確定新項目的索引
             if self.gui.display_mode in [self.gui.DISPLAY_MODE_ALL, self.gui.DISPLAY_MODE_AUDIO_SRT]:
                 new_item_index = str(combined_values[1])
@@ -196,14 +216,6 @@ class CombineService:
 
             # 更新 SRT 數據
             self.gui.update_srt_data_from_treeview()
-
-            # 更新音頻段落 - 不再使用原始項目
-            if self.gui.audio_imported and hasattr(self.gui, 'audio_player'):
-                # 直接更新整個 SRT 數據的音頻段落
-                self.gui.audio_player.segment_audio(self.gui.srt_data)
-
-            # 重新編號
-            self.gui.renumber_items()
 
             # 選中新合併的項目
             self.gui.tree_manager.set_selection(new_item)

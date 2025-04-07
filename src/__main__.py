@@ -44,7 +44,6 @@ setup_import_paths()
 # 設置日誌記錄
 logger = setup_logging()
 logger.info("應用程式啟動")
-
 class ApplicationManager:
     """應用程式管理器"""
 

@@ -42,7 +42,7 @@ class TimeSliderController:
         style.configure("TimeSlider.Horizontal.TScale",
                         background="#404040",
                         troughcolor="#404040",
-                        sliderlength=15,
+                        sliderlength=10,
                         sliderrelief="raised")
 
         # 如果平台支持，設置滑鈕顏色
@@ -50,8 +50,8 @@ class TimeSliderController:
             style.map("TimeSlider.Horizontal.TScale",
                       background=[("active", "#404040")],
                       troughcolor=[("active", "#404040")],
-                      sliderthickness=[("active", 15)],
-                      slidercolor=[("", "#0078D7"), ("active", "#00A2FF")])
+                      sliderthickness=[("active", 10)],
+                      slidercolor=[("", "#334D6D"), ("active", "#334D6D")])
         except Exception as e:
             self.logger.debug(f"設置滑鈕顏色時出錯，可能是平台不支持: {e}")
 
@@ -114,7 +114,7 @@ class TimeSliderController:
 
             # 創建滑桿框架
             self.slider_frame = tk.Frame(self.tree, bg="lightgray", bd=1, relief="raised")
-            self.slider_frame.place(x=x + width, y=y, width=150, height=height)
+            self.slider_frame.place(x=x + width, y=y, width=80, height=height)
 
             # 獲取當前時間值
             current_time_str = values[start_pos if column_name == "Start" else end_pos]
@@ -334,25 +334,28 @@ class TimeSliderController:
             self.hide_slider()
 
     def apply_time_change(self):
-        """應用時間變更並隱藏滑桿"""
+        """應用時間變更並同步音頻段落"""
         if not self.slider_active:
             return
 
         try:
-            # 調用回調函數更新 SRT 和音頻
-            if hasattr(self.callbacks, 'on_time_change') and self.callbacks.on_time_change:
-                self.callbacks.on_time_change()
+            # 獲取當前滑桿值
+            current_value = self.time_slider.get() if hasattr(self, 'time_slider') else 0
 
-            # 隱藏滑桿
-            self.hide_slider()
+            # 記錄相關信息，用於日誌
+            item = self.slider_target["item"] if self.slider_target else None
+            column = self.slider_target["column"] if self.slider_target else None
+            self.logger.debug(f"應用時間變更: 項目={item}, 列={column}, 值={current_value}")
+
+            # 調用回調函數更新 SRT 和音頻
+            if hasattr(self.callbacks, 'on_time_change') and callable(self.callbacks.on_time_change):
+                self.callbacks.on_time_change()
 
         except Exception as e:
             self.logger.error(f"應用時間變更時出錯: {e}")
-            # 即使出錯也要隱藏滑桿
-            self.hide_slider()
 
     def hide_slider(self):
-        """隱藏時間調整滑桿"""
+        """隱藏時間調整滑桿，並確保音頻段落同步更新"""
         # 避免遞歸調用
         if hasattr(self, '_hide_time_slider_in_progress') and self._hide_time_slider_in_progress:
             return
@@ -360,6 +363,12 @@ class TimeSliderController:
         try:
             self._hide_time_slider_in_progress = True
 
+            # 在隱藏滑桿前，確保時間變更已應用
+            if self.slider_active and hasattr(self, 'time_slider'):
+                # 應用時間變更
+                self.apply_time_change()
+
+            # 清理滑桿界面
             if hasattr(self, 'time_slider') and self.time_slider:
                 # 獲取滑桿的父框架
                 parent = self.time_slider.master
@@ -381,5 +390,4 @@ class TimeSliderController:
             self.logger.error(f"隱藏滑桿時出錯: {e}")
         finally:
             self._hide_time_slider_in_progress = False
-
 

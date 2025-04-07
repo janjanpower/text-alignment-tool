@@ -179,7 +179,7 @@ class AlignmentGUI(BaseWindow):
 
     def _on_srt_loaded(self, srt_data, file_path, corrections=None) -> None:
         """SRT 載入後的回調"""
-        self.logger.debug(f"SRT 數據載入回調開始，檔案: {file_path}")
+        self.logger.debug(f"載入SRT 檔案: {file_path}")
 
         try:
             # 清除當前數據
@@ -289,20 +289,14 @@ class AlignmentGUI(BaseWindow):
                     self.audio_player.segment_audio(self.srt_data)
                     self.logger.info(f"音頻已分割為 {len(self.audio_player.segment_manager.audio_segments) if hasattr(self.audio_player.segment_manager, 'audio_segments') else 0} 個段落")
 
-            # 保存當前數據狀態
-            old_mode = self.display_mode
-            self.logger.info(f"音頻已載入，匯入前顯示模式: {old_mode}")
+                # 初始化滑桿控制器 - 確保在音頻載入後創建
+                if not hasattr(self, 'slider_controller'):
+                    callback_manager = self._create_slider_callbacks()
+                    self.slider_controller = TimeSliderController(self.master, self.tree, callback_manager)
+                    self.logger.info("已初始化時間滑桿控制器")
 
             # 更新顯示模式
             self.update_display_mode()
-
-            # 檢查模式是否已更新
-            new_mode = self.display_mode
-            if new_mode != old_mode:
-                self.logger.info(f"顯示模式已更新: {old_mode} -> {new_mode}")
-
-            # 確保顯示模式的一致性
-            self.check_display_mode_consistency()
 
             # 同步 FileManager 的狀態
             if hasattr(self, 'file_manager'):
@@ -903,7 +897,7 @@ class AlignmentGUI(BaseWindow):
             if target_mode is None:
                 target_mode = self.display_mode
 
-            self.logger.debug(f"開始恢復樹狀視圖數據: 源模式={source_mode}, 目標模式={target_mode}")
+            self.logger.debug(f"開始恢復樹狀視圖數據: 當前模式={target_mode}")
 
             # 清空當前樹狀視圖
             self.tree_manager.clear_all()
@@ -1511,7 +1505,7 @@ class AlignmentGUI(BaseWindow):
                 # 對於 SRT Text 列，確保它可見並有適當的寬度
                 if col == 'SRT Text':
                     self.tree.column(col, width=300, stretch=True, anchor='w')
-                    self.logger.debug(f"設置 SRT Text 列: width=300, stretch=True")
+
 
             # 確保標籤設置
             self.tree.tag_configure('mismatch', background='#FFDDDD')
@@ -1537,6 +1531,10 @@ class AlignmentGUI(BaseWindow):
     def on_double_click(self, event: tk.Event) -> None:
         """處理雙擊事件"""
         try:
+            # 操作前隱藏滑桿
+            if hasattr(self, 'slider_controller'):
+                self.slider_controller.hide_slider()
+
             # 先獲取點擊的區域和列
             region = self.tree.identify("region", event.x, event.y)
             if region != "cell":
@@ -1714,10 +1712,6 @@ class AlignmentGUI(BaseWindow):
         # 將 Treeview 放入框架 - 注意順序很重要
         self.tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
-        # 調試輸出
-        self.logger.debug("Treeview 卷軸設置完成")
-
-
     def create_status_bar(self) -> None:
         """創建狀態列"""
         # 檢查並創建狀態變數
@@ -1739,7 +1733,7 @@ class AlignmentGUI(BaseWindow):
             column = self.tree.identify_column(event.x)
             item = self.tree.identify_row(event.y)
 
-            self.logger.debug(f"樹狀圖點擊事件: region={region}, column={column}, item={item}")
+            self.logger.debug(f"點擊事件: column={column}")
 
             if not (region and column and item):
                 return
@@ -2022,74 +2016,91 @@ class AlignmentGUI(BaseWindow):
 
     def _create_slider_callbacks(self):
         """創建滑桿控制器所需的回調函數"""
-        from utils.time_utils import parse_time as parse_time_func
-
-        # 返回一個具有方法屬性的對象，而不是字典
-        class CallbackManager:
+        class SliderCallbacks:
             def __init__(self, gui):
                 self.gui = gui
 
             def parse_time(self, time_str):
-                """解析時間字串的包裝方法"""
+                """解析時間字串"""
                 try:
-                    return parse_time_func(time_str)
+                    from utils.time_utils import parse_time
+                    return parse_time(time_str)
                 except Exception as e:
                     self.gui.logger.error(f"解析時間字串時出錯: {e}")
                     return None
 
             def on_time_change(self):
-                """時間變更後的更新操作"""
+                """時間變更後的更新操作 - 確保同步音頻段落"""
                 self.gui.update_after_time_change()
 
             def get_display_mode(self):
                 """獲取當前顯示模式"""
                 return self.gui.display_mode
 
-        return CallbackManager(self)
+        return SliderCallbacks(self)
 
-    def parse_time(self, time_str):
-        """解析時間字串的包裝方法"""
-        from utils.time_utils import parse_time
-        try:
-            return parse_time(time_str)
-        except Exception as e:
-            self.logger.error(f"解析時間字串時出錯: {e}")
-            return pysrt.SubRipTime(0, 0, 0, 0)
 
     def update_after_time_change(self):
-        """時間變更後的更新操作"""
+        """時間變更後的更新操作，同步音頻段落"""
         try:
+            self.logger.debug("開始處理時間變更後的更新")
+
             # 保存當前校正狀態
             correction_states = {}
-            for index, state in self.correction_service.correction_states.items():
-                correction_states[index] = {
-                    'state': state,
-                    'original': self.correction_service.original_texts.get(index, ''),
-                    'corrected': self.correction_service.corrected_texts.get(index, '')
-                }
+            if hasattr(self, 'correction_service'):
+                for index, state in self.correction_service.correction_states.items():
+                    correction_states[index] = {
+                        'state': state,
+                        'original': self.correction_service.original_texts.get(index, ''),
+                        'corrected': self.correction_service.corrected_texts.get(index, '')
+                    }
 
             # 更新 SRT 數據以反映變更
             self.update_srt_data_from_treeview()
+            self.logger.debug("已更新 SRT 數據")
 
             # 恢復校正狀態
-            for index, data in correction_states.items():
-                self.correction_service.correction_states[index] = data['state']
-                self.correction_service.original_texts[index] = data['original']
-                self.correction_service.corrected_texts[index] = data['corrected']
+            if hasattr(self, 'correction_service'):
+                for index, data in correction_states.items():
+                    self.correction_service.correction_states[index] = data['state']
+                    self.correction_service.original_texts[index] = data['original']
+                    self.correction_service.corrected_texts[index] = data['corrected']
 
-            # 如果有音頻，更新音頻段落
+            # 記錄時間調整操作，用於撤銷/重做
+            self._record_time_adjustment()
+
+            # 如果有音頻，更新音頻段落 - 這是關鍵部分
             if self.audio_imported and hasattr(self, 'audio_player') and self.audio_player.audio:
-                # 創建一份當前時間調整的記錄，用於可能的撤銷操作
-                self._record_time_adjustment()
+                try:
+                    # 使用 segment_audio 重新分割整個音頻文件
+                    # 這確保音頻段落與新的時間軸完全同步
+                    self.audio_player.segment_audio(self.srt_data)
+                    self.logger.info("時間調整後已更新音頻段落")
+                except Exception as e:
+                    self.logger.error(f"更新音頻段落時出錯: {e}", exc_info=True)
+                    # 即使出錯，仍然嘗試部分更新
+                    if hasattr(self.audio_player, 'segment_audio'):
+                        try:
+                            self.audio_player.segment_audio(self.srt_data)
+                        except:
+                            pass
 
-                # 使用 segment_audio 而不是 rebuild_segments 確保完全重建
-                self.audio_player.segment_audio(self.srt_data)
-                self.logger.info("時間調整後已更新音頻段落")
+            # 保存操作狀態
+            if hasattr(self, 'state_manager'):
+                current_state = self.get_current_state()
+                correction_state = self.correction_service.serialize_state() if hasattr(self, 'correction_service') else None
+                self.save_operation_state(
+                    current_state,
+                    {
+                        'type': 'time_adjust',
+                        'description': '調整時間軸'
+                    },
+                    correction_state
+                )
 
-            # 保存狀態
-            self.save_operation_state('time_adjust', '調整時間軸')
+            self.logger.debug("時間變更後的更新操作完成")
         except Exception as e:
-            self.logger.error(f"更新時間變更後出錯: {e}")
+            self.logger.error(f"更新時間變更後出錯: {e}", exc_info=True)
 
     def on_icon_click(self, event):
         """當圖標被點擊時的處理，打開添加視窗"""
@@ -2446,9 +2457,20 @@ class AlignmentGUI(BaseWindow):
             self.audio_imported = True
             self.update_display_mode()
             self.update_file_info()
-            # 其他需要的處理...
+
+            # 如果有SRT數據，確保立即分割音頻
+            if hasattr(self, 'srt_data') and self.srt_data:
+                if hasattr(self.audio_player, 'segment_audio'):
+                    self.audio_player.segment_audio(self.srt_data)
+                    self.logger.info(f"音頻初始化後已分割音頻段落：{len(self.srt_data)}個")
 
         self.on_audio_loaded_callback = on_audio_loaded_callback
+
+        # 如果尚未初始化滑桿控制器，現在初始化
+        if not hasattr(self, 'slider_controller'):
+            callback_manager = self._create_slider_callbacks()
+            self.slider_controller = TimeSliderController(self.master, self.tree, callback_manager)
+            self.logger.info("已初始化時間滑桿控制器")
 
     def on_treeview_change(self, event: tk.Event) -> None:
         """
@@ -2719,6 +2741,7 @@ class AlignmentGUI(BaseWindow):
                 end_col = 2
                 text_col = 3
 
+            # 遍歷樹視圖中的所有項目
             for i, item in enumerate(self.tree_manager.get_all_items(), 1):
                 try:
                     values = self.tree_manager.get_item_values(item)
@@ -2733,7 +2756,7 @@ class AlignmentGUI(BaseWindow):
                     except (ValueError, TypeError, AttributeError):
                         index = i
 
-                    # 獲取時間
+                    # 獲取時間 - 使用明確的錯誤處理
                     start_time = values[start_col] if len(values) > start_col else "00:00:00,000"
                     end_time = values[end_col] if len(values) > end_col else "00:00:10,000"
 
@@ -2757,7 +2780,7 @@ class AlignmentGUI(BaseWindow):
                     except Exception as e:
                         self.logger.warning(f"處理校正狀態時出錯: {e}")
 
-                    # 安全解析時間
+                    # 安全解析時間 - 使用詳細的錯誤處理
                     try:
                         start = parse_time(start_time) if isinstance(start_time, str) else start_time
                         end = parse_time(end_time) if isinstance(end_time, str) else end_time
@@ -2774,6 +2797,7 @@ class AlignmentGUI(BaseWindow):
                         text=text if text is not None else ""
                     )
                     new_srt_data.append(sub)
+
                 except Exception as e:
                     self.logger.warning(f"處理項目 {i} 時出錯: {e}, 跳過該項目")
                     continue
@@ -2781,14 +2805,6 @@ class AlignmentGUI(BaseWindow):
             # 更新 SRT 數據
             self.srt_data = new_srt_data
             self.logger.info(f"從 Treeview 更新 SRT 數據，共 {len(new_srt_data)} 個項目")
-
-            # 更新音頻段落時，禁止觸發校正狀態更新
-            skip_correction_update = True
-            if self.audio_imported and hasattr(self, 'audio_player') and self.srt_data:
-                if hasattr(self.audio_player.segment_manager, 'rebuild_segments'):
-                    self.audio_player.segment_manager.rebuild_segments(self.srt_data)
-                else:
-                    self.audio_player.segment_audio(self.srt_data)
 
         finally:
             self._updating_srt_data = False
@@ -3213,6 +3229,10 @@ class AlignmentGUI(BaseWindow):
             return
 
         try:
+            # 操作前隱藏滑桿
+            if hasattr(self, 'slider_controller'):
+                self.slider_controller.hide_slider()
+
             # 保存調整前的狀態供撤銷使用
             original_state = self.get_current_state()
             original_correction = self.correction_service.serialize_state()
@@ -3273,6 +3293,9 @@ class AlignmentGUI(BaseWindow):
 
             # 更新 SRT 數據以反映變更
             self.update_srt_data_from_treeview()
+
+            # 由於時間軸調整可能影響項目順序，進行重新編號
+            self.renumber_items()
 
             # 更新音頻段落
             if self.audio_imported and hasattr(self, 'audio_player'):
@@ -3364,6 +3387,10 @@ class AlignmentGUI(BaseWindow):
     def renumber_items(self, skip_correction_update=False) -> None:
         """重新編號項目並保持校正狀態"""
         try:
+            # 首先隱藏任何顯示的時間滑桿，因為重新編號會改變時間值
+            if hasattr(self, 'slider_controller'):
+                self.slider_controller.hide_slider()
+
             items = self.tree_manager.get_all_items()
             if not items:
                 return
@@ -3441,6 +3468,17 @@ class AlignmentGUI(BaseWindow):
                             corrected_text,
                             correction_state
                         )
+
+            # 重新排序完成後，更新 SRT 數據
+            self.update_srt_data_from_treeview()
+
+            # 如果有音頻，重新分割音頻段落以保持一致性
+            if self.audio_imported and hasattr(self, 'audio_player'):
+                try:
+                    self.audio_player.segment_audio(self.srt_data)
+                    self.logger.debug("重新編號後已更新音頻段落")
+                except Exception as e:
+                    self.logger.error(f"重新編號後更新音頻段落時出錯: {e}")
 
             self.logger.info(f"重新編號完成: {len(items)} 個項目, {len(index_mapping)} 個索引映射")
 
@@ -3730,6 +3768,9 @@ class AlignmentGUI(BaseWindow):
     def on_undo_state(self, state, correction_state, operation):
         """撤銷狀態回調處理"""
         try:
+            # 首先隱藏任何顯示的時間滑桿
+            if hasattr(self, 'slider_controller'):
+                self.slider_controller.hide_slider()
             # 獲取操作類型
             op_type = operation.get('type', '')
             self.logger.debug(f"執行撤銷操作: {op_type} - {operation.get('description', '未知操作')}")
@@ -3762,6 +3803,9 @@ class AlignmentGUI(BaseWindow):
                 # 其他類型的操作使用一般方法處理
                 self.apply_state(state, correction_state, operation)
 
+            # 執行撤銷操作後，確保重新編號
+            self.renumber_items()
+
             self.update_status(f"已撤銷：{operation.get('description', '未知操作')}")
             # 強制更新界面
             self.master.update_idletasks()
@@ -3774,12 +3818,16 @@ class AlignmentGUI(BaseWindow):
         重做狀態回調處理
         """
         try:
+            # 首先隱藏任何顯示的時間滑桿
+            if hasattr(self, 'slider_controller'):
+                self.slider_controller.hide_slider()
             self.logger.debug(f"執行重做操作: {operation.get('type', '')} - {operation.get('description', '未知操作')}")
 
             # 直接執行狀態恢復邏輯，而不是調用 apply_state
             # 這裡實現核心邏輯，與 apply_state 類似但不調用它
             self._apply_state_internal(state, correction_state, operation)
-
+            # 執行重做操作後，確保重新編號
+            self.renumber_items()
             self.update_status(f"已重做：{operation.get('description', '未知操作')}")
 
         except Exception as e:
@@ -3826,7 +3874,6 @@ class AlignmentGUI(BaseWindow):
             if hasattr(self, 'state_manager'):
                 # 檢查是否有任何內容可保存
                 if not self.tree_manager.get_all_items():
-                    self.logger.debug("樹為空，跳過初始狀態保存")
                     return
 
                 current_state = self.get_current_state()
@@ -3854,8 +3901,18 @@ class AlignmentGUI(BaseWindow):
     def undo(self, event=None):
         """撤銷操作"""
         try:
+            # 操作前隱藏滑桿
+            if hasattr(self, 'slider_controller'):
+                self.slider_controller.hide_slider()
+
             if hasattr(self, 'state_manager'):
-                return self.state_manager.undo()
+                success = self.state_manager.undo()
+
+                # 如果撤銷成功且有音頻，更新音頻段落
+                if success and self.audio_imported and hasattr(self, 'audio_player'):
+                    self.audio_player.segment_audio(self.srt_data)
+
+                return success
             else:
                 self.logger.warning("無法撤銷：狀態管理器未初始化")
                 return False
@@ -3865,12 +3922,19 @@ class AlignmentGUI(BaseWindow):
             return False
 
     def redo(self, event=None):
-        """
-        重做操作 - 使用 EnhancedStateManager 的重做功能
-        """
+        """重做操作"""
         try:
+            # 操作前隱藏滑桿
+            if hasattr(self, 'slider_controller'):
+                self.slider_controller.hide_slider()
+
             if hasattr(self, 'state_manager'):
                 success = self.state_manager.redo()
+
+                # 如果重做成功且有音頻，更新音頻段落
+                if success and self.audio_imported and hasattr(self, 'audio_player'):
+                    self.audio_player.segment_audio(self.srt_data)
+
                 if success:
                     self.update_status("已重做操作")
                 return success
@@ -4747,8 +4811,6 @@ class AlignmentGUI(BaseWindow):
             )
 
         return values
-
-
 
     def show_floating_correction_icon(self, event):
         """顯示跟隨游標的校正圖標，但只在選中的文本項目上"""

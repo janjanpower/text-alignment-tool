@@ -255,6 +255,7 @@ class AudioPlayer(ttk.Frame):
                 segment = self.audio
             else:
                 segment = self.segment_manager.audio_segments[index]
+                self.logger.debug(f"找到索引 {index} 的音頻段落，長度：{len(segment)}ms")
 
             # 處理臨時文件並播放
             try:
@@ -282,6 +283,7 @@ class AudioPlayer(ttk.Frame):
                 # 載入並播放
                 pygame.mixer.music.load(self.temp_file)
                 pygame.mixer.music.play()
+                self.logger.info(f"開始播放索引 {index} 的音頻段落")
                 return True
 
             except Exception as e:
