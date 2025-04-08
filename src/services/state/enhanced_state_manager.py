@@ -4,17 +4,16 @@ import copy
 import logging
 import time
 from dataclasses import dataclass
-from typing import List, Dict, Any, Optional, Callable
-import pysrt
+from typing import List, Dict, Any, Optional, Callable, Type
+
+from .generic_state_manager import GenericStateManager, StateRecord
 
 @dataclass
-class StateRecord:
-    """狀態記錄數據類別"""
-    state: Dict[str, Any]  # 樹狀視圖和應用狀態
-    operation: Dict[str, Any]  # 操作信息
-    timestamp: float  # 時間戳
-    correction_state: Optional[Dict[str, Any]] = None  # 校正狀態
-    display_mode: Optional[str] = None  # 顯示模式
+class EnhancedStateRecord(StateRecord):
+    """增強的狀態記錄類，包含額外的資料"""
+    correction_state: Optional[Dict[str, Any]] = None
+    display_mode: Optional[str] = None
+    meta_data: Optional[Dict[str, Any]] = None
 
 class ApplicationState:
     """完整的應用狀態模型"""
@@ -101,57 +100,35 @@ class ApplicationState:
         if alignment_gui.audio_imported and hasattr(alignment_gui, 'audio_player'):
             alignment_gui.audio_player.segment_audio(alignment_gui.srt_data)
 
-class EnhancedStateManager:
-    """增強狀態管理類別，提供狀態保存、撤銷和重做功能"""
+@dataclass
+class EnhancedStateRecord(StateRecord):
+    """增強的狀態記錄類，包含額外的資料"""
+    correction_state: Optional[Dict[str, Any]] = None
+    display_mode: Optional[str] = None
+    meta_data: Optional[Dict[str, Any]] = None
 
-    def __init__(self, max_states=50):
-        self.states = []  # 狀態列表
-        self.current_index = -1  # 當前狀態索引
-        self.max_states = max_states
-        self.logger = logging.getLogger(self.__class__.__name__)
-        self.callbacks = {
-            'on_state_change': None,
-            'on_undo': None,
-            'on_redo': None
-        }
+class EnhancedStateManager(GenericStateManager):
+    """增強的狀態管理器，提供更多特性和功能"""
 
-        # 添加對特殊操作的追蹤
+    def __init__(self, max_states: int = 50):
+        super().__init__(max_states)
+        # 擴展回調函數
+        self.callbacks.update({
+            'on_special_operation': None,
+            'on_state_applied': None
+        })
+
+        # 添加特殊操作的追蹤
         self.last_split_operation = None
         self.last_combine_operation = None
         self.last_time_adjust_operation = None
 
-        # 存儲對 GUI 的引用，使其能操作實際的界面元素
+        # 存儲對 GUI 的引用
         self.gui = None
 
     def set_gui_reference(self, gui):
         """設置對 GUI 的引用，使狀態管理器能夠操作界面元素"""
         self.gui = gui
-
-    def set_callback(self, event_name: str, callback_func: Callable) -> None:
-        """
-        設置回調函數
-        :param event_name: 事件名稱
-        :param callback_func: 回調函數
-        """
-        if event_name in self.callbacks:
-            self.callbacks[event_name] = callback_func
-        else:
-            self.logger.warning(f"嘗試設置未知事件 '{event_name}' 的回調")
-
-    def trigger_callback(self, event_name: str, *args, **kwargs) -> None:
-        """
-        觸發回調函數
-        :param event_name: 事件名稱
-        :param args: 位置參數
-        :param kwargs: 關鍵字參數
-        """
-        if event_name in self.callbacks and callable(self.callbacks[event_name]):
-            try:
-                self.callbacks[event_name](*args, **kwargs)
-            except Exception as e:
-                self.logger.error(f"執行 '{event_name}' 回調時出錯: {e}")
-        else:
-            self.logger.debug(f"未找到事件 '{event_name}' 的回調或回調不可調用")
 
     def save_state(self, current_state: Dict[str, Any], operation_info: Dict[str, Any],
             correction_state: Optional[Dict[str, Any]] = None) -> None:
@@ -163,7 +140,7 @@ class EnhancedStateManager:
         """
         try:
             # 添加診斷信息
-            self.logger.debug(f"保存狀態前: 當前狀態索引={self.current_index}, 總狀態數={len(self.states)}")
+            self.logger.debug(f"保存狀態前: 當前狀態索引={self.current_state_index}, 總狀態數={len(self.states)}")
 
             # 深拷貝當前狀態和校正狀態，確保不會被後續操作修改
             copied_state = copy.deepcopy(current_state)
@@ -171,9 +148,9 @@ class EnhancedStateManager:
             copied_operation = copy.deepcopy(operation_info or {'type': 'unknown', 'description': 'Unknown operation'})
 
             # 如果當前狀態索引小於狀態列表長度-1，刪除後面的狀態
-            if self.current_index < len(self.states) - 1:
-                self.logger.debug(f"刪除從 {self.current_index+1} 到 {len(self.states)-1} 的狀態")
-                self.states = self.states[:self.current_index + 1]
+            if self.current_state_index < len(self.states) - 1:
+                self.logger.debug(f"刪除從 {self.current_state_index+1} 到 {len(self.states)-1} 的狀態")
+                self.states = self.states[:self.current_state_index + 1]
 
             # 嘗試壓縮連續的相似操作
             skip_save = self.try_compress_similar_operations(copied_operation, copied_state)
@@ -184,8 +161,14 @@ class EnhancedStateManager:
             # 檢查和保存特定操作的信息
             self.record_special_operation(copied_operation)
 
-            # 使用 create_state_record 創建狀態記錄
-            state_record = self.create_state_record(copied_state, copied_operation, copied_correction)
+            # 創建增強狀態記錄
+            state_record = EnhancedStateRecord(
+                state=copied_state,
+                operation=copied_operation,
+                timestamp=time.time(),
+                correction_state=copied_correction,
+                display_mode=copied_state.get('display_mode')
+            )
 
             # 添加新狀態
             self.states.append(state_record)
@@ -193,13 +176,13 @@ class EnhancedStateManager:
             # 如果超過最大狀態數，刪除最舊的狀態
             if len(self.states) > self.max_states:
                 self.states.pop(0)
-                self.current_index -= 1  # 調整索引以匹配刪除
+                self.current_state_index -= 1  # 調整索引以匹配刪除
 
             # 更新當前索引
-            self.current_index = len(self.states) - 1
+            self.current_state_index = len(self.states) - 1
 
             # 添加診斷信息
-            self.logger.debug(f"保存狀態後: 當前狀態索引={self.current_index}, 總狀態數={len(self.states)}")
+            self.logger.debug(f"保存狀態後: 當前狀態索引={self.current_state_index}, 總狀態數={len(self.states)}")
 
             # 記錄更詳細的信息
             op_type = operation_info.get('type', 'unknown')
@@ -208,7 +191,7 @@ class EnhancedStateManager:
             if isinstance(current_state.get('tree_items', []), list):
                 tree_items_count = len(current_state.get('tree_items', []))
 
-            self.logger.debug(f"保存狀態：索引 {self.current_index}, 操作: {op_desc} ({op_type}), "
+            self.logger.debug(f"保存狀態：索引 {self.current_state_index}, 操作: {op_desc} ({op_type}), "
                         f"項目數: {tree_items_count}, "
                         f"有校正狀態: {correction_state is not None}")
 
@@ -216,6 +199,7 @@ class EnhancedStateManager:
             self.trigger_callback('on_state_change')
         except Exception as e:
             self.logger.error(f"保存狀態時出錯: {e}")
+
     def record_special_operation(self, operation):
         """記錄特殊操作，以便進行特定的撤銷處理"""
         op_type = operation.get('type', '')
@@ -243,15 +227,15 @@ class EnhancedStateManager:
         :return: 是否跳過保存
         """
         # 如果沒有先前狀態或操作類型不是可合併的，則不壓縮
-        if self.current_index < 0 or self.current_index >= len(self.states):
+        if self.current_state_index < 0 or self.current_state_index >= len(self.states):
             return False
 
         # 獲取上一個操作
-        prev_op = self.states[self.current_index].operation
+        prev_op = self.states[self.current_state_index].operation
 
         # 檢查操作類型是否相同且時間間隔較短
         current_time = time.time()
-        prev_time = self.states[self.current_index].timestamp
+        prev_time = self.states[self.current_state_index].timestamp
         time_diff = current_time - prev_time
 
         # 可合併的操作類型和最大時間間隔
@@ -263,8 +247,8 @@ class EnhancedStateManager:
             time_diff < max_merge_interval):
 
             # 更新上一個狀態的時間戳和狀態數據
-            self.states[self.current_index].timestamp = current_time
-            self.states[self.current_index].state = state
+            self.states[self.current_state_index].timestamp = current_time
+            self.states[self.current_state_index].state = state
 
             # 如果是編輯操作，更新操作描述
             if 'edit' in prev_op.get('type', ''):
@@ -273,6 +257,35 @@ class EnhancedStateManager:
             return True
 
         return False
+
+    def set_callback(self, event_name: str, callback_func: Callable) -> None:
+        """
+        設置回調函數
+        :param event_name: 事件名稱
+        :param callback_func: 回調函數
+        """
+        if event_name in self.callbacks:
+            self.callbacks[event_name] = callback_func
+        else:
+            self.logger.warning(f"嘗試設置未知事件 '{event_name}' 的回調")
+
+    def trigger_callback(self, event_name: str, *args, **kwargs) -> None:
+        """
+        觸發回調函數
+        :param event_name: 事件名稱
+        :param args: 位置參數
+        :param kwargs: 關鍵字參數
+        """
+        if event_name in self.callbacks and callable(self.callbacks[event_name]):
+            try:
+                self.callbacks[event_name](*args, **kwargs)
+            except Exception as e:
+                self.logger.error(f"執行 '{event_name}' 回調時出錯: {e}")
+        else:
+            self.logger.debug(f"未找到事件 '{event_name}' 的回調或回調不可調用")
+
+
+
 
     def get_current_operation(self) -> Optional[Dict[str, Any]]:
         """獲取當前操作的信息"""
@@ -306,7 +319,7 @@ class EnhancedStateManager:
                 return False
 
             self.logger.debug("開始執行撤銷操作")
-            self.logger.debug(f"當前狀態索引: {self.current_index}, 總狀態數: {len(self.states)}")
+            self.logger.debug(f"當前狀態索引: {self.current_state_index}, 總狀態數: {len(self.states)}")
 
             # 檢查是否可以撤銷
             if not self.can_undo():
@@ -314,7 +327,7 @@ class EnhancedStateManager:
                 return False
 
             # 添加診斷信息
-            prev_index = self.current_index - 1
+            prev_index = self.current_state_index - 1
             if prev_index >= 0 and prev_index < len(self.states):
                 prev_op = self.states[prev_index].operation
                 self.logger.debug(f"將撤銷到操作: {prev_op.get('type', 'unknown')} - {prev_op.get('description', '未知')}")
@@ -327,7 +340,7 @@ class EnhancedStateManager:
                 self.logger.debug("檢測到拆分操作，使用專用撤銷機制")
                 if self.undo_split_operation():
                     # 更新狀態索引，但不需要清除狀態歷史
-                    self.current_index = prev_index
+                    self.current_state_index = prev_index
                     # 觸發回調
                     self.trigger_callback('on_state_change')
                     return True
@@ -336,7 +349,7 @@ class EnhancedStateManager:
                 self.logger.debug("檢測到合併操作，使用專用撤銷機制")
                 if self.undo_combine_operation():
                     # 更新狀態索引，但不需要清除狀態歷史
-                    self.current_index = prev_index
+                    self.current_state_index = prev_index
                     # 觸發回調
                     self.trigger_callback('on_state_change')
                     return True
@@ -345,7 +358,7 @@ class EnhancedStateManager:
                 self.logger.debug("檢測到時間調整操作，使用專用撤銷機制")
                 if self.undo_time_adjust_operation():
                     # 更新狀態索引，但不需要清除狀態歷史
-                    self.current_index = prev_index
+                    self.current_state_index = prev_index
                     # 觸發回調
                     self.trigger_callback('on_state_change')
                     return True
@@ -354,13 +367,17 @@ class EnhancedStateManager:
             prev_state = self.states[prev_index]
 
             # 更新索引
-            self.current_index = prev_index
-            self.logger.debug(f"撤銷後狀態索引: {self.current_index}")
+            self.current_state_index = prev_index
+            self.logger.debug(f"撤銷後狀態索引: {self.current_state_index}")
 
             # 觸發撤銷回調
             try:
                 if self.callbacks['on_undo']:
-                    self.callbacks['on_undo'](prev_state.state, prev_state.correction_state, prev_state.operation)
+                    # 確保 EnhancedStateRecord 包含 correction_state
+                    if isinstance(prev_state, EnhancedStateRecord):
+                        self.callbacks['on_undo'](prev_state.state, prev_state.correction_state, prev_state.operation)
+                    else:
+                        self.callbacks['on_undo'](prev_state.state, None, prev_state.operation)
                     self.logger.debug("撤銷回調執行完成")
                 else:
                     self.logger.warning("撤銷回調未設置")
@@ -376,10 +393,11 @@ class EnhancedStateManager:
                 self.gui.update_srt_data_from_treeview()
 
             # 如果有音頻，更新音頻段落
-            if self.gui.audio_imported and hasattr(self.gui, 'audio_player'):
+            if hasattr(self.gui, 'audio_imported') and self.gui.audio_imported and hasattr(self.gui, 'audio_player'):
                 self.gui.audio_player.segment_audio(self.gui.srt_data)
 
-            self.gui.update_status("已撤銷操作")
+            if hasattr(self.gui, 'update_status'):
+                self.gui.update_status("已撤銷操作")
             return True
 
         except Exception as e:

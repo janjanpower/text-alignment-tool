@@ -5,7 +5,7 @@ import tkinter.font as tkfont
 from tkinter import ttk
 from typing import List, Tuple, Optional
 
-from services.config_manager import ConfigManager
+from services.config.config_manager import ConfigManager
 
 
 class FontManager:

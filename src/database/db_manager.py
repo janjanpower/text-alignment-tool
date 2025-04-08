@@ -17,7 +17,7 @@ if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
 # 使用絕對導入
-from services.config_manager import ConfigManager
+from services.config.config_manager import ConfigManager
 
 from sqlalchemy.orm import sessionmaker, scoped_session
 

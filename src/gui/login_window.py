@@ -13,7 +13,7 @@ from database.db_manager import DatabaseManager
 from database.models import User
 from gui.project_manager import ProjectManager
 from utils.font_manager import FontManager
-from services.config_manager import ConfigManager
+from services.config.config_manager import ConfigManager
 from gui.alignment_gui import AlignmentGUI
 class LoginWindow(BaseWindow):
     """登入視窗類別"""

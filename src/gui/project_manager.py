@@ -11,7 +11,7 @@ from gui.custom_messagebox import show_warning, show_error, ask_question
 from database.db_manager import DatabaseManager
 from database.models import Project, User
 from utils.file_utils import get_current_directory
-from services.project_service import ProjectService
+from services.file.project_service import ProjectService
 class ProjectInputDialog(BaseDialog):
     def __init__(self, parent=None):
         """初始化專案管理器"""

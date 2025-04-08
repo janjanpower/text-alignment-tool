@@ -3,14 +3,13 @@
 import logging
 import os
 import sys
-
 import tkinter as tk
 
 from database.db_manager import DatabaseManager
 from gui.alignment_gui import AlignmentGUI
 from gui.correction_tool import CorrectionTool
 from gui.login_window import LoginWindow
-from services.config_manager import ConfigManager
+from services.config.config_manager import ConfigManager
 from utils.logging_utils import setup_logging
 
 

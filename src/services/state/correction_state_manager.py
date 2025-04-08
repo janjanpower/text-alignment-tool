@@ -1,47 +1,66 @@
 """校正狀態管理器"""
 
 import os
-from typing import Dict, Optional, Tuple
+import logging
+from typing import Dict, Optional, Tuple, List, Any
 import tkinter as tk
 from tkinter import ttk
-from PIL import Image, ImageTk
 
 class CorrectionStateManager:
-    def __init__(self, tree):
+    """校正狀態管理器，使用組合模式集成增強的狀態管理能力"""
+
+    def __init__(self, tree, enhanced_state_manager=None):
+        """
+        初始化校正狀態管理器
+
+        :param tree: 樹視圖控件
+        :param enhanced_state_manager: 可選的增強狀態管理器實例
+        """
         self.tree = tree
+        self.enhanced_state_manager = enhanced_state_manager
+        self.logger = logging.getLogger(self.__class__.__name__)
+
+        # 核心資料結構
         self.correction_states = {}  # 記錄校正狀態
         self.original_texts = {}     # 原始文字
         self.corrected_texts = {}    # 校正後文字
+
+        # 圖標定義
         self.icons = {
             'correct': '✅',
             'error': '❌'
         }
 
-    def toggle_correction_state(self, index: str) -> str:
-        """切換校正狀態
+    def _save_toggle_operation(self, index, old_state, new_state):
+        """保存狀態切換操作到增強狀態管理器"""
+        if not self.enhanced_state_manager:
+            return
 
-        Args:
-            index: 項目索引字符串
+        # 獲取當前應用狀態
+        current_app_state = None
+        if hasattr(self.enhanced_state_manager.gui, 'get_current_state'):
+            current_app_state = self.enhanced_state_manager.gui.get_current_state()
 
-        Returns:
-            新的狀態 ('correct' 或 'error')
-        """
-        if index in self.correction_states:
-            # 切換狀態
-            current_state = self.correction_states[index]
-            # 在 correct 和 error 之間切換
-            new_state = 'error' if current_state == 'correct' else 'correct'
-            self.correction_states[index] = new_state
-            return new_state
-        else:
-            # 如果沒有現有狀態，但有原始文本和校正文本，則創建一個新的狀態
-            if index in self.original_texts and index in self.corrected_texts:
-                # 默認為 correct 狀態
-                self.correction_states[index] = 'correct'
-                return 'correct'
+        # 獲取當前校正狀態
+        current_correction_state = self.serialize_state()
 
-        # 如果沒有相關數據，返回空字符串表示無法切換
-        return ''
+        # 構建操作信息
+        operation_info = {
+            'type': 'toggle_correction',
+            'description': f'切換校正狀態: {index} ({old_state} -> {new_state})',
+            'index': index,
+            'old_state': old_state,
+            'new_state': new_state
+        }
+
+        # 保存狀態
+        if current_app_state:
+            self.enhanced_state_manager.save_state(
+                current_app_state,
+                operation_info,
+                current_correction_state
+            )
+
     def handle_icon_click(self, index, tree_item):
         """處理圖標點擊事件"""
         try:
@@ -70,7 +89,7 @@ class CorrectionStateManager:
                     vx_idx = i
 
             if srt_text_idx == -1 or vx_idx == -1:
-                print(f"找不到 SRT Text 或 V/X 欄位: columns={columns}")
+                self.logger.warning(f"找不到 SRT Text 或 V/X 欄位: columns={columns}")
                 return
 
             # 切換狀態和更新顯示
@@ -95,10 +114,10 @@ class CorrectionStateManager:
             self.tree.item(tree_item, values=tuple(values))
 
             # 記錄操作
-            print(f"校正狀態已切換: 索引={index}, 狀態={self.correction_states[index]}")
+            self.logger.debug(f"校正狀態已切換: 索引={index}, 狀態={self.correction_states[index]}")
 
         except Exception as e:
-            print(f"處理圖標點擊時出錯: {e}")
+            self.logger.error(f"處理圖標點擊時出錯: {e}")
             import traceback
             traceback.print_exc()
 
@@ -185,6 +204,7 @@ class CorrectionStateManager:
             if error in text:
                 return True
         return False
+
     def update_correction_states_after_split(self, original_index: str, new_texts: list[str], corrections: dict) -> None:
         """
         文本拆分後更新校正狀態
@@ -214,3 +234,101 @@ class CorrectionStateManager:
     def get_current_state(self, index: str) -> str:
         """獲取當前狀態"""
         return self.correction_states.get(index, 'correct')
+
+    def serialize_state(self) -> Dict[str, Dict[str, Any]]:
+        """
+        序列化當前校正狀態
+        :return: 序列化後的校正狀態
+        """
+        serialized = {}
+        # 確保包含所有相關狀態
+        indices = set(list(self.correction_states.keys()) +
+                    list(self.original_texts.keys()) +
+                    list(self.corrected_texts.keys()))
+
+        for index in indices:
+            state = self.correction_states.get(index, '')
+            original = self.original_texts.get(index, '')
+            corrected = self.corrected_texts.get(index, '')
+
+            # 只有當確實有校正需求時才保存
+            if original != corrected:
+                serialized[index] = {
+                    'state': state,
+                    'original': original,
+                    'corrected': corrected,
+                    'timestamp': time.time()  # 添加時間戳以便追蹤
+                }
+        return serialized
+
+    def deserialize_state(self, state_data, id_mapping=None):
+        """
+        從序列化數據恢復校正狀態，支持 ID 映射
+
+        Args:
+            state_data: 序列化的校正狀態
+            id_mapping: ID 映射表 {原始ID: 新ID}
+        """
+        # 清除現有狀態
+        self.clear_correction_states()
+
+        if not state_data:
+            return
+
+        # 恢復校正狀態
+        for index, data in state_data.items():
+            # 檢查是否需要映射索引
+            if id_mapping and index in id_mapping:
+                mapped_index = id_mapping[index]
+                self.logger.debug(f"應用 ID 映射: {index} -> {mapped_index}")
+                index = mapped_index
+
+            state = data.get('state', 'correct')
+            original = data.get('original', '')
+            corrected = data.get('corrected', '')
+
+            # 確保有實際的校正需求
+            if original and corrected and original != corrected:
+                self.correction_states[index] = state
+                self.original_texts[index] = original
+                self.corrected_texts[index] = corrected
+
+        self.logger.info(f"已從序列化數據恢復 {len(self.correction_states)} 個校正狀態")
+
+    def clear_correction_states(self) -> None:
+        """清除所有校正狀態"""
+        self.correction_states.clear()
+        self.original_texts.clear()
+        self.corrected_texts.clear()
+
+
+    def toggle_correction_state(self, index: str) -> str:
+        """切換校正狀態
+
+        Args:
+            index: 項目索引字符串
+
+        Returns:
+            新的狀態 ('correct' 或 'error')
+        """
+        if index in self.correction_states:
+            # 切換狀態
+            current_state = self.correction_states[index]
+            # 在 correct 和 error 之間切換
+            new_state = 'error' if current_state == 'correct' else 'correct'
+            self.correction_states[index] = new_state
+
+            # 如果有增強狀態管理器，記錄這個操作
+            if self.enhanced_state_manager:
+                self._save_toggle_operation(index, current_state, new_state)
+
+            return new_state
+        else:
+            # 如果沒有現有狀態，但有原始文本和校正文本，則創建一個新的狀態
+            if index in self.original_texts and index in self.corrected_texts:
+                # 默認為 correct 狀態
+                self.correction_states[index] = 'correct'
+                return 'correct'
+
+        # 如果沒有相關數據，返回空字符串表示無法切換
+        return ''

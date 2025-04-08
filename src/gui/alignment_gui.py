@@ -21,22 +21,24 @@ from gui.custom_messagebox import (
 )
 from gui.quick_correction_dialog import QuickCorrectionDialog
 from gui.text_edit_dialog import TextEditDialog
-from services.combine_service import CombineService
-from services.config_manager import ConfigManager
-from services.correction_service import CorrectionService
-from services.enhanced_state_manager import EnhancedStateManager
-from services.file_manager import FileManager
-from services.split_service import SplitService
-from services.word_processor import WordProcessor
+from services.text_processing.combine_service import CombineService
+from services.config.config_manager import ConfigManager
+from services.correction.correction_service import CorrectionService
+from services.file.file_manager import FileManager
+from services.text_processing.split_service import SplitService
+from services.text_processing.word_processor import WordProcessor
 from utils.image_manager import ImageManager
 from utils.text_utils import simplify_to_traditional
 from utils.time_utils import parse_time,time_to_milliseconds, milliseconds_to_time, time_to_seconds
 from gui.slider_controller import TimeSliderController
+from services.state import EnhancedStateManager, CorrectionStateManager
+
 
 # 添加項目根目錄到路徑以確保絕對導入能正常工作
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
+
 
 
 class AlignmentGUI(BaseWindow):
@@ -62,20 +64,20 @@ class AlignmentGUI(BaseWindow):
         self.setup_logging()
 
         # 初始化圖片管理器
-
         self.image_manager = ImageManager()
 
         # 創建界面元素 (注意這裡的順序很重要)
         self.create_gui_elements()
 
+        # 初始化增強狀態管理器
+        self.initialize_state_managers()
+
         # 初始化校正服務
         self.correction_service = CorrectionService()
+
         # 初始化合併服務
         self.combine_service = CombineService(self)
         self.split_service = SplitService(self)
-
-        # 初始化增強狀態管理器
-        self.initialize_state_manager()
 
         # 在初始化後保存初始狀態
         self.master.after(500, lambda: self.save_initial_state())
@@ -698,9 +700,24 @@ class AlignmentGUI(BaseWindow):
             self.logger.error(f"清理資源時出錯: {e}")
 
     def initialize_variables(self) -> None:
-        """初始化變數"""
-        # 現有的常量
-        self.PLAY_ICON = "▶"
+        """初始化狀態管理器和回調函數"""
+        # 初始化增強狀態管理器
+        self.state_manager = EnhancedStateManager()
+
+        # 設置對 GUI 的引用，使狀態管理器能夠操作界面元素
+        self.state_manager.set_gui_reference(self)
+
+        # 設置增強狀態管理器的回調函數
+        self.state_manager.set_callback('on_state_change', self.on_state_change)
+        self.state_manager.set_callback('on_undo', self.on_undo_state)
+        self.state_manager.set_callback('on_redo', self.on_redo_state)
+        self.state_manager.set_callback('on_state_applied', self.on_state_applied)
+
+        # 初始化校正狀態管理器，並傳入增強狀態管理器
+        self.correction_state_manager = CorrectionStateManager(self.tree, self.state_manager)
+
+        # 記錄初始化完成
+        self.logger.info("狀態管理器初始化完成，已設置所有回調函數")
 
         # 添加顯示模式常量
         self.DISPLAY_MODE_SRT = "srt"                  # 僅 SRT
@@ -2185,8 +2202,10 @@ class AlignmentGUI(BaseWindow):
             self.floating_icon_fixed = False
 
     def toggle_correction_icon(self, item: str, index: str, text: str) -> None:
-        """交由 CorrectionService 處理"""
-        self.correction_service.toggle_correction_icon(self.tree, item, index, text, self.display_mode)
+        """切換校正圖標 - 現在使用校正狀態管理器"""
+        self.correction_state_manager.toggle_correction_state(index)
+        # 更新顯示
+        self.correction_state_manager.handle_icon_click(index, item)
 
     def get_text_position_in_values(self):
         """獲取文本在值列表中的位置"""
@@ -3908,69 +3927,36 @@ class AlignmentGUI(BaseWindow):
             # 首先隱藏任何顯示的時間滑桿
             if hasattr(self, 'slider_controller'):
                 self.slider_controller.hide_slider()
-            # 獲取操作類型
-            op_type = operation.get('type', '')
-            self.logger.debug(f"執行撤銷操作: {op_type} - {operation.get('description', '未知操作')}")
 
-            # 根據操作類型分別處理
-            if op_type == 'split_srt':
-                self.restore_from_split_operation(operation)
+            # 使用增強狀態管理器提供的撤銷功能
+            self.logger.debug(f"執行撤銷操作: {operation.get('type', '')} - {operation.get('description', '未知操作')}")
 
-            elif op_type == 'combine_sentences':
-                # 使用保存的原始樹狀態還原
-                if 'original_tree_state' in operation:
-                    self.clear_current_treeview()
-                    self.restore_tree_data(operation.get('original_tree_state', []))
-                    self.update_srt_data_from_treeview()
-                    # 更新音頻段落
-                    if self.audio_imported and hasattr(self, 'audio_player'):
-                        self.audio_player.segment_audio(self.srt_data)
-            elif op_type == 'align_end_times':
-                # 處理時間調整操作的撤銷
-                if 'backup_values' in operation:
-                    backup_values = operation.get('backup_values', {})
-                    for item, values in backup_values.items():
-                        if self.tree.exists(item):
-                            self.tree.item(item, values=values)
-                    self.update_srt_data_from_treeview()
-                    # 更新音頻段落
-                    if self.audio_imported and hasattr(self, 'audio_player'):
-                        self.audio_player.segment_audio(self.srt_data)
-            else:
-                # 其他類型的操作使用一般方法處理
-                self.apply_state(state, correction_state, operation)
+            # 應用撤銷後的狀態
+            self.apply_state(state, correction_state, operation)
 
-            # 執行撤銷操作後，確保重新編號
-            self.renumber_items()
-
+            # 更新狀態欄
             self.update_status(f"已撤銷：{operation.get('description', '未知操作')}")
-            # 強制更新界面
-            self.master.update_idletasks()
         except Exception as e:
             self.logger.error(f"撤銷狀態時出錯: {e}", exc_info=True)
             show_error("錯誤", f"撤銷操作失敗: {str(e)}", self.master)
 
     def on_redo_state(self, state, correction_state, operation):
-        """
-        重做狀態回調處理
-        """
+        """重做狀態回調處理"""
         try:
             # 首先隱藏任何顯示的時間滑桿
             if hasattr(self, 'slider_controller'):
                 self.slider_controller.hide_slider()
+
             self.logger.debug(f"執行重做操作: {operation.get('type', '')} - {operation.get('description', '未知操作')}")
 
-            # 直接執行狀態恢復邏輯，而不是調用 apply_state
-            # 這裡實現核心邏輯，與 apply_state 類似但不調用它
-            self._apply_state_internal(state, correction_state, operation)
-            # 執行重做操作後，確保重新編號
-            self.renumber_items()
-            self.update_status(f"已重做：{operation.get('description', '未知操作')}")
+            # 應用重做後的狀態
+            self.apply_state(state, correction_state, operation)
 
+            # 更新狀態欄
+            self.update_status(f"已重做：{operation.get('description', '未知操作')}")
         except Exception as e:
             self.logger.error(f"重做狀態時出錯: {e}", exc_info=True)
             show_error("錯誤", f"重做操作失敗: {str(e)}", self.master)
-
     def restore_from_split_operation(self, operation):
         """從拆分操作恢復狀態 - 基於完整原始狀態的復原"""
         self.split_service.restore_from_split_operation(operation)
@@ -4042,14 +4028,9 @@ class AlignmentGUI(BaseWindow):
             if hasattr(self, 'slider_controller'):
                 self.slider_controller.hide_slider()
 
+            # 使用增強狀態管理器的撤銷方法
             if hasattr(self, 'state_manager'):
-                success = self.state_manager.undo()
-
-                # 如果撤銷成功且有音頻，更新音頻段落
-                if success and self.audio_imported and hasattr(self, 'audio_player'):
-                    self.audio_player.segment_audio(self.srt_data)
-
-                return success
+                return self.state_manager.undo()
             else:
                 self.logger.warning("無法撤銷：狀態管理器未初始化")
                 return False
@@ -4065,16 +4046,9 @@ class AlignmentGUI(BaseWindow):
             if hasattr(self, 'slider_controller'):
                 self.slider_controller.hide_slider()
 
+            # 使用增強狀態管理器的重做方法
             if hasattr(self, 'state_manager'):
-                success = self.state_manager.redo()
-
-                # 如果重做成功且有音頻，更新音頻段落
-                if success and self.audio_imported and hasattr(self, 'audio_player'):
-                    self.audio_player.segment_audio(self.srt_data)
-
-                if success:
-                    self.update_status("已重做操作")
-                return success
+                return self.state_manager.redo()
             else:
                 self.logger.warning("無法重做：狀態管理器未初始化")
                 return False
@@ -4279,43 +4253,42 @@ class AlignmentGUI(BaseWindow):
             return False
 
     # 在 AlignmentGUI 類中保留這個統一的接口
-    def save_operation_state(self, operation_type, operation_description, additional_info=None):
-        """
-        統一保存操作狀態的方法 - 透過狀態管理器
-        """
-        if hasattr(self, '_saving_state') and self._saving_state:
-            return
-
+    def save_operation_state(self, state, operation_info, correction_state=None) -> None:
+        """統一存儲操作狀態的方法"""
         try:
+            # 檢查是否已在保存狀態中
+            if hasattr(self, '_saving_state') and self._saving_state:
+                return
+
             self._saving_state = True
-            # 獲取當前完整狀態
-            current_state = self.get_current_state()
 
-            # 獲取校正狀態
-            correction_state = None
-            if hasattr(self, 'correction_service'):
-                correction_state = self.correction_service.serialize_state()
+            # 如果 state 是字符串（舊的調用方式），則獲取當前狀態
+            if isinstance(state, str):
+                # 這是舊的調用方式，state 實際上是 operation_type
+                operation_type = state
+                operation_description = operation_info  # 在舊接口中，第二個參數是描述
 
-            # 構建操作信息
-            operation_info = {
-                'type': operation_type,
-                'description': operation_description,
-                'timestamp': time.time(),
-                'display_mode': self.display_mode,
-                'tree_items_count': len(self.tree_manager.get_all_items())
-            }
+                # 創建新的操作信息
+                operation_info = {
+                    'type': operation_type,
+                    'description': operation_description,
+                    'timestamp': time.time()
+                }
 
-            # 添加附加信息
-            if additional_info:
-                for key, value in additional_info.items():
-                    if key not in operation_info:
-                        operation_info[key] = value
+                # 如果有額外信息，添加到操作信息中
+                if isinstance(correction_state, dict):  # 在舊接口中，第三個參數是額外信息
+                    operation_info.update(correction_state)
+                    correction_state = None  # 清空校正狀態，因為它不是真正的校正狀態
 
-            # 保存狀態
-            self.save_operation_state(current_state, operation_info, correction_state)
+                # 獲取真正的當前狀態
+                state = self.get_current_state()
 
-            # 保存後再次診斷
-            self.logger.debug(f"狀態已保存，當前狀態索引: {self.state_manager.current_index}, 總狀態數: {len(self.state_manager.states)}")
+                # 獲取真正的校正狀態
+                if hasattr(self, 'correction_service'):
+                    correction_state = self.correction_service.serialize_state()
+
+            # 調用增強狀態管理器的保存方法
+            self.state_manager.save_state(state, operation_info, correction_state)
 
         finally:
             self._saving_state = False

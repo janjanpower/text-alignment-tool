@@ -6,7 +6,7 @@ import time
 import pysrt
 from utils.time_utils import parse_time
 from utils.text_utils import simplify_to_traditional
-from services.correction_service import CorrectionService
+from services.correction.correction_service import CorrectionService
 from gui.custom_messagebox import (
     show_info,
     show_warning,
