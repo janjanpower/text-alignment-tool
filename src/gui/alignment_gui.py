@@ -492,7 +492,6 @@ class AlignmentGUI(BaseWindow):
                 )
                 new_srt.append(sub)
 
-                self.logger.debug(f"已添加項目 {index}，文本: {final_text[:20]}{'...' if len(final_text) > 20 else ''}")
 
             except (ValueError, IndexError) as e:
                 self.logger.error(f"處理項目 {item} 時出錯: {e}")
@@ -682,9 +681,6 @@ class AlignmentGUI(BaseWindow):
             if hasattr(self, 'merge_symbol'):
                 self.merge_symbol.place_forget()
                 self.merge_symbol.destroy()
-
-            # 清理滑桿
-            self.hide_time_slider()
 
             # 保存當前狀態
             if hasattr(self, 'state_manager'):
@@ -2166,7 +2162,7 @@ class AlignmentGUI(BaseWindow):
                     correction_state
                 )
 
-            self.logger.debug("時間變更後的更新操作完成")
+            self.logger.debug("時間軸已更新完成")
         except Exception as e:
             self.logger.error(f"更新時間變更後出錯: {e}", exc_info=True)
 

@@ -133,14 +133,20 @@ class CorrectionTool(BaseWindow):
 
         # 按鈕配置
         buttons = [
+            ("登出", self.logout),  # 添加登出按鈕，靠左
+            ("進入文本工具", self.enter_alignment_tool),
             ("新增資料", self.add_correction),
-            ("刪除資料", self.delete_correction),
-            ("進入文本工具", self.enter_alignment_tool)
+            ("刪除資料", self.delete_correction)
         ]
 
-        for text, command in buttons:
+        # 登出按鈕單獨配置，靠左
+        ttk.Button(toolbar, text=buttons[0][0], command=buttons[0][1],
+                width=15, style='Custom.TButton').pack(side=tk.LEFT, padx=2)
+
+        # 其他按鈕靠右
+        for text, command in buttons[1:]:
             ttk.Button(toolbar, text=text, command=command,
-                    width=15, style='Custom.TButton').pack(side=tk.LEFT, padx=2)
+                    width=15, style='Custom.TButton').pack(side=tk.RIGHT, padx=2)
 
         # Treeview 和卷軸
         tree_container = ttk.Frame(main_frame)
@@ -179,6 +185,22 @@ class CorrectionTool(BaseWindow):
 
         # 綁定雙擊事件
         self.tree.bind('<Double-1>', self.on_double_click)
+
+    def logout(self) -> None:
+        """登出功能，回到登入介面"""
+        try:
+            # 關閉當前視窗
+            self.master.destroy()
+
+            # 創建新的 root 和登入視窗
+            root = tk.Tk()
+            from gui.login_window import LoginWindow
+            login_window = LoginWindow(root)
+            root.mainloop()
+        except Exception as e:
+            self.logger.error(f"登出時出錯: {e}")
+            show_error("錯誤", f"登出失敗: {str(e)}", self.master)
+            sys.exit(1)
 
     def load_database(self) -> None:
         """載入資料庫"""

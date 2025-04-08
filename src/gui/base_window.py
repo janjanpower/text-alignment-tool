@@ -282,6 +282,109 @@ class BaseWindow:
         self._clear_ui()
 
 
+    def _stop_async_tasks(self) -> None:
+        """停止所有異步任務"""
+        try:
+            # 停止所有計時器
+            for after_id in self.master.tk.eval('after info').split():
+                try:
+                    self.master.after_cancel(after_id)
+                except Exception as e:
+                    self.logger.error(f"停止計時器時出錯: {e}")
+
+            # 停止音頻播放
+            if hasattr(self, 'audio_player'):
+                self.audio_player.cleanup()
+
+            # 可能還有其他異步任務需要停止
+
+        except Exception as e:
+            self.logger.error(f"停止異步任務時出錯: {e}")
+
+    def _clear_data(self) -> None:
+        """清除數據"""
+        try:
+            # 清除 SRT 數據
+            if hasattr(self, 'srt_data'):
+                self.srt_data = []
+
+            # 清除校正狀態
+            if hasattr(self, 'correction_service'):
+                self.correction_service.clear_correction_states()
+
+            # 清除使用 Word 文本的標記
+            if hasattr(self, 'use_word_text'):
+                self.use_word_text.clear()
+
+            # 清除編輯文本信息
+            if hasattr(self, 'edited_text_info'):
+                self.edited_text_info.clear()
+
+            # 清除 Word 比對結果
+            if hasattr(self, 'word_comparison_results'):
+                self.word_comparison_results = {}
+
+        except Exception as e:
+            self.logger.error(f"清除數據時出錯: {e}")
+
+    def _release_resources(self) -> None:
+        """釋放資源"""
+        try:
+            # 釋放音頻資源
+            if hasattr(self, 'audio_player'):
+                self.audio_player.cleanup()
+
+            # 釋放字體管理器資源
+            if hasattr(self, 'font_manager'):
+                # 如果字體管理器有清理方法，調用它
+                pass
+
+        except Exception as e:
+            self.logger.error(f"釋放資源時出錯: {e}")
+
+    def safe_widget_operation(self, widget, operation, *args, **kwargs):
+        """安全地對控件執行操作"""
+        if widget is None:
+            return False
+
+        try:
+            # 檢查控件是否還存在
+            if hasattr(widget, 'winfo_exists') and widget.winfo_exists():
+                # 執行指定的操作
+                operation_func = getattr(widget, operation, None)
+                if operation_func and callable(operation_func):
+                    operation_func(*args, **kwargs)
+                    return True
+        except tk.TclError:
+            # 控件可能已經不存在
+            pass
+        except Exception as e:
+            self.logger.error(f"執行控件操作 {operation} 時出錯: {e}")
+
+        return False
+
+    def _clear_ui(self) -> None:
+        """清理 UI"""
+        try:
+            # 清除合併符號
+            if hasattr(self, 'merge_symbol'):
+                self.safe_widget_operation(self.merge_symbol, 'place_forget')
+                self.safe_widget_operation(self.merge_symbol, 'destroy')
+
+            # 清理滑桿
+            if hasattr(self, 'slider_controller'):
+                try:
+                    self.slider_controller.hide_slider()
+                except Exception as e:
+                    self.logger.error(f"隱藏滑桿時出錯: {e}")
+
+            # 清除浮動圖標
+            if hasattr(self, 'floating_icon'):
+                self.safe_widget_operation(self.floating_icon, 'place_forget')
+                self.safe_widget_operation(self.floating_icon, 'destroy')
+
+        except Exception as e:
+            self.logger.error(f"清理 UI 時出錯: {e}")
     def close_window(self, event: Optional[tk.Event] = None) -> None:
         """關閉視窗"""
         try:
