@@ -22,7 +22,7 @@ from gui.custom_messagebox import (
 from gui.quick_correction_dialog import QuickCorrectionDialog
 from gui.text_edit_dialog import TextEditDialog
 from services.text_processing.combine_service import CombineService
-from services.config.config_manager import ConfigManager
+from services.config_manager import ConfigManager
 from services.correction.correction_service import CorrectionService
 from services.file.file_manager import FileManager
 from services.text_processing.split_service import SplitService
@@ -69,8 +69,6 @@ class AlignmentGUI(BaseWindow):
         # 創建界面元素 (注意這裡的順序很重要)
         self.create_gui_elements()
 
-        # 初始化增強狀態管理器
-        self.initialize_state_managers()
 
         # 初始化校正服務
         self.correction_service = CorrectionService()
@@ -688,7 +686,7 @@ class AlignmentGUI(BaseWindow):
             if hasattr(self, 'state_manager'):
                 current_state = self.get_current_state()
                 correction_state = self.correction_service.serialize_state()
-                self.save_operation_state('操作類型', '操作描述', additional_info={'key': 'value'})
+                self.save_operation_state('操作類型', '操作描述', {'key': 'value'})
 
             # 清除所有資料
             self.clear_current_data()
@@ -701,6 +699,10 @@ class AlignmentGUI(BaseWindow):
 
     def initialize_variables(self) -> None:
         """初始化狀態管理器和回調函數"""
+        # 添加重要的屬性初始化
+        self._closing = False
+        self._cleanup_done = False
+
         # 初始化增強狀態管理器
         self.state_manager = EnhancedStateManager()
 
@@ -714,7 +716,7 @@ class AlignmentGUI(BaseWindow):
         self.state_manager.set_callback('on_state_applied', self.on_state_applied)
 
         # 初始化校正狀態管理器，並傳入增強狀態管理器
-        self.correction_state_manager = CorrectionStateManager(self.tree, self.state_manager)
+        self.correction_state_manager = CorrectionStateManager(None, self.state_manager)  # 先設為None，在樹視圖創建後再更新
 
         # 記錄初始化完成
         self.logger.info("狀態管理器初始化完成，已設置所有回調函數")
@@ -728,7 +730,7 @@ class AlignmentGUI(BaseWindow):
         # 添加編輯文本信息的存儲
         self.edited_text_info = {}  # {srt_index: {'edited': ['srt', 'word']}}
 
-         # 添加 Word 相關變數
+        # 添加 Word 相關變數
         self.word_processor = WordProcessor()
         self.word_file_path = None
         self.word_comparison_results = {}
@@ -760,15 +762,12 @@ class AlignmentGUI(BaseWindow):
         self.PLAY_ICON = "▶"
         self.audio_notification_shown = False
         self.correction_states = {}
-        self.display_mode = "srt"
         self.srt_data = []
         self.srt_file_path = None
         self.current_project_path = None
         self.database_file = None
         self.audio_file_path = None
         self.current_style = None
-
-
 
     def update_state_manager(self) -> None:
         """更新狀態管理器的參數"""
@@ -1263,33 +1262,64 @@ class AlignmentGUI(BaseWindow):
     def close_window(self, event: Optional[tk.Event] = None) -> None:
         """關閉視窗"""
         try:
-            # 先清理所有子視窗
-            for widget in self.master.winfo_children():
-                if isinstance(widget, tk.Toplevel):
-                    widget.destroy()
+            # 先設置關閉標誌，防止重複操作
+            if hasattr(self, '_closing') and self._closing:
+                return
+            self._closing = True
 
             # 停止音頻播放
             if hasattr(self, 'audio_player'):
-                self.audio_player.cleanup()
+                try:
+                    self.audio_player.cleanup()
+                except Exception as e:
+                    self.logger.error(f"停止音頻播放時出錯: {e}")
 
-            # 保存當前狀態
-            if hasattr(self, 'state_manager'):
-                current_state = self.get_current_state()
-                correction_state = self.correction_service.serialize_state()
-                self.save_operation_state('操作類型', '操作描述', additional_info={'key': 'value'})
+            # 確保所有屬性都存在，避免訪問不存在的屬性時出錯
+            if not hasattr(self, 'display_mode'):
+                self.display_mode = "srt"  # 設置默認值
+
+            # 嘗試保存當前狀態
+            try:
+                if hasattr(self, 'state_manager'):
+                    current_state = self.get_current_state()
+                    correction_state = None
+                    if hasattr(self, 'correction_service'):
+                        correction_state = self.correction_service.serialize_state()
+                    self.save_operation_state('close_window', '關閉應用',
+                                            {'type': 'close', 'description': '關閉應用'})
+            except Exception as e:
+                self.logger.error(f"保存關閉狀態時出錯: {e}")
+
             # 執行清理
-            self.cleanup()
+            try:
+                self.cleanup()
+            except Exception as e:
+                self.logger.error(f"執行清理時出錯: {e}")
 
             # 確保處理完所有待處理的事件
-            self.master.update_idletasks()
+            try:
+                self.master.update_idletasks()
+            except Exception:
+                pass
 
-            # 關閉主視窗
-            self.master.destroy()
+            # 銷毀視窗
+            try:
+                self.master.destroy()
+            except Exception as e:
+                self.logger.error(f"銷毀視窗時出錯: {e}")
+
+            # 強制退出
+            import sys
             sys.exit(0)
 
         except Exception as e:
             self.logger.error(f"關閉視窗時出錯: {e}")
-            sys.exit(1)
+            # 即使出錯也嘗試強制退出
+            try:
+                import sys
+                sys.exit(1)
+            except:
+                os._exit(1)  # 最後的手段
 
     def create_file_info_area(self) -> None:
         """創建檔案資訊顯示區域"""
@@ -1556,6 +1586,11 @@ class AlignmentGUI(BaseWindow):
 
         self.tree.tag_configure('mismatch', background='#FFDDDD')  # 淺紅色背景標記不匹配項目
         self.tree.tag_configure('use_word_text', background='#00BFFF')  # 淺藍色背景標記使用 Word 文本的項目
+
+        # 更新校正狀態管理器的樹視圖引用
+        if hasattr(self, 'correction_state_manager'):
+            self.correction_state_manager.tree = self.tree
+
         self.logger.debug("Treeview 創建完成")
 
     def setup_treeview_columns(self) -> None:
@@ -1955,7 +1990,7 @@ class AlignmentGUI(BaseWindow):
                     if hasattr(self, 'state_manager'):
                         current_state = self.get_current_state()
                         correction_state = self.correction_service.serialize_state()
-                        self.save_operation_state('操作類型', '操作描述', additional_info={'key': 'value'})
+                        self.save_operation_state('操作類型', '操作描述', {'key': 'value'})
 
                     # 更新 SRT 數據
                     self.update_srt_data_from_treeview()
@@ -1996,7 +2031,7 @@ class AlignmentGUI(BaseWindow):
                         if hasattr(self, 'state_manager'):
                             current_state = self.get_current_state()
                             correction_state = self.correction_service.serialize_state()
-                            self.save_operation_state('操作類型', '操作描述', additional_info={'key': 'value'})
+                            self.save_operation_state('操作類型', '操作描述', {'key': 'value'})
 
                         # 更新 SRT 數據
                         self.update_srt_data_from_treeview()
@@ -2064,7 +2099,7 @@ class AlignmentGUI(BaseWindow):
                 if hasattr(self, 'state_manager'):
                     current_state = self.get_current_state()
                     correction_state = self.correction_service.serialize_state()
-                    self.save_operation_state('操作類型', '操作描述', additional_info={'key': 'value'})
+                    self.save_operation_state('操作類型', '操作描述', {'key': 'value'})
                 return
 
             # 處理音頻播放列的點擊
@@ -2606,13 +2641,15 @@ class AlignmentGUI(BaseWindow):
         self.update_status(f"顯示模式: {self.get_mode_description(new_mode)}")
 
     def on_treeview_change(self, event: tk.Event) -> None:
-        """
-        處理 Treeview 變更事件
-        :param event: 事件對象
-        """
+        """處理 Treeview 變更事件"""
         current_state = self.get_current_state()
         correction_state = self.correction_service.serialize_state()
-        self.save_operation_state('操作類型', '操作描述', additional_info={'key': 'value'})
+        self.save_operation_state(current_state, {
+            'type': '操作類型',
+            'description': '操作描述',
+            'key': 'value'
+        }, correction_state)
+
     def on_closing(self) -> None:
         """處理視窗關閉事件"""
         try:
@@ -2620,7 +2657,7 @@ class AlignmentGUI(BaseWindow):
                 self.audio_player.cleanup()
             current_state = self.get_current_state()
             correction_state = self.correction_service.serialize_state()
-            self.save_operation_state('操作類型', '操作描述', additional_info={'key': 'value'})
+            self.save_operation_state('操作類型', '操作描述', {'key': 'value'})
 
             # 先解除所有事件綁定
             for widget in self.master.winfo_children():
@@ -3649,46 +3686,59 @@ class AlignmentGUI(BaseWindow):
         :return: 當前應用狀態字典
         """
         try:
+            # 確保 display_mode 屬性存在
+            if not hasattr(self, 'display_mode'):
+                self.display_mode = "srt"  # 設置默認值
+
             state = {
                 'tree_items': [],
                 'display_mode': self.display_mode,
                 'use_word_text': {},
-                'srt_data': self.get_serialized_srt_data(),
+                'srt_data': self.get_serialized_srt_data() if hasattr(self, 'get_serialized_srt_data') else [],
                 'item_id_mapping': {}  # 新增: 保存項目 ID 映射
             }
 
-            # 收集樹狀視圖數據
-            for item in self.tree_manager.get_all_items():
-                values = self.tree_manager.get_item_values(item)
-                tags = self.tree_manager.get_item_tags(item)
-                position = self.tree_manager.get_item_position(item)
+            # 安全地獲取樹狀視圖數據
+            try:
+                if hasattr(self, 'tree') and hasattr(self, 'tree_manager'):
+                    for item in self.tree_manager.get_all_items():
+                        try:
+                            values = self.tree_manager.get_item_values(item)
+                            tags = self.tree_manager.get_item_tags(item)
+                            position = self.tree_manager.get_item_position(item)
 
-                # 獲取索引值
-                index_position = 1 if self.display_mode in [self.DISPLAY_MODE_ALL, self.DISPLAY_MODE_AUDIO_SRT] else 0
-                index = str(values[index_position]) if len(values) > index_position else str(position)
+                            # 獲取索引值
+                            index_position = 1 if self.display_mode in [self.DISPLAY_MODE_ALL, self.DISPLAY_MODE_AUDIO_SRT] else 0
+                            index = str(values[index_position]) if len(values) > index_position else str(position)
 
-                item_state = {
-                    'values': values,
-                    'tags': tags,
-                    'position': position,
-                    'index': index,
-                    'original_id': item  # 保存原始項目 ID
-                }
+                            item_state = {
+                                'values': values,
+                                'tags': tags,
+                                'position': position,
+                                'index': index,
+                                'original_id': item  # 保存原始項目 ID
+                            }
 
-                # 保存使用 Word 文本的標記
-                if item in self.use_word_text:
-                    state['use_word_text'][index] = self.use_word_text[item]
-                    item_state['use_word_text'] = self.use_word_text[item]
+                            # 保存使用 Word 文本的標記
+                            if hasattr(self, 'use_word_text') and item in self.use_word_text:
+                                state['use_word_text'][index] = self.use_word_text[item]
+                                item_state['use_word_text'] = self.use_word_text[item]
 
-                # 保存項目 ID 映射
-                state['item_id_mapping'][item] = index
+                            # 保存項目 ID 映射
+                            state['item_id_mapping'][item] = index
 
-                state['tree_items'].append(item_state)
+                            state['tree_items'].append(item_state)
+                        except Exception as e:
+                            self.logger.error(f"處理樹項目時出錯: {e}")
+                            continue
+            except Exception as e:
+                self.logger.error(f"獲取樹狀視圖數據時出錯: {e}")
 
             return state
         except Exception as e:
             self.logger.error(f"獲取當前狀態時出錯: {e}")
-            return {'tree_items': [], 'display_mode': self.display_mode}
+            # 返回最小的有效狀態
+            return {'tree_items': [], 'display_mode': "srt"}
 
 
     def get_serialized_srt_data(self) -> List[Dict[str, Any]]:
@@ -3720,18 +3770,27 @@ class AlignmentGUI(BaseWindow):
 
         self.master.update_idletasks()
 
-    def initialize_state_manager(self) -> None:
+    def initialize_state_managers(self) -> None:
         """初始化狀態管理器和回調函數"""
+        # 初始化增強狀態管理器
         self.state_manager = EnhancedStateManager()
 
         # 設置對 GUI 的引用，使狀態管理器能夠操作界面元素
         self.state_manager.set_gui_reference(self)
 
-        # 設置回調函數
+        # 設置增強狀態管理器的回調函數
         self.state_manager.set_callback('on_state_change', self.on_state_change)
         self.state_manager.set_callback('on_undo', self.on_undo_state)
         self.state_manager.set_callback('on_redo', self.on_redo_state)
         self.state_manager.set_callback('on_state_applied', self.on_state_applied)
+
+        # 初始化校正狀態管理器
+        self.correction_state_manager = CorrectionStateManager(self.tree, self.state_manager)
+
+        # 添加服務實例的引用到 state_manager 以便使用
+        if hasattr(self.state_manager, 'gui'):
+            self.state_manager.gui.split_service = self.split_service
+            self.state_manager.gui.combine_service = self.combine_service
 
         # 記錄初始化完成
         self.logger.info("狀態管理器初始化完成，已設置所有回調函數")
@@ -3827,9 +3886,6 @@ class AlignmentGUI(BaseWindow):
 
                 # 8. 更新音頻段落
                 self._update_audio_segments()
-
-            # 恢復視圖位置
-            self._restore_view_position(visible_item, id_mapping, operation)
 
             # 觸發狀態應用完成回調
             if hasattr(self, 'state_manager'):
@@ -3931,8 +3987,12 @@ class AlignmentGUI(BaseWindow):
             # 使用增強狀態管理器提供的撤銷功能
             self.logger.debug(f"執行撤銷操作: {operation.get('type', '')} - {operation.get('description', '未知操作')}")
 
-            # 應用撤銷後的狀態
-            self.apply_state(state, correction_state, operation)
+            # 應用撤銷後的狀態 - 通過 apply_state 方法
+            if hasattr(self, 'state_manager') and hasattr(self.state_manager, 'apply_state'):
+                self.state_manager.apply_state(state, correction_state, operation)
+            else:
+                # 直接使用本地方法
+                self.apply_state(state, correction_state, operation)
 
             # 更新狀態欄
             self.update_status(f"已撤銷：{operation.get('description', '未知操作')}")
@@ -3949,14 +4009,19 @@ class AlignmentGUI(BaseWindow):
 
             self.logger.debug(f"執行重做操作: {operation.get('type', '')} - {operation.get('description', '未知操作')}")
 
-            # 應用重做後的狀態
-            self.apply_state(state, correction_state, operation)
+            # 應用重做後的狀態 - 通過 apply_state 方法
+            if hasattr(self, 'state_manager') and hasattr(self.state_manager, 'apply_state'):
+                self.state_manager.apply_state(state, correction_state, operation)
+            else:
+                # 直接使用本地方法
+                self.apply_state(state, correction_state, operation)
 
             # 更新狀態欄
             self.update_status(f"已重做：{operation.get('description', '未知操作')}")
         except Exception as e:
             self.logger.error(f"重做狀態時出錯: {e}", exc_info=True)
             show_error("錯誤", f"重做操作失敗: {str(e)}", self.master)
+
     def restore_from_split_operation(self, operation):
         """從拆分操作恢復狀態 - 基於完整原始狀態的復原"""
         self.split_service.restore_from_split_operation(operation)
@@ -4286,6 +4351,19 @@ class AlignmentGUI(BaseWindow):
                 # 獲取真正的校正狀態
                 if hasattr(self, 'correction_service'):
                     correction_state = self.correction_service.serialize_state()
+
+            # 確保特殊操作被正確記錄
+            if operation_info.get('type') == 'split_srt' and hasattr(self, 'last_split_operation'):
+                if hasattr(self.state_manager, 'last_split_operation'):
+                    self.state_manager.last_split_operation = self.last_split_operation
+
+            if operation_info.get('type') == 'combine_sentences' and hasattr(self, 'last_combine_operation'):
+                if hasattr(self.state_manager, 'last_combine_operation'):
+                    self.state_manager.last_combine_operation = self.last_combine_operation
+
+            if operation_info.get('type') == 'align_end_times' and hasattr(self, 'last_time_adjust_operation'):
+                if hasattr(self.state_manager, 'last_time_adjust_operation'):
+                    self.state_manager.last_time_adjust_operation = self.last_time_adjust_operation
 
             # 調用增強狀態管理器的保存方法
             self.state_manager.save_state(state, operation_info, correction_state)

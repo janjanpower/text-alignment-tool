@@ -1,26 +1,17 @@
 import logging
-# 改為這樣的絕對導入
 import sys
 import os
 
-
-# 獲取項目根目錄並加入 Python 路徑
+# 獲取項目根目錄並加入 Python 路徑 (只需一次)
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
-
 
 from database.base import Base, init_db
-# 獲取項目根目錄並加入 Python 路徑
-project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-if project_root not in sys.path:
-    sys.path.insert(0, project_root)
-
-# 使用絕對導入
-from services.config.config_manager import ConfigManager
+# 修改導入路徑，與貼上代碼保持一致
+from services.config_manager import ConfigManager
 
 from sqlalchemy.orm import sessionmaker, scoped_session
-
 
 # 獲取 logger
 logger = logging.getLogger(__name__)
@@ -35,6 +26,7 @@ class DatabaseManager:
         """
         # 先設置 logger 屬性
         self.logger = logger
+        password = ""  # 初始化 password 變數，避免 UnboundLocalError
 
         if connection_string is None:
             # 從配置文件獲取連接信息
@@ -61,7 +53,6 @@ class DatabaseManager:
                 connection_string = f"postgresql://{username}:{password}@{host}:{port}/"
             else:
                 # 嘗試使用 SQLite 作為備用方案
-                import os
                 db_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "text_alignment.db")
                 connection_string = f"sqlite:///{db_path}"
                 self.logger.info(f"無法讀取資料庫配置，改用 SQLite: {db_path}")
@@ -81,7 +72,6 @@ class DatabaseManager:
             if "postgresql" in connection_string.lower():
                 try:
                     self.logger.info("嘗試切換到 SQLite 資料庫...")
-                    import os
                     db_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "text_alignment.db")
                     sqlite_connection_string = f"sqlite:///{db_path}"
 

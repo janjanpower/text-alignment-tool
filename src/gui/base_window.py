@@ -268,19 +268,87 @@ class BaseWindow:
             sys.exit(1)
 
     def cleanup(self) -> None:
-        """標準資源清理流程"""
-        # 1. 停止所有異步任務
-        self._stop_async_tasks()
+        """清理資源"""
+        try:
+            # 設置清理標誌，避免重複清理
+            if hasattr(self, '_cleanup_done') and self._cleanup_done:
+                return
+            self._cleanup_done = True
 
-        # 2. 清除數據
-        self._clear_data()
+            self.logger.debug("開始清理資源...")
 
-        # 3. 釋放資源
-        self._release_resources()
+            # 1. 停止所有異步任務
+            try:
+                self._stop_async_tasks()
+            except Exception as e:
+                self.logger.error(f"停止異步任務時出錯: {e}")
 
-        # 4. 清理 UI
-        self._clear_ui()
+            # 2. 清除數據和狀態
+            try:
+                self._clear_data()
+            except Exception as e:
+                self.logger.error(f"清除數據時出錯: {e}")
 
+            # 3. 釋放資源
+            try:
+                self._release_resources()
+            except Exception as e:
+                self.logger.error(f"釋放資源時出錯: {e}")
+
+            # 4. 清理 UI
+            try:
+                self._clear_ui()
+            except Exception as e:
+                self.logger.error(f"清理 UI 時出錯: {e}")
+
+            # 5. 解綁事件
+            try:
+                self._unbind_all_events()
+            except Exception as e:
+                self.logger.error(f"解綁事件時出錯: {e}")
+
+            self.logger.debug("資源清理完成")
+        except Exception as e:
+            self.logger.error(f"清理資源過程中出錯: {e}")
+
+
+    def _unbind_all_events(self) -> None:
+        """解綁所有事件"""
+        try:
+            # 首先檢查 master 是否仍然有效
+            if not hasattr(self, 'master') or not self.master:
+                return
+
+            try:
+                self.master.unbind_all('<Motion>')
+                self.master.unbind_all('<Configure>')
+                self.master.unbind_all('<Control-s>')
+                self.master.unbind_all('<Control-o>')
+                self.master.unbind_all('<Control-z>')
+                self.master.unbind_all('<Control-y>')
+            except Exception:
+                pass
+
+            # 解綁樹視圖相關事件
+            if hasattr(self, 'tree'):
+                try:
+                    self.tree.unbind('<Button-1>')
+                    self.tree.unbind('<Double-1>')
+                    self.tree.unbind('<KeyRelease>')
+                    self.tree.unbind('<Motion>')
+                    self.tree.unbind('<Leave>')
+                    self.tree.unbind('<<TreeviewSelect>>')
+                except Exception:
+                    pass
+
+            # 解綁時間滑桿事件
+            if hasattr(self, 'slider_controller'):
+                try:
+                    self.slider_controller.hide_slider()
+                except Exception:
+                    pass
+        except Exception as e:
+            self.logger.error(f"解綁事件時出錯: {e}")
 
     def _stop_async_tasks(self) -> None:
         """停止所有異步任務"""

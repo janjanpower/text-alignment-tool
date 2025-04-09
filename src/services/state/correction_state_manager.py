@@ -121,17 +121,17 @@ class CorrectionStateManager:
             import traceback
             traceback.print_exc()
 
-    def check_text_for_correction(self, text: str, corrections: dict) -> tuple[bool, str, str, list]:
+    def check_text_for_correction(self, text, corrections=None):
         """
         檢查文本是否需要校正，並返回校正資訊
-
-        Args:
-            text: 要檢查的文本
-            corrections: 校正對照表
-
-        Returns:
-            tuple: (需要校正?, 校正後文本, 原始文本, 實際校正部分列表)
         """
+        # 確保有校正對照表
+        if corrections is None:
+            if hasattr(self.gui, 'correction_service') and hasattr(self.gui.correction_service, 'load_corrections'):
+                corrections = self.gui.correction_service.load_corrections()
+            else:
+                corrections = {}
+
         corrected_text = text
         actual_corrections = []
 
