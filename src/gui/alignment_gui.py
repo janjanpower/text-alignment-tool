@@ -153,19 +153,35 @@ class AlignmentGUI(BaseWindow):
 
     def on_correction_change(self):
         """校正數據變更後的處理"""
-        # 如果有樹視圖，更新顯示
-        if hasattr(self, 'tree'):
-            self.update_correction_status_display()
+        try:
+            self.logger.debug("校正數據已變更，正在更新界面...")
 
-        # 更新 SRT 數據
-        self.update_srt_data_from_treeview()
+            # 如果有樹視圖，更新顯示
+            if hasattr(self, 'tree') and hasattr(self, 'correction_service'):
+                # 使用 correction_service 的方法更新顯示，而不是調用不存在的 refresh_all_correction_states
+                self.correction_service.update_display_status(self.tree, self.display_mode)
 
-        # 如果有音頻，更新音頻段落
-        if self.audio_imported and hasattr(self, 'audio_player'):
-            self.audio_player.segment_audio(self.srt_data)
+            # 更新 SRT 數據
+            if hasattr(self, 'update_srt_data_from_treeview'):
+                self.update_srt_data_from_treeview()
 
-        # 更新狀態欄
-        self.update_status("校正規則已更新")
+            # 如果有音頻，更新音頻段落
+            if hasattr(self, 'audio_imported') and self.audio_imported and hasattr(self, 'audio_player'):
+                if hasattr(self, 'srt_data'):
+                    self.audio_player.segment_audio(self.srt_data)
+
+            # 更新狀態欄
+            if hasattr(self, 'update_status'):
+                self.update_status("校正規則已更新，顯示已更新")
+
+            # 確保界面立即刷新
+            if hasattr(self, 'master'):
+                self.master.update_idletasks()
+        except Exception as e:
+            self.logger.error(f"處理校正數據變更時出錯: {e}", exc_info=True)
+            # 即使出錯，也嘗試更新狀態欄
+            if hasattr(self, 'update_status'):
+                self.update_status("更新校正顯示時出錯")
 
     def initialize_file_manager(self) -> None:
         """初始化檔案管理器"""
@@ -991,15 +1007,16 @@ class AlignmentGUI(BaseWindow):
         self.update_status(f"顯示模式: {self.get_mode_description(new_mode)}")
 
     def update_correction_status_display(self):
-        """更新樹視圖中的校正狀態顯示"""
+        """更新校正狀態顯示"""
         try:
-            # 檢查所需組件是否可用
-            if not hasattr(self, 'tree') or not hasattr(self, 'correction_service'):
-                self.logger.warning("無法更新校正狀態顯示：所需組件不可用")
+            if not hasattr(self, 'correction_service') or not hasattr(self, 'tree'):
                 return
 
-            # 直接調用 correction_service 的方法
+            # 使用校正服務更新顯示
             self.correction_service.update_display_status(self.tree, self.display_mode)
+
+            # 強制界面更新
+            self.master.update_idletasks()
 
         except Exception as e:
             self.logger.error(f"更新校正狀態顯示時出錯: {e}", exc_info=True)
@@ -5167,11 +5184,18 @@ class AlignmentGUI(BaseWindow):
 
             if result:
                 error, correction = result
-                # 更新狀態欄
-                self.update_status(f"已添加校正規則：{error} → {correction}")
+                # 直接調用校正服務的方法來應用到所有項目
+                self.apply_correction_to_all_items(error, correction)
 
-            # 重置圖標狀態，使其能夠再次跟隨游標
-            self.reset_floating_icon_state()
+                # 強制更新整個校正狀態顯示
+                self.update_correction_status_display()
+
+                # 更新 SRT 數據
+                self.update_srt_data_from_treeview()
+
+                # 如果有音頻，更新音頻段落
+                if self.audio_imported and hasattr(self, 'audio_player'):
+                    self.audio_player.segment_audio(self.srt_data)
 
         except Exception as e:
             self.logger.error(f"顯示添加校正對話框時出錯: {e}", exc_info=True)
@@ -5180,33 +5204,66 @@ class AlignmentGUI(BaseWindow):
 
     def apply_correction_to_all_items(self, error, correction):
         """
-        對所有項目應用特定的校正規則 - 使用 CorrectionService 的方法
+        對所有項目應用特定的校正規則
+
+        Args:
+            error: 錯誤字
+            correction: 校正字
         """
         try:
             if not hasattr(self, 'tree') or not self.tree:
                 self.logger.warning("樹狀視圖不可用，無法應用校正")
                 return
 
-            # 直接使用 CorrectionService 的方法
-            updated_count = self.correction_service.apply_correction_to_all(
-                error=error,
-                correction=correction,
-                tree_view=self.tree,
-                text_position_func=self.get_text_position_in_values,
-                display_mode=self.display_mode
-            )
+            if not hasattr(self, 'correction_service'):
+                self.logger.warning("校正服務不可用，無法應用校正")
+                return
 
-            # 如果有更新項目，進行後續處理
-            if updated_count > 0:
+            # 獲取文本位置索引
+            text_index = self.get_text_position_in_values()
+            if text_index is None:
+                self.logger.warning("無法獲取文本位置索引")
+                return
+
+            # 收集所有需要校正的文本及其索引
+            texts_to_correct = []
+            for item_id in self.tree.get_children():
+                values = list(self.tree.item(item_id, "values"))
+
+                # 確保索引有效
+                if len(values) <= text_index:
+                    continue
+
+                # 獲取文本
+                text = values[text_index]
+
+                # 檢查文本是否含有錯誤字
+                if error in text:
+                    # 獲取當前模式下的索引位置
+                    index_pos = 1 if self.display_mode in ["all", "audio_srt"] else 0
+                    item_index = str(values[index_pos]) if len(values) > index_pos else ""
+
+                    if item_index:
+                        texts_to_correct.append((item_index, text))
+
+            # 使用專用方法立即應用校正
+            if texts_to_correct:
+                updated_count = self.correction_service.apply_to_texts_immediately(
+                    error, correction, texts_to_correct
+                )
+
+                # 立即更新顯示
+                self.update_correction_status_display()
+
                 # 更新 SRT 數據
                 self.update_srt_data_from_treeview()
 
-                # 更新音頻段落
+                # 如果有音頻，更新音頻段落
                 if self.audio_imported and hasattr(self, 'audio_player'):
                     self.audio_player.segment_audio(self.srt_data)
 
                 # 更新狀態欄
-                self.update_status(f"已添加校正規則 '{error}→{correction}' 並更新 {updated_count} 個項目")
+                self.update_status(f"已應用校正規則 '{error}→{correction}' 到 {updated_count} 個項目")
 
                 # 保存操作狀態
                 if hasattr(self, 'state_manager'):

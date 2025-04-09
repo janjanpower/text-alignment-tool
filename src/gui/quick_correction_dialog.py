@@ -1,9 +1,9 @@
 import tkinter as tk
 from tkinter import ttk
 import logging
+import os
 from gui.base_dialog import BaseDialog
 from gui.custom_messagebox import show_warning, show_info, show_error
-from services.correction.correction_service import CorrectionService
 
 class QuickCorrectionDialog(BaseDialog):
     """快速添加校正對話框"""
@@ -21,14 +21,21 @@ class QuickCorrectionDialog(BaseDialog):
         self.result = None
         self.selected_text = selected_text
         self.project_path = project_path
+        self.parent = parent  # 保存父窗口引用
 
         # 使用提供的校正服務或創建新的
         if correction_service is not None:
             self.correction_service = correction_service
         else:
-            import os
             database_file = os.path.join(project_path, "corrections.csv") if project_path else None
-            self.correction_service = CorrectionService(database_file)
+
+            # 嘗試導入 CorrectionService
+            try:
+                from services.correction.correction_service import CorrectionService
+                self.correction_service = CorrectionService(database_file)
+            except ImportError:
+                self.correction_service = None
+                logging.error("無法導入 CorrectionService")
 
         super().__init__(parent, title="添加錯誤校正", width=350, height=200)
 
@@ -107,11 +114,59 @@ class QuickCorrectionDialog(BaseDialog):
 
         # 保存到校正服務
         try:
+            # 檢查校正服務是否可用
+            if not hasattr(self, 'correction_service') or self.correction_service is None:
+                database_file = os.path.join(self.project_path, "corrections.csv") if self.project_path else None
+
+                # 如果父窗口有校正服務，使用它
+                if hasattr(self.parent, 'correction_service') and self.parent.correction_service:
+                    self.correction_service = self.parent.correction_service
+                    logging.info("使用父窗口的校正服務")
+                else:
+                    # 嘗試導入並創建新的校正服務
+                    try:
+                        from services.correction.correction_service import CorrectionService
+                        self.correction_service = CorrectionService(database_file)
+                        logging.info(f"創建新的校正服務，資料庫路徑: {database_file}")
+                    except ImportError:
+                        logging.error("無法導入 CorrectionService")
+                        show_error("錯誤", "無法創建校正服務，請檢查配置", self.window)
+                        return
+
             # 添加校正規則
-            self.correction_service.add_correction(error, correction)
+            updated = False
+            if hasattr(self.correction_service, 'add_correction'):
+                self.correction_service.add_correction(error, correction)
+                updated = True
+
+            # 確保更新了顯示
+            try:
+                # 如果父窗口有 tree 屬性和更新方法，直接調用
+                if hasattr(self.parent, 'tree') and hasattr(self.correction_service, 'safe_apply_correction'):
+                    # 使用安全方法應用校正
+                    if hasattr(self.parent, 'display_mode'):
+                        self.correction_service.safe_apply_correction(
+                            error, correction, self.parent.tree, self.parent.display_mode
+                        )
+
+                # 如果父窗口有專門的方法，也調用它
+                if hasattr(self.parent, 'apply_correction_to_all_items'):
+                    try:
+                        self.parent.apply_correction_to_all_items(error, correction)
+                    except Exception as apply_error:
+                        logging.error(f"在父窗口應用校正時出錯: {apply_error}")
+            except Exception as e:
+                logging.error(f"嘗試更新父窗口顯示時出錯: {e}")
 
             # 設置結果
             self.result = (error, correction)
+
+            # 觸發回調
+            if updated and hasattr(self.correction_service, 'on_correction_change') and self.correction_service.on_correction_change:
+                try:
+                    self.correction_service.on_correction_change()
+                except Exception as e:
+                    logging.error(f"執行校正回調時出錯: {e}")
 
             # 顯示成功訊息
             show_info("成功", f"已添加校正規則：\n{error} → {correction}", self.window)

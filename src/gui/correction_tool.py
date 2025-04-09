@@ -123,7 +123,7 @@ class CorrectionTool(BaseWindow):
         # 初始化校正服務
         self.correction_service = CorrectionService(
             database_file=self.database_file,
-            on_correction_change=self._on_correction_change
+            on_correction_change=self.on_correction_change  # 修正：從_on_correction_change改為on_correction_change
         )
 
         # 從校正服務獲取資料
@@ -138,10 +138,23 @@ class CorrectionTool(BaseWindow):
         # 創建界面
         self.create_correction_interface()
 
-    def _on_correction_change(self):
+    def on_correction_change(self):
         """校正數據變化的回調函數"""
-        # 重新載入數據
-        self.data_rows = [(error, correction) for error, correction in self.correction_service.get_all_corrections().items()]
+        # 清空原有數據
+        self.data_rows = []
+
+        # 從校正服務獲取最新數據
+        self.data_rows = [(error, correction) for error, correction in
+                        self.correction_service.get_all_corrections().items()]
+
+        # 確保沒有重複項
+        unique_data = {}
+        for error, correction in self.data_rows:
+            unique_data[error] = correction
+
+        # 更新為去重後的數據
+        self.data_rows = list(unique_data.items())
+
         # 更新顯示
         self.update_display()
 
@@ -235,12 +248,27 @@ class CorrectionTool(BaseWindow):
         result = dialog.run()
         if result:
             error, correction = result
-            # 更新數據列表
-            self.data_rows.append((error, correction))
-            # 更新顯示
+
+            # 檢查是否重複
+            duplicate = False
+            for i, (existing_error, _) in enumerate(self.data_rows):
+                if existing_error == error:
+                    # 更新現有項而不是添加新項
+                    self.data_rows[i] = (error, correction)
+                    duplicate = True
+                    break
+
+            # 如果不是重複的，添加新項
+            if not duplicate:
+                # 更新數據列表
+                self.data_rows.append((error, correction))
+
+            # 更新顯示 - 確保先清空再重新加載
+            self.tree.delete(*self.tree.get_children())
             self.update_display()
+
             # 顯示成功訊息
-            show_info("成功", f"已添加校正規則：\n{error} → {correction}", self.master)
+            show_info("成功", f"已{'更新' if duplicate else '添加'}校正規則：\n{error} → {correction}", self.master)
 
     def delete_correction(self) -> None:
         """刪除選中項"""
@@ -249,25 +277,67 @@ class CorrectionTool(BaseWindow):
             show_warning("警告", "請先選擇要刪除的項目", self.master)
             return
 
-        index = self.tree.index(selected[0])
-        if 0 <= index < len(self.data_rows):
-            error, _ = self.data_rows[index]
+        try:
+            # 檢查是否有選中項
+            if not selected or len(selected) == 0:
+                self.logger.warning("嘗試刪除但沒有選中項目")
+                return
 
-            # 確認刪除
-            if ask_question("確認刪除", f"確定要刪除校正規則「{error}」嗎？", self.master):
-                # 從校正服務中移除
-                self.correction_service.remove_correction(error)
+            # 同步數據 - 確保 data_rows 與校正服務的數據同步
+            self.data_rows = [(error, correction) for error, correction in
+                            self.correction_service.get_all_corrections().items()]
 
-                # 從本地數據移除
-                self.data_rows.pop(index)
+            # 獲取樹視圖中選中項目的值
+            item_values = self.tree.item(selected[0], 'values')
+            if len(item_values) >= 2:  # 確保有錯誤字欄位
+                error_text = item_values[1]  # 錯誤字通常在第二列
 
-                # 更新顯示
-                self.update_display()
+                # 在 data_rows 中查找對應的錯誤字
+                found = False
+                for i, (error, _) in enumerate(self.data_rows):
+                    if error == error_text:
+                        # 使用直接找到的索引，而不是樹視圖索引
+                        index = i
+                        found = True
+                        break
+
+                if found and 0 <= index < len(self.data_rows):
+                    # 確認刪除
+                    if ask_question("確認刪除", f"確定要刪除校正規則「{error_text}」嗎？", self.master):
+                        # 從校正服務中移除
+                        if hasattr(self, 'correction_service') and self.correction_service:
+                            self.correction_service.remove_correction(error_text)
+
+                        # 從本地數據移除
+                        self.data_rows.pop(index)
+
+                        # 更新顯示
+                        self.update_display()
+                else:
+                    self.logger.warning(f"在數據中找不到錯誤字 '{error_text}'")
+                    show_warning("警告", "無法刪除所選項目，請重新選擇", self.master)
+            else:
+                self.logger.warning("選中項的數據不完整")
+                show_warning("警告", "選中項數據不完整，請重新選擇", self.master)
+
+        except Exception as e:
+            self.logger.error(f"刪除校正項時出錯: {e}", exc_info=True)
+            show_error("錯誤", f"刪除失敗: {str(e)}", self.master)
 
     def update_display(self) -> None:
         """更新顯示"""
+        # 先清空現有顯示
         for item in self.tree.get_children():
             self.tree.delete(item)
+
+        # 確保數據沒有重複
+        unique_data = {}
+        for error, correction in self.data_rows:
+            unique_data[error] = correction
+
+        # 使用去重後的數據更新顯示
+        self.data_rows = list(unique_data.items())
+
         print(f"更新顯示：共 {len(self.data_rows)} 筆資料")
         for i, (error, correction) in enumerate(self.data_rows, 1):
             self.tree.insert("", "end", values=(i, error, correction))

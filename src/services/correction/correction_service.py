@@ -124,10 +124,17 @@ class CorrectionService:
 
         # 儲存到資料庫
         if self.database_file:
-            self.save_corrections()
+            saved = self.save_corrections()
+            if not saved:
+                # 如果保存失敗，但回調仍需要觸發
+                if self.on_correction_change and callable(self.on_correction_change):
+                    self.on_correction_change()
 
         # 如果不需要應用到現有文本，直接返回
         if not apply_to_existing:
+            # 確保回調觸發
+            if self.on_correction_change and callable(self.on_correction_change):
+                self.on_correction_change()
             return 1
 
         # 計數更新的項目
@@ -151,7 +158,154 @@ class CorrectionService:
 
                     updated_count += 1
 
-        # 觸發回調函數，通知校正資料已更新
+        # 確保回調觸發
+        if self.on_correction_change and callable(self.on_correction_change):
+            self.on_correction_change()
+
+        return updated_count
+
+    def safe_apply_correction(self, error: str, correction: str, tree_view, display_mode: str) -> int:
+        """
+        安全地將校正規則應用到樹視圖的所有項目
+
+        Args:
+            error: 錯誤字
+            correction: 校正字
+            tree_view: 樹狀視圖控件
+            display_mode: 顯示模式
+
+        Returns:
+            int: 更新的項目數量
+        """
+        try:
+            if not tree_view:
+                self.logger.warning("無法應用校正：樹視圖為空")
+                return 0
+
+            # 添加到校正規則
+            self.corrections[error] = correction
+
+            # 儲存到資料庫
+            if self.database_file:
+                try:
+                    self.save_corrections()
+                except Exception as e:
+                    self.logger.error(f"儲存校正規則時出錯: {e}")
+                    # 繼續處理，確保校正能應用到界面
+
+            # 確定文本和索引列的位置
+            text_index = None
+            index_pos = None
+
+            if display_mode in ["all", "audio_srt"]:
+                text_index = 4  # SRT Text 位置
+                index_pos = 1   # 項目索引位置
+            else:  # "srt" 或 "srt_word" 模式
+                text_index = 3  # SRT Text 位置
+                index_pos = 0   # 項目索引位置
+
+            if text_index is None or index_pos is None:
+                self.logger.warning(f"無法確定顯示模式 {display_mode} 的文本和索引位置")
+                return 0
+
+            # 應用到所有項目
+            updated_count = 0
+            try:
+                for item_id in tree_view.get_children():
+                    try:
+                        values = list(tree_view.item(item_id, "values"))
+
+                        # 確保索引有效
+                        if len(values) <= text_index or len(values) <= index_pos:
+                            continue
+
+                        # 獲取文本和索引
+                        text = values[text_index]
+                        item_index = str(values[index_pos])
+
+                        # 檢查文本是否含有錯誤字
+                        if error in text:
+                            # 應用校正
+                            corrected_text = text.replace(error, correction)
+
+                            # 更新顯示文本
+                            values[text_index] = corrected_text
+
+                            # 設置校正圖標
+                            values[-1] = '✅'
+
+                            # 更新樹項目
+                            tree_view.item(item_id, values=tuple(values))
+
+                            # 設置校正狀態
+                            if item_index:
+                                self.set_correction_state(
+                                    item_index,
+                                    text,  # 原始文本
+                                    corrected_text,  # 校正後文本
+                                    'correct'  # 已校正狀態
+                                )
+
+                            updated_count += 1
+                    except Exception as item_error:
+                        self.logger.error(f"處理項目時出錯: {item_error}")
+                        # 繼續處理下一個項目
+            except Exception as e:
+                self.logger.error(f"遍歷樹視圖項目時出錯: {e}")
+
+            # 觸發回調
+            if updated_count > 0 and self.on_correction_change and callable(self.on_correction_change):
+                try:
+                    self.on_correction_change()
+                except Exception as callback_error:
+                    self.logger.error(f"執行回調時出錯: {callback_error}")
+
+            return updated_count
+
+        except Exception as e:
+            self.logger.error(f"安全應用校正時出錯: {e}", exc_info=True)
+            return 0
+
+    def apply_to_texts_immediately(self, error: str, correction: str, texts_with_indices: list) -> int:
+        """
+        立即將校正規則應用到指定的文本列表
+
+        Args:
+            error: 錯誤字
+            correction: 校正字
+            texts_with_indices: 包含 (索引, 文本) 元組的列表
+
+        Returns:
+            int: 更新的文本數量
+        """
+        if not error or not correction or not texts_with_indices:
+            return 0
+
+        # 添加校正規則
+        self.corrections[error] = correction
+
+        # 儲存到資料庫
+        if self.database_file:
+            self.save_corrections()
+
+        # 處理每個文本
+        updated_count = 0
+        for index, text in texts_with_indices:
+            if error in text:
+                # 應用校正
+                corrected_text = text.replace(error, correction)
+
+                # 設置校正狀態
+                self.set_correction_state(
+                    str(index),
+                    text,  # 原始文本
+                    corrected_text,  # 校正後文本
+                    'correct'  # 已校正狀態
+                )
+
+                updated_count += 1
+
+        # 確保回調觸發
         if self.on_correction_change and callable(self.on_correction_change):
             self.on_correction_change()
 
