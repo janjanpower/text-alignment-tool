@@ -4,15 +4,16 @@ import csv
 import logging
 import os
 import time
-from typing import Dict, List, Tuple, Optional, Any
+from typing import Dict, List, Tuple, Optional, Any, Union, Callable
 
 class CorrectionService:
     """文本校正服務類別，處理文本校正相關操作"""
 
-    def __init__(self, database_file: Optional[str] = None):
+    def __init__(self, database_file: Optional[str] = None, on_correction_change: Optional[Callable] = None):
         """
         初始化校正服務
         :param database_file: 校正資料庫檔案路徑
+        :param on_correction_change: 校正資料變化時的回調函數
         """
         self.logger = logging.getLogger(self.__class__.__name__)
         self.database_file = database_file
@@ -20,6 +21,7 @@ class CorrectionService:
         self.correction_states: Dict[str, str] = {}  # 項目索引 -> 校正狀態 ('correct' 或 'error')
         self.original_texts: Dict[str, str] = {}     # 項目索引 -> 原始文本
         self.corrected_texts: Dict[str, str] = {}    # 項目索引 -> 校正後文本
+        self.on_correction_change = on_correction_change
 
         # 如果提供了資料庫檔案路徑，立即載入校正資料
         if database_file and os.path.exists(database_file):
@@ -82,6 +84,11 @@ class CorrectionService:
                     writer.writerow([error, correction])
 
             self.logger.info(f"成功儲存 {len(correction_data)} 條校正規則至 {self.database_file}")
+
+            # 觸發回調函數，通知校正資料已更新
+            if self.on_correction_change and callable(self.on_correction_change):
+                self.on_correction_change()
+
             return True
 
         except Exception as e:
@@ -115,6 +122,10 @@ class CorrectionService:
         # 添加校正規則
         self.corrections[error] = correction
 
+        # 儲存到資料庫
+        if self.database_file:
+            self.save_corrections()
+
         # 如果不需要應用到現有文本，直接返回
         if not apply_to_existing:
             return 1
@@ -140,6 +151,10 @@ class CorrectionService:
 
                     updated_count += 1
 
+        # 觸發回調函數，通知校正資料已更新
+        if self.on_correction_change and callable(self.on_correction_change):
+            self.on_correction_change()
+
         return updated_count
 
     def remove_correction(self, error: str) -> bool:
@@ -150,10 +165,32 @@ class CorrectionService:
         """
         if error in self.corrections:
             del self.corrections[error]
+
+            # 儲存到資料庫
+            if self.database_file:
+                self.save_corrections()
+
+            # 觸發回調函數，通知校正資料已更新
+            if self.on_correction_change and callable(self.on_correction_change):
+                self.on_correction_change()
+
             return True
         return False
 
-    def apply_new_correction(self, error: str, correction: str) -> None:
+    def apply_correction_to_text(self, text: str) -> Tuple[bool, str]:
+        """
+        應用校正規則到指定文本
+
+        Args:
+            text: 要校正的文本
+
+        Returns:
+            Tuple[bool, str]: (是否已進行校正, 校正後的文本)
+        """
+        needs_correction, corrected_text, _, _ = self.check_text_for_correction(text)
+        return (needs_correction, corrected_text)
+
+    def apply_new_correction(self, error: str, correction: str) -> int:
         """
         應用新添加的校正規則並更新界面
 
@@ -161,24 +198,9 @@ class CorrectionService:
             error: 錯誤字
             correction: 校正字
         """
-        if not hasattr(self, 'correction_service'):
-            return
-
         # 應用新的校正規則，並應用到現有文本
-        updated_count = self.correction_service.add_correction(error, correction, apply_to_existing=True)
-
-        # 更新界面顯示
-        self.update_correction_display()
-
-        # 更新 SRT 數據
-        self.update_srt_data_from_treeview()
-
-        # 如果有音頻，更新音頻段落
-        if self.audio_imported and hasattr(self, 'audio_player'):
-            self.audio_player.segment_audio(self.srt_data)
-
-        # 更新狀態欄
-        self.update_status(f"已添加新校正規則並更新 {updated_count} 個項目")
+        updated_count = self.add_correction(error, correction, apply_to_existing=True)
+        return updated_count
 
     def update_display_status(self, tree_view, display_mode):
         """
@@ -388,8 +410,6 @@ class CorrectionService:
         except Exception as e:
             self.logger.error(f"刷新校正狀態時出錯: {e}")
 
-
-    # 在 correction_service.py 中修改 handle_text_split 方法
     def handle_text_split(self, original_index: str, split_texts: List[str], split_indices: List[str] = None) -> List[Tuple[str, str, str]]:
         """
         處理文本拆分時的校正狀態轉移
@@ -696,3 +716,167 @@ class CorrectionService:
                 }
 
         return new_correction_states
+
+    def apply_correction_to_all(self, error: str, correction: str, tree_view, text_position_func, display_mode: str) -> int:
+        """
+        將校正規則應用到所有項目
+
+        Args:
+            error: 錯誤字
+            correction: 校正字
+            tree_view: 樹狀視圖控件
+            text_position_func: 獲取文本位置的函數
+            display_mode: 顯示模式
+
+        Returns:
+            int: 更新的項目數量
+        """
+        try:
+            # 先添加新規則到校正字典
+            self.corrections[error] = correction
+
+            # 保存到資料庫
+            if self.database_file:
+                self.save_corrections()
+
+            # 應用到所有項目
+            updated_count = 0
+
+            # 獲取文本位置索引
+            text_index = text_position_func() if callable(text_position_func) else self._get_text_index_for_mode(display_mode)
+
+            if text_index is None:
+                self.logger.warning("無法獲取文本位置索引")
+                return 0
+
+            # 遍歷所有樹項目
+            for item_id in tree_view.get_children():
+                values = list(tree_view.item(item_id, "values"))
+
+                # 確保索引有效
+                if len(values) <= text_index:
+                    continue
+
+                # 獲取文本
+                text = values[text_index]
+
+                # 檢查文本是否含有錯誤字
+                if error in text:
+                    # 獲取當前模式下的索引位置
+                    index_pos = 1 if display_mode in ["all", "audio_srt"] else 0
+                    item_index = str(values[index_pos]) if len(values) > index_pos else ""
+
+                    # 應用校正
+                    corrected_text = text.replace(error, correction)
+
+                    # 更新顯示文本
+                    values[text_index] = corrected_text
+
+                    # 設置校正圖標
+                    values[-1] = '✅'
+
+                    # 更新樹項目
+                    tree_view.item(item_id, values=tuple(values))
+
+                    # 設置校正狀態
+                    if item_index:
+                        self.set_correction_state(
+                            item_index,
+                            text,  # 原始文本
+                            corrected_text,  # 校正後文本
+                            'correct'  # 已校正狀態
+                        )
+
+                    updated_count += 1
+
+            return updated_count
+
+        except Exception as e:
+            self.logger.error(f"應用校正規則到所有項目時出錯: {e}", exc_info=True)
+            return 0
+
+    def export_corrections(self, export_file_path: str) -> bool:
+        """
+        匯出校正規則到CSV檔案
+
+        Args:
+            export_file_path: 要匯出的檔案路徑
+
+        Returns:
+            bool: 是否成功匯出
+        """
+        try:
+            with open(export_file_path, 'w', encoding='utf-8-sig', newline='') as file:
+                writer = csv.writer(file)
+                writer.writerow(["錯誤字", "校正字"])
+                for error, correction in self.corrections.items():
+                    writer.writerow([error, correction])
+
+            self.logger.info(f"成功匯出 {len(self.corrections)} 條校正規則至 {export_file_path}")
+            return True
+
+        except Exception as e:
+            self.logger.error(f"匯出校正規則失敗: {e}")
+            return False
+
+    def import_corrections(self, import_file_path: str, merge_mode: str = 'replace') -> Tuple[bool, int]:
+        """
+        從CSV檔案匯入校正規則
+
+        Args:
+            import_file_path: 要匯入的檔案路徑
+            merge_mode: 合併模式，'replace'表示替換現有規則，'append'表示追加
+
+        Returns:
+            Tuple[bool, int]: (是否成功匯入, 匯入的規則數量)
+        """
+        try:
+            imported_corrections = {}
+
+            with open(import_file_path, 'r', encoding='utf-8-sig') as file:
+                reader = csv.reader(file)
+                # 嘗試跳過標題行
+                try:
+                    next(reader)
+                except StopIteration:
+                    return (True, 0)
+
+                for row in reader:
+                    if len(row) >= 2:
+                        error, correction = row
+                        imported_corrections[error] = correction
+
+            # 根據合併模式處理
+            if merge_mode == 'replace':
+                self.corrections = imported_corrections
+            elif merge_mode == 'append':
+                self.corrections.update(imported_corrections)
+            else:
+                self.logger.warning(f"未知的合併模式: {merge_mode}，使用'replace'模式")
+                self.corrections = imported_corrections
+
+            # 保存到資料庫
+            if self.database_file:
+                self.save_corrections()
+
+            count = len(imported_corrections)
+            self.logger.info(f"成功從 {import_file_path} 匯入 {count} 條校正規則")
+
+            # 觸發回調函數，通知校正資料已更新
+            if self.on_correction_change and callable(self.on_correction_change):
+                self.on_correction_change()
+
+            return (True, count)
+
+        except Exception as e:
+            self.logger.error(f"匯入校正規則失敗: {e}")
+            return (False, 0)
+
+    def get_all_corrections(self) -> Dict[str, str]:
+        """
+        獲取所有校正規則
+
+        Returns:
+            Dict[str, str]: 所有校正規則的字典 {錯誤字: 校正字}
+        """
+        return self.corrections.copy()

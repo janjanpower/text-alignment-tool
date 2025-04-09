@@ -71,7 +71,7 @@ class AlignmentGUI(BaseWindow):
 
 
         # 初始化校正服務
-        self.correction_service = CorrectionService()
+        self.initialize_correction_service()
 
         # 初始化合併服務
         self.combine_service = CombineService(self)
@@ -126,6 +126,46 @@ class AlignmentGUI(BaseWindow):
 
         self.last_combine_operation = None
         self.last_time_adjust_operation = None
+
+    def initialize_correction_service(self) -> None:
+        """初始化校正服務"""
+        # 如果專案路徑已設置，使用專案路徑中的校正資料庫
+        if hasattr(self, 'current_project_path') and self.current_project_path:
+            database_file = os.path.join(self.current_project_path, "corrections.csv")
+        else:
+            database_file = None
+
+        # 初始化校正服務，並設置回調函數
+        self.correction_service = CorrectionService(
+            database_file=database_file,
+            on_correction_change=self.on_correction_change
+        )
+
+        self.logger.debug(f"校正服務初始化完成，資料庫路徑: {database_file}")
+
+    def set_correction_service(self, correction_service):
+        """設置外部提供的校正服務實例"""
+        if correction_service:
+            self.correction_service = correction_service
+            # 更新回調函數
+            self.correction_service.on_correction_change = self.on_correction_change
+            self.logger.debug("使用外部提供的校正服務實例")
+
+    def on_correction_change(self):
+        """校正數據變更後的處理"""
+        # 如果有樹視圖，更新顯示
+        if hasattr(self, 'tree'):
+            self.update_correction_status_display()
+
+        # 更新 SRT 數據
+        self.update_srt_data_from_treeview()
+
+        # 如果有音頻，更新音頻段落
+        if self.audio_imported and hasattr(self, 'audio_player'):
+            self.audio_player.segment_audio(self.srt_data)
+
+        # 更新狀態欄
+        self.update_status("校正規則已更新")
 
     def initialize_file_manager(self) -> None:
         """初始化檔案管理器"""
@@ -5114,16 +5154,21 @@ class AlignmentGUI(BaseWindow):
         self.update_status(f"已添加新校正規則並更新 {updated_count} 個項目")
 
     def show_add_correction_dialog(self, text):
-        """顯示添加校正對話框"""
+        """顯示添加校正對話框 - 使用新的 QuickCorrectionDialog"""
         try:
-            dialog = QuickCorrectionDialog(self.master, text, self.current_project_path)
+            # 使用現有的校正服務實例
+            dialog = QuickCorrectionDialog(
+                parent=self.master,
+                selected_text=text,
+                correction_service=self.correction_service,
+                project_path=self.current_project_path
+            )
             result = dialog.run()
 
             if result:
                 error, correction = result
-
-                # 立即檢查所有項目並應用新的校正規則
-                self.apply_correction_to_all_items(error, correction)
+                # 更新狀態欄
+                self.update_status(f"已添加校正規則：{error} → {correction}")
 
             # 重置圖標狀態，使其能夠再次跟隨游標
             self.reset_floating_icon_state()
@@ -5135,66 +5180,24 @@ class AlignmentGUI(BaseWindow):
 
     def apply_correction_to_all_items(self, error, correction):
         """
-        對所有項目應用特定的校正規則
-
-        Args:
-            error: 錯誤字
-            correction: 校正字
+        對所有項目應用特定的校正規則 - 使用 CorrectionService 的方法
         """
         try:
             if not hasattr(self, 'tree') or not self.tree:
                 self.logger.warning("樹狀視圖不可用，無法應用校正")
                 return
 
-            # 獲取文本位置索引
-            text_index = self.get_text_position_in_values()
-            if text_index is None:
-                self.logger.warning("無法獲取文本位置索引")
-                return
+            # 直接使用 CorrectionService 的方法
+            updated_count = self.correction_service.apply_correction_to_all(
+                error=error,
+                correction=correction,
+                tree_view=self.tree,
+                text_position_func=self.get_text_position_in_values,
+                display_mode=self.display_mode
+            )
 
-            # 遍歷所有樹項目
-            updated_items = []
-            for item in self.tree_manager.get_all_items():
-                values = list(self.tree.item(item, "values"))
-
-                # 確保索引有效
-                if len(values) <= text_index:
-                    continue
-
-                # 獲取文本
-                text = values[text_index]
-
-                # 檢查文本是否含有錯誤字
-                if error in text:
-                    # 獲取當前模式下的索引位置
-                    index_pos = 1 if self.display_mode in [self.DISPLAY_MODE_ALL, self.DISPLAY_MODE_AUDIO_SRT] else 0
-                    item_index = str(values[index_pos]) if len(values) > index_pos else ""
-
-                    # 應用校正
-                    corrected_text = text.replace(error, correction)
-
-                    # 更新顯示文本
-                    values[text_index] = corrected_text
-
-                    # 設置校正圖標
-                    values[-1] = '✅'
-
-                    # 更新樹項目
-                    self.tree.item(item, values=tuple(values))
-
-                    # 設置校正狀態
-                    if hasattr(self, 'correction_service') and item_index:
-                        self.correction_service.set_correction_state(
-                            item_index,
-                            text,  # 原始文本
-                            corrected_text,  # 校正後文本
-                            'correct'  # 已校正狀態
-                        )
-
-                    updated_items.append(item)
-
-            # 如果有更新項目，需要同步更新其他資料
-            if updated_items:
+            # 如果有更新項目，進行後續處理
+            if updated_count > 0:
                 # 更新 SRT 數據
                 self.update_srt_data_from_treeview()
 
@@ -5203,7 +5206,7 @@ class AlignmentGUI(BaseWindow):
                     self.audio_player.segment_audio(self.srt_data)
 
                 # 更新狀態欄
-                self.update_status(f"已添加校正規則 '{error}→{correction}' 並更新 {len(updated_items)} 個項目")
+                self.update_status(f"已添加校正規則 '{error}→{correction}' 並更新 {updated_count} 個項目")
 
                 # 保存操作狀態
                 if hasattr(self, 'state_manager'):
@@ -5215,7 +5218,7 @@ class AlignmentGUI(BaseWindow):
                         'description': f"添加並應用校正規則：{error}→{correction}",
                         'error': error,
                         'correction': correction,
-                        'updated_items_count': len(updated_items)
+                        'updated_items_count': updated_count
                     }, current_correction)
 
             else:

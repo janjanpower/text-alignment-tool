@@ -1,19 +1,35 @@
 import tkinter as tk
 from tkinter import ttk
 import logging
-import os
-import csv
 from gui.base_dialog import BaseDialog
 from gui.custom_messagebox import show_warning, show_info, show_error
+from services.correction.correction_service import CorrectionService
 
 class QuickCorrectionDialog(BaseDialog):
     """快速添加校正對話框"""
 
-    def __init__(self, parent=None, selected_text="", project_path=""):
-        """初始化快速添加校正對話框"""
+    def __init__(self, parent=None, selected_text="", correction_service=None, project_path=""):
+        """
+        初始化快速添加校正對話框
+
+        Args:
+            parent: 父窗口
+            selected_text: 預選的文本
+            correction_service: CorrectionService 實例，如果為 None 會創建新實例
+            project_path: 專案路徑，用於設置校正服務的資料庫路徑
+        """
         self.result = None
         self.selected_text = selected_text
         self.project_path = project_path
+
+        # 使用提供的校正服務或創建新的
+        if correction_service is not None:
+            self.correction_service = correction_service
+        else:
+            import os
+            database_file = os.path.join(project_path, "corrections.csv") if project_path else None
+            self.correction_service = CorrectionService(database_file)
+
         super().__init__(parent, title="添加錯誤校正", width=350, height=200)
 
     def create_dialog(self) -> None:
@@ -89,14 +105,22 @@ class QuickCorrectionDialog(BaseDialog):
             self.correction_entry.focus()
             return
 
-        # 保存到校正數據庫
-        if self.project_path:
-            success = self.add_correction_to_database(error, correction)
-            if success:
-                self.result = (error, correction)
-                self.window.destroy()
-        else:
-            show_warning("警告", "未設置專案路徑，無法保存校正", self.window)
+        # 保存到校正服務
+        try:
+            # 添加校正規則
+            self.correction_service.add_correction(error, correction)
+
+            # 設置結果
+            self.result = (error, correction)
+
+            # 顯示成功訊息
+            show_info("成功", f"已添加校正規則：\n{error} → {correction}", self.window)
+
+            # 關閉視窗
+            self.window.destroy()
+        except Exception as e:
+            logging.error(f"添加校正到資料庫時出錯: {e}")
+            show_error("錯誤", f"保存校正規則失敗: {str(e)}", self.window)
 
     def cancel(self, event=None):
         """取消按鈕事件"""
@@ -107,49 +131,3 @@ class QuickCorrectionDialog(BaseDialog):
         """運行對話框並返回結果"""
         self.window.wait_window()
         return self.result
-
-    def add_correction_to_database(self, error, correction):
-        """添加校正到資料庫"""
-        try:
-            # 確保當前專案路徑有效
-            if not self.project_path:
-                show_warning("警告", "未設置當前專案路徑，無法保存校正", self.window)
-                return False
-
-            # 設置資料庫檔案路徑
-            database_file = os.path.join(self.project_path, "corrections.csv")
-
-            # 載入現有校正資料
-            corrections = {}
-            if os.path.exists(database_file):
-                try:
-                    with open(database_file, 'r', encoding='utf-8-sig') as file:
-                        reader = csv.reader(file)
-                        next(reader)  # 跳過標題行
-                        for row in reader:
-                            if len(row) >= 2:
-                                corrections[row[0]] = row[1]
-                except Exception as e:
-                    logging.error(f"載入校正資料庫失敗: {e}")
-
-            # 添加新的校正項目
-            corrections[error] = correction
-
-            # 保存回資料庫
-            try:
-                with open(database_file, 'w', encoding='utf-8-sig', newline='') as file:
-                    writer = csv.writer(file)
-                    writer.writerow(["錯誤字", "校正字"])
-                    for error_text, correction_text in corrections.items():
-                        writer.writerow([error_text, correction_text])
-
-                # 顯示成功訊息
-                show_info("成功", f"已添加校正規則：\n{error} → {correction}", self.window)
-                return True
-            except Exception as e:
-                logging.error(f"保存校正資料庫失敗: {e}")
-                show_error("錯誤", f"保存校正資料庫失敗: {str(e)}", self.window)
-                return False
-        except Exception as e:
-            logging.error(f"添加校正到資料庫時出錯: {e}")
-            return False

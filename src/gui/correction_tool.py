@@ -3,21 +3,29 @@
 import sys
 import time
 import tkinter as tk
-from tkinter import ttk
-import csv
+from tkinter import ttk, filedialog
 import os
 import logging
-from typing import Dict, Optional, Tuple, List
+from typing import Dict, Optional, Tuple, List, Callable
 from gui.base_window import BaseWindow
 from gui.base_dialog import BaseDialog
-from gui.custom_messagebox import show_info, show_warning, show_error
+from gui.custom_messagebox import show_info, show_warning, show_error, ask_question
 from gui.alignment_gui import AlignmentGUI
+from services.correction.correction_service import CorrectionService
+from gui.quick_correction_dialog import QuickCorrectionDialog
 
 class CorrectionInputDialog(BaseDialog):
     """校正項輸入對話框"""
-    def __init__(self, parent=None):
-        """初始化校正輸入對話框"""
+    def __init__(self, parent=None, correction_service=None):
+        """
+        初始化校正輸入對話框
+
+        Args:
+            parent: 父窗口
+            correction_service: 校正服務實例
+        """
         self.result = None  # 確保在 super().__init__ 之前初始化 result
+        self.correction_service = correction_service
         super().__init__(parent, title="新增資料", width=300, height=200)
 
     def create_dialog(self) -> None:
@@ -89,6 +97,10 @@ class CorrectionInputDialog(BaseDialog):
             self.correction_entry.focus()
             return
 
+        # 如果有提供 correction_service，則添加校正
+        if self.correction_service:
+            self.correction_service.add_correction(error, correction)
+
         self.result = (error, correction)
         self.window.destroy()
 
@@ -107,7 +119,15 @@ class CorrectionTool(BaseWindow):
         """初始化校正工具"""
         self.project_path = project_path
         self.database_file = os.path.join(project_path, "corrections.csv")
-        self.data_rows = []
+
+        # 初始化校正服務
+        self.correction_service = CorrectionService(
+            database_file=self.database_file,
+            on_correction_change=self._on_correction_change
+        )
+
+        # 從校正服務獲取資料
+        self.data_rows = [(error, correction) for error, correction in self.correction_service.get_all_corrections().items()]
 
         # 取得專案名稱
         project_name = os.path.basename(project_path)
@@ -118,8 +138,12 @@ class CorrectionTool(BaseWindow):
         # 創建界面
         self.create_correction_interface()
 
-        # 載入資料庫
-        self.load_database()
+    def _on_correction_change(self):
+        """校正數據變化的回調函數"""
+        # 重新載入數據
+        self.data_rows = [(error, correction) for error, correction in self.correction_service.get_all_corrections().items()]
+        # 更新顯示
+        self.update_display()
 
     def create_correction_interface(self) -> None:
         """創建校正工具界面"""
@@ -134,9 +158,9 @@ class CorrectionTool(BaseWindow):
         # 按鈕配置
         buttons = [
             ("登出", self.logout),  # 添加登出按鈕，靠左
-            ("進入文本工具", self.enter_alignment_tool),
+            ("文本管理", self.enter_alignment_tool),
             ("新增資料", self.add_correction),
-            ("刪除資料", self.delete_correction)
+            ("刪除資料", self.delete_correction),
         ]
 
         # 登出按鈕單獨配置，靠左
@@ -186,6 +210,9 @@ class CorrectionTool(BaseWindow):
         # 綁定雙擊事件
         self.tree.bind('<Double-1>', self.on_double_click)
 
+        # 初始化顯示
+        self.update_display()
+
     def logout(self) -> None:
         """登出功能，回到登入介面"""
         try:
@@ -202,77 +229,18 @@ class CorrectionTool(BaseWindow):
             show_error("錯誤", f"登出失敗: {str(e)}", self.master)
             sys.exit(1)
 
-    def load_database(self) -> None:
-        """載入資料庫"""
-        print("\n=== 開始載入資料庫 ===")
-        print(f"資料庫路徑: {self.database_file}")
-
-        try:
-            # 先清空現有數據
-            self.data_rows.clear()
-            print("已清空現有數據")
-
-            # 檢查檔案是否存在
-            if not os.path.exists(self.database_file):
-                print("資料庫檔案不存在，保持空白")
-                self.update_display()
-                return
-
-            # 載入資料
-            with open(self.database_file, 'r', encoding='utf-8-sig') as file:
-                reader = csv.reader(file)
-                next(reader)  # 跳過標題行
-                for row in reader:
-                    if len(row) >= 2:
-                        self.data_rows.append((row[0], row[1]))
-
-            print(f"成功載入 {len(self.data_rows)} 筆資料")
-            self.update_display()
-
-        except Exception as e:
-            print(f"載入資料庫時發生錯誤: {str(e)}")
-            show_error("錯誤", f"載入資料庫失敗：{str(e)}", self.master)
-
-    def save_database(self) -> None:
-        """保存資料庫"""
-        try:
-            # 檢查 project_path 是否有效
-            if not self.project_path:
-                show_error("錯誤", "專案路徑無效", self.master)
-                return
-
-            # 確保專案目錄存在
-            os.makedirs(self.project_path, exist_ok=True)
-
-            # 直接使用完整的檔案路徑
-            with open(self.database_file, 'w', encoding='utf-8-sig', newline='') as file:
-                writer = csv.writer(file)
-                writer.writerow(["錯誤字", "校正字"])
-                writer.writerows(self.data_rows)
-
-            print(f"成功保存資料到：{self.database_file}")
-
-        except Exception as e:
-            print(f"保存失敗，路徑：{self.database_file}，錯誤：{str(e)}")
-            show_error("錯誤", f"保存資料庫失敗：{str(e)}", self.master)
-
-    def update_display(self) -> None:
-        """更新顯示"""
-        for item in self.tree.get_children():
-            self.tree.delete(item)
-        print(f"更新顯示：共 {len(self.data_rows)} 筆資料")
-        for i, (error, correction) in enumerate(self.data_rows, 1):
-            self.tree.insert("", "end", values=(i, error, correction))
-
     def add_correction(self) -> None:
         """新增校正項"""
-        dialog = CorrectionInputDialog(self.master)
+        dialog = CorrectionInputDialog(self.master, self.correction_service)
         result = dialog.run()
         if result:
             error, correction = result
+            # 更新數據列表
             self.data_rows.append((error, correction))
-            self.save_database()  # 當加入第一筆資料時會自動建立檔案
+            # 更新顯示
             self.update_display()
+            # 顯示成功訊息
+            show_info("成功", f"已添加校正規則：\n{error} → {correction}", self.master)
 
     def delete_correction(self) -> None:
         """刪除選中項"""
@@ -282,11 +250,29 @@ class CorrectionTool(BaseWindow):
             return
 
         index = self.tree.index(selected[0])
-        self.data_rows.pop(index)
-        self.save_database()
-        self.update_display()
+        if 0 <= index < len(self.data_rows):
+            error, _ = self.data_rows[index]
 
-    def on_double_click(self, event) -> None:
+            # 確認刪除
+            if ask_question("確認刪除", f"確定要刪除校正規則「{error}」嗎？", self.master):
+                # 從校正服務中移除
+                self.correction_service.remove_correction(error)
+
+                # 從本地數據移除
+                self.data_rows.pop(index)
+
+                # 更新顯示
+                self.update_display()
+
+    def update_display(self) -> None:
+        """更新顯示"""
+        for item in self.tree.get_children():
+            self.tree.delete(item)
+        print(f"更新顯示：共 {len(self.data_rows)} 筆資料")
+        for i, (error, correction) in enumerate(self.data_rows, 1):
+            self.tree.insert("", "end", values=(i, error, correction))
+
+    def on_double_click(self, event: tk.Event) -> None:
         """處理雙擊編輯，確保編輯視窗精確定位"""
         try:
             region = self.tree.identify("region", event.x, event.y)
@@ -334,12 +320,26 @@ class CorrectionTool(BaseWindow):
 
             def save_edit(event=None):
                 new_value = entry.get().strip()
-                if col_idx == 1:  # 錯誤字列
-                    self.data_rows[index] = (new_value, self.data_rows[index][1])
-                else:  # 校正字列
-                    self.data_rows[index] = (self.data_rows[index][0], new_value)
+                if index >= len(self.data_rows):
+                    return
 
-                self.save_database()
+                old_error, old_correction = self.data_rows[index]
+
+                # 更新校正服務和本地數據
+                if col_idx == 1:  # 錯誤字列
+                    # 在校正服務中先移除舊的
+                    self.correction_service.remove_correction(old_error)
+                    # 再添加新的
+                    self.correction_service.add_correction(new_value, old_correction)
+                    # 更新本地數據
+                    self.data_rows[index] = (new_value, old_correction)
+                else:  # 校正字列
+                    # 直接更新現有的
+                    self.correction_service.add_correction(old_error, new_value)
+                    # 更新本地數據
+                    self.data_rows[index] = (old_error, new_value)
+
+                # 更新顯示
                 self.update_display()
                 edit_window.destroy()
 
@@ -357,16 +357,28 @@ class CorrectionTool(BaseWindow):
     def enter_alignment_tool(self) -> None:
         """進入文本對齊工具"""
         try:
-            show_info("提示", "資料庫已更新", self.master)
+            # 確保所有變更已保存
+            show_info("提示", "校正資料庫已更新", self.master)
 
             # 關閉當前視窗
             self.master.destroy()
 
-            # 創建新的 root 和對齊工具，並傳遞專案路徑
+            # 創建新的 root 和對齊工具，並傳遞專案路徑和校正服務
             root = tk.Tk()
             alignment_gui = AlignmentGUI(root)
+
             # 設置專案路徑
             alignment_gui.current_project_path = self.project_path
+
+            # 如果 AlignmentGUI 支持設置校正服務，直接傳遞現有實例
+            if hasattr(alignment_gui, 'set_correction_service'):
+                alignment_gui.set_correction_service(self.correction_service)
+            else:
+                # 如果不支持，至少設置相同的資料庫路徑
+                alignment_gui.database_file = self.database_file
+                if hasattr(alignment_gui, 'correction_service'):
+                    alignment_gui.correction_service.set_database_file(self.database_file)
+
             alignment_gui.set_title(f"文本管理 - {os.path.basename(self.project_path)}")
             root.mainloop()
 
@@ -377,6 +389,10 @@ class CorrectionTool(BaseWindow):
     def cleanup(self):
         """清理資源"""
         print("\n=== 開始清理資源 ===")
+
+        # 保存所有校正數據
+        if hasattr(self, 'correction_service'):
+            self.correction_service.save_corrections()
 
         # 清空數據
         self.data_rows.clear()
