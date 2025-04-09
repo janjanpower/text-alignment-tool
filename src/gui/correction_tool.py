@@ -102,18 +102,17 @@ class CorrectionInputDialog(BaseDialog):
             self.correction_service.add_correction(error, correction)
 
         self.result = (error, correction)
-        self.window.destroy()
+        self.close()
 
     def cancel(self, event=None):
         """取消按鈕事件"""
         self.result = None
-        self.window.destroy()
+        self.close()
 
     def run(self):
         """運行對話框並返回結果"""
         self.window.wait_window()
         return self.result
-
 class CorrectionTool(BaseWindow):
     def __init__(self, master: Optional[tk.Tk] = None, project_path: str = "") -> None:
         """初始化校正工具"""
@@ -123,7 +122,7 @@ class CorrectionTool(BaseWindow):
         # 初始化校正服務
         self.correction_service = CorrectionService(
             database_file=self.database_file,
-            on_correction_change=self.on_correction_change  # 修正：從_on_correction_change改為on_correction_change
+            on_correction_change=self.on_correction_change
         )
 
         # 從校正服務獲取資料
@@ -278,44 +277,33 @@ class CorrectionTool(BaseWindow):
             return
 
         try:
-            # 檢查是否有選中項
-            if not selected or len(selected) == 0:
-                self.logger.warning("嘗試刪除但沒有選中項目")
-                return
-
-            # 同步數據 - 確保 data_rows 與校正服務的數據同步
-            self.data_rows = [(error, correction) for error, correction in
-                            self.correction_service.get_all_corrections().items()]
-
             # 獲取樹視圖中選中項目的值
             item_values = self.tree.item(selected[0], 'values')
             if len(item_values) >= 2:  # 確保有錯誤字欄位
                 error_text = item_values[1]  # 錯誤字通常在第二列
 
-                # 在 data_rows 中查找對應的錯誤字
-                found = False
-                for i, (error, _) in enumerate(self.data_rows):
-                    if error == error_text:
-                        # 使用直接找到的索引，而不是樹視圖索引
-                        index = i
-                        found = True
-                        break
-
-                if found and 0 <= index < len(self.data_rows):
-                    # 確認刪除
-                    if ask_question("確認刪除", f"確定要刪除校正規則「{error_text}」嗎？", self.master):
-                        # 從校正服務中移除
-                        if hasattr(self, 'correction_service') and self.correction_service:
+                # 直接從校正服務中移除
+                if hasattr(self, 'correction_service') and self.correction_service:
+                    if error_text in self.correction_service.corrections:
+                        # 確認刪除
+                        if ask_question("確認刪除", f"確定要刪除校正規則「{error_text}」嗎？", self.master):
+                            # 從校正服務中移除
                             self.correction_service.remove_correction(error_text)
 
-                        # 從本地數據移除
-                        self.data_rows.pop(index)
+                            # 在 data_rows 中查找對應的錯誤字並移除
+                            for i, (error, _) in enumerate(self.data_rows):
+                                if error == error_text:
+                                    self.data_rows.pop(i)
+                                    break
 
-                        # 更新顯示
-                        self.update_display()
+                            # 更新顯示
+                            self.update_display()
+                    else:
+                        self.logger.warning(f"在校正服務中找不到錯誤字 '{error_text}'")
+                        show_warning("警告", "無法刪除所選項目，請重新選擇", self.master)
                 else:
-                    self.logger.warning(f"在數據中找不到錯誤字 '{error_text}'")
-                    show_warning("警告", "無法刪除所選項目，請重新選擇", self.master)
+                    self.logger.warning("校正服務不可用")
+                    show_warning("警告", "校正服務不可用，無法刪除", self.master)
             else:
                 self.logger.warning("選中項的數據不完整")
                 show_warning("警告", "選中項數據不完整，請重新選擇", self.master)
@@ -381,44 +369,72 @@ class CorrectionTool(BaseWindow):
             entry.pack(fill=tk.BOTH, expand=True)
 
             # 獲取當前值
-            index = self.tree.index(item)
+            item_values = self.tree.item(item)["values"]
             col_idx = int(column[1]) - 1
-            current_value = self.tree.item(item)["values"][col_idx]
+            current_value = item_values[col_idx] if col_idx < len(item_values) else ""
             entry.insert(0, current_value)
             entry.select_range(0, tk.END)
             entry.focus_force()
 
             def save_edit(event=None):
-                new_value = entry.get().strip()
-                if index >= len(self.data_rows):
-                    return
+                try:
+                    new_value = entry.get().strip()
+                    # 獲取項目在樹視圖中的索引
+                    tree_index = self.tree.index(item)
 
-                old_error, old_correction = self.data_rows[index]
+                    # 確保 tree_index 在有效範圍內
+                    if 0 <= tree_index < len(self.data_rows):
+                        old_error, old_correction = self.data_rows[tree_index]
 
-                # 更新校正服務和本地數據
-                if col_idx == 1:  # 錯誤字列
-                    # 在校正服務中先移除舊的
-                    self.correction_service.remove_correction(old_error)
-                    # 再添加新的
-                    self.correction_service.add_correction(new_value, old_correction)
-                    # 更新本地數據
-                    self.data_rows[index] = (new_value, old_correction)
-                else:  # 校正字列
-                    # 直接更新現有的
-                    self.correction_service.add_correction(old_error, new_value)
-                    # 更新本地數據
-                    self.data_rows[index] = (old_error, new_value)
+                        # 更新校正服務和本地數據
+                        if col_idx == 1:  # 錯誤字列
+                            # 在校正服務中先移除舊的
+                            self.correction_service.remove_correction(old_error)
+                            # 再添加新的
+                            self.correction_service.add_correction(new_value, old_correction)
+                            # 更新本地數據
+                            self.data_rows[tree_index] = (new_value, old_correction)
+                        else:  # 校正字列
+                            # 直接更新現有的
+                            self.correction_service.add_correction(old_error, new_value)
+                            # 更新本地數據
+                            self.data_rows[tree_index] = (old_error, new_value)
 
-                # 更新顯示
-                self.update_display()
+                        # 更新顯示
+                        self.update_display()
+                    else:
+                        self.logger.warning(f"項目索引 {tree_index} 超出範圍 (0-{len(self.data_rows)-1})")
+                except Exception as e:
+                    self.logger.error(f"保存編輯時出錯: {e}")
+
+                # 無論成功與否都關閉編輯視窗
                 edit_window.destroy()
 
             def cancel_edit(event=None):
                 edit_window.destroy()
 
             entry.bind('<Return>', save_edit)
-            entry.bind('<FocusOut>', save_edit)
             entry.bind('<Escape>', cancel_edit)
+
+            # 修改 FocusOut 事件處理，避免即時保存導致的問題
+            def handle_focus_out(event=None):
+                # 檢查鼠標位置是否仍在編輯窗口內
+                mouse_x = edit_window.winfo_pointerx()
+                mouse_y = edit_window.winfo_pointery()
+                window_x = edit_window.winfo_rootx()
+                window_y = edit_window.winfo_rooty()
+                window_width = edit_window.winfo_width()
+                window_height = edit_window.winfo_height()
+
+                if (window_x <= mouse_x <= window_x + window_width and
+                    window_y <= mouse_y <= window_y + window_height):
+                    # 鼠標仍在窗口內，不處理失去焦點
+                    return
+
+                # 如果鼠標移出窗口，保存編輯
+                save_edit()
+
+            entry.bind('<FocusOut>', handle_focus_out)
 
         except Exception as e:
             print(f"編輯時發生錯誤：{e}")

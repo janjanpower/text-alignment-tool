@@ -172,7 +172,7 @@ class QuickCorrectionDialog(BaseDialog):
             show_info("成功", f"已添加校正規則：\n{error} → {correction}", self.window)
 
             # 關閉視窗
-            self.window.destroy()
+            self.close()
         except Exception as e:
             logging.error(f"添加校正到資料庫時出錯: {e}")
             show_error("錯誤", f"保存校正規則失敗: {str(e)}", self.window)
@@ -180,7 +180,7 @@ class QuickCorrectionDialog(BaseDialog):
     def cancel(self, event=None):
         """取消按鈕事件"""
         self.result = None
-        self.window.destroy()
+        self.close()
 
     def run(self):
         """運行對話框並返回結果"""
