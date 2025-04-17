@@ -21,6 +21,7 @@ from gui.custom_messagebox import (
 )
 from gui.quick_correction_dialog import QuickCorrectionDialog
 from gui.text_edit_dialog import TextEditDialog
+from gui.ui_manager import UIManager
 from services.text_processing.combine_service import CombineService
 from services.config_manager import ConfigManager
 from services.correction.correction_service import CorrectionService
@@ -66,9 +67,21 @@ class AlignmentGUI(BaseWindow):
         # 初始化圖片管理器
         self.image_manager = ImageManager()
 
-        # 創建界面元素 (注意這裡的順序很重要)
-        self.create_gui_elements()
+        # 先初始化變數和狀態管理器
+        self.initialize_variables()
 
+        # 確保 ui_manager 在 state_manager 設置回調前初始化
+        self.ui_manager = UIManager(self.master, self.config, self.font_manager)
+
+        # 然後設置 state_manager 的回調
+        if hasattr(self, 'state_manager'):
+            self.state_manager.set_callback('on_state_change', self.on_state_change)
+
+        # 設置主要框架
+        self.ui_manager.setup_frames(self.main_frame)
+
+        # 創建界面元素
+        self.create_interface()
 
         # 初始化校正服務
         self.initialize_correction_service()
@@ -100,22 +113,10 @@ class AlignmentGUI(BaseWindow):
         self.logger.debug(f"初始音頻匯入: {self.audio_imported}")
 
         # 在最後添加窗口大小變化事件綁定
-        self.master.bind("<Configure>", self.on_window_resize)
+        self.master.bind("<Configure>", self.ui_manager.on_window_resize)
 
-        # 初始化後進行一次列寬調整
-        self.master.after(100, lambda: self.on_window_resize(None))
-
-        # 創建但不立即顯示合併符號 ("+")
-        self.merge_symbol = tk.Label(
-            self.tree,
-            text="+",
-            font=("Arial", 16, "bold"),
-            bg="#4CAF50",
-            fg="white",
-            width=2,
-            height=1,
-            relief="raised"
-        )
+        # 創建但不立即顯示合併符號
+        self.merge_symbol = self.ui_manager.create_merge_symbol()
         # 綁定點擊事件
         self.merge_symbol.bind('<Button-1>', lambda e: self.combine_sentences())
 
@@ -126,6 +127,50 @@ class AlignmentGUI(BaseWindow):
 
         self.last_combine_operation = None
         self.last_time_adjust_operation = None
+
+    def create_interface(self) -> None:
+        """創建主要界面元素"""
+        # 定義選單命令
+        menu_commands = {
+            '檔案': {
+                '切換專案': self.switch_project,
+                'separator': None,
+                '開啟 SRT': self.load_srt,
+                '儲存': self.save_srt,
+                '另存新檔': self.save_srt_as,
+                'separator': None,
+                '離開': self.close_window
+            },
+            '編輯': {
+                '復原 Ctrl+Z': self.undo,
+                '重做 Ctrl+Y': self.redo
+            }
+        }
+
+        # 創建選單
+        self.ui_manager.create_menu(menu_commands)
+
+        # 定義工具列按鈕
+        buttons = [
+            {"id": "load_srt", "command": self.load_srt, "tooltip": "載入 SRT 檔案"},
+            {"id": "import_audio", "command": self.import_audio, "tooltip": "匯入音頻檔案"},
+            {"id": "load_word", "command": self.import_word_document, "tooltip": "載入 Word 檔案"},
+            {"id": "adjust_time", "command": self.align_end_times, "tooltip": "調整時間軸"},
+            {"id": "export_srt", "command": lambda: self.export_srt(from_toolbar=True), "tooltip": "匯出 SRT 檔案"}
+        ]
+
+        # 創建工具列（使用圖片）
+        self.ui_manager.create_toolbar(buttons, self.image_manager)
+
+        # 創建主要內容區域（樹狀視圖）
+        self.ui_manager.create_main_content()
+
+        # 獲取樹狀視圖和樹狀視圖管理器的引用
+        self.tree = self.ui_manager.tree
+        self.tree_manager = self.ui_manager.tree_manager
+
+        # 設置樹狀視圖列配置
+        self.ui_manager.setup_treeview_columns(self.display_mode, self.columns)
 
     def initialize_correction_service(self) -> None:
         """初始化校正服務"""
@@ -690,7 +735,7 @@ class AlignmentGUI(BaseWindow):
         selected_items = self.tree_manager.get_selected_items()
 
         # 隱藏合併符號
-        self.merge_symbol.place_forget()
+        self.ui_manager.hide_merge_symbol()
 
         # 檢查是否選擇了至少兩個項目
         if len(selected_items) >= 2:
@@ -699,16 +744,8 @@ class AlignmentGUI(BaseWindow):
                 x = self.last_mouse_x + 15  # 游標右側 15 像素
                 y = self.last_mouse_y
 
-                # 確保符號在可視範圍內
-                tree_width = self.tree.winfo_width()
-                tree_height = self.tree.winfo_height()
-
-                x = min(x, tree_width - 30)  # 避免超出右邊界
-                y = min(y, tree_height - 30)  # 避免超出下邊界
-                y = max(y, 10)  # 避免超出上邊界
-
-                # 顯示合併符號
-                self.merge_symbol.place(x=x, y=y)
+                # 顯示合併符號，並設置回調函數
+                self.ui_manager.show_merge_symbol(x, y, lambda e: self.combine_sentences())
 
                 # 儲存目前選中的項目，用於之後的合併操作
                 self.current_selected_items = selected_items
@@ -717,14 +754,14 @@ class AlignmentGUI(BaseWindow):
                 item = selected_items[0]
                 bbox = self.tree.bbox(item)
                 if bbox:
-                    self.merge_symbol.place(x=bbox[0] + bbox[2] + 5, y=bbox[1])
+                    self.ui_manager.show_merge_symbol(bbox[0] + bbox[2] + 5, bbox[1],
+                                                lambda e: self.combine_sentences())
                     # 儲存目前選中的項目
                     self.current_selected_items = selected_items
         else:
             # 如果選中項目少於2個，清除儲存的選中項
             if hasattr(self, 'current_selected_items'):
                 self.current_selected_items = []
-
 
     def cleanup(self) -> None:
         """清理資源"""
@@ -741,7 +778,9 @@ class AlignmentGUI(BaseWindow):
             # 保存當前狀態
             if hasattr(self, 'state_manager'):
                 current_state = self.get_current_state()
-                correction_state = self.correction_service.serialize_state()
+                correction_state = None
+                if hasattr(self, 'correction_service'):
+                    correction_state = self.correction_service.serialize_state()
                 self.save_operation_state('操作類型', '操作描述', {'key': 'value'})
 
             # 清除所有資料
@@ -1119,47 +1158,6 @@ class AlignmentGUI(BaseWindow):
         self.logger.addHandler(handler)
         self.logger.setLevel(logging.DEBUG)
 
-    def create_gui_elements(self) -> None:
-        """創建主要界面元素"""
-        # 初始化 GUI 建構器
-        self.gui_builder = GUIBuilder(self.master, self.main_frame)
-
-        # 創建選單列
-        self.create_menu()
-
-        # 創建工具列
-        self.create_toolbar()
-
-        # 創建主要內容區域
-        self.create_main_content()
-
-        # 創建底部檔案信息區域
-        self.gui_builder.create_file_info_area(self.main_frame)
-
-        # 最後創建狀態欄
-        self.gui_builder.create_status_bar(self.main_frame)
-
-    def create_menu(self) -> None:
-        """創建選單列"""
-        # 定義選單命令
-        menu_commands = {
-            '檔案': {
-                '切換專案': self.switch_project,
-                'separator': None,
-                '開啟 SRT': self.load_srt,
-                '儲存': self.save_srt,
-                '另存新檔': self.save_srt_as,
-                'separator': None,
-                '離開': self.close_window
-            },
-            '編輯': {
-                '復原 Ctrl+Z': self.undo,
-                '重做 Ctrl+Y': self.redo
-            }
-        }
-
-        self.gui_builder.create_menu(self.menu_frame, menu_commands)
-
     def compare_word_with_srt(self) -> None:
         """比對 SRT 和 Word 文本"""
         try:
@@ -1371,28 +1369,9 @@ class AlignmentGUI(BaseWindow):
 
         except Exception as e:
             self.logger.error(f"關閉視窗時出錯: {e}")
-            # 即使出錯也嘗試強制退出
-            try:
-                import sys
-                sys.exit(1)
-            except:
-                os._exit(1)  # 最後的手段
-
-    def create_file_info_area(self) -> None:
-        """創建檔案資訊顯示區域"""
-        # 檔案資訊區域（無外框）
-        self.file_info_frame = ttk.Frame(self.main_frame)
-        self.file_info_frame.pack(fill=tk.X, side=tk.BOTTOM, pady=5, padx=5)
-
-        # 檔案資訊標籤（置中）
-        self.file_info_var = tk.StringVar(value="尚未載入任何檔案")
-        self.file_info_label = ttk.Label(
-            self.file_info_frame,
-            textvariable=self.file_info_var,
-            style='Custom.TLabel',
-            anchor='center'  # 文字置中
-        )
-        self.file_info_label.pack(fill=tk.X, pady=5)
+            # 強制退出
+            import sys
+            sys.exit(0)
 
     def update_file_info(self) -> None:
         """更新檔案資訊顯示"""
@@ -1424,269 +1403,10 @@ class AlignmentGUI(BaseWindow):
 
         # 更新顯示
         if info_parts:
-            self.gui_builder.update_file_info(" | ".join(info_parts))
+            self.ui_manager.update_file_info(" | ".join(info_parts))
         else:
-            self.gui_builder.update_file_info("尚未載入任何檔案")
+            self.ui_manager.update_file_info("尚未載入任何檔案")
 
-    def create_toolbar(self) -> None:
-        """創建工具列，使用圖片按鈕"""
-        self.toolbar_frame = ttk.Frame(self.main_frame)
-        self.toolbar_frame.pack(fill=tk.X, padx=0, pady=0)
-
-        # 確保 PIL/Pillow 已安裝
-        try:
-            from PIL import Image, ImageTk
-        except ImportError:
-            self.logger.error("缺少 PIL/Pillow 庫，無法使用圖片按鈕，改用文字按鈕")
-            self.create_text_toolbar()
-            return
-
-        # 初始化圖片管理器
-        try:
-
-            self.image_manager = ImageManager()
-        except ImportError:
-            self.logger.error("無法導入 ImageManager，改用文字按鈕")
-            self.create_text_toolbar()
-            return
-
-        # 設置按鈕圖片尺寸（可根據需要調整）
-        button_width = 50  # 按鈕寬度
-        button_height = 50  # 按鈕高度
-
-        # 預載入所有按鈕圖片，指定尺寸
-        self.image_manager.load_button_images(width=button_width, height=button_height)
-
-        # 定義工具列按鈕
-        buttons = [
-            {"id": "load_srt", "command": self.load_srt, "tooltip": "載入 SRT 檔案"},
-            {"id": "import_audio", "command": self.import_audio, "tooltip": "匯入音頻檔案"},
-            {"id": "load_word", "command": self.import_word_document, "tooltip": "載入 Word 檔案"},
-            {"id": "adjust_time", "command": self.align_end_times, "tooltip": "調整時間軸"},
-            {"id": "export_srt", "command": lambda: self.export_srt(from_toolbar=True), "tooltip": "匯出 SRT 檔案"}
-        ]
-
-        # 創建工具列按鈕
-        self.toolbar_buttons = {}
-        for btn_info in buttons:
-            self.create_image_button(btn_info, width=button_width, height=button_height)
-
-    def create_image_button(self, btn_info, width=None, height=None):
-        """
-        創建圖片按鈕
-        :param btn_info: 按鈕信息
-        :param width: 按鈕寬度
-        :param height: 按鈕高度
-        """
-        button_id = btn_info["id"]
-        command = btn_info["command"]
-        tooltip = btn_info.get("tooltip", "")
-
-        # 獲取按鈕圖片
-        normal_img, pressed_img = self.image_manager.get_button_images(button_id, width, height)
-        if not normal_img or not pressed_img:
-            self.logger.error(f"無法加載按鈕圖片: {button_id}")
-            # 如果加載失敗，創建文字按鈕作為備選
-            btn = ttk.Button(self.toolbar_frame, text=tooltip, command=command, width=15)
-            btn.pack(side=tk.LEFT, padx=5)
-            self.toolbar_buttons[button_id] = btn
-            return
-
-        # 創建按鈕框架
-        btn_frame = ttk.Frame(self.toolbar_frame)
-        btn_frame.pack(side=tk.LEFT, padx=5)
-
-        # 創建標籤按鈕 (使用 Label 而不是 Button，以便自定義按下行為)
-        btn = tk.Label(
-            btn_frame,
-            image=normal_img,
-            cursor="hand2"
-        )
-        btn.normal_image = normal_img  # 保存引用以避免垃圾回收
-        btn.pressed_image = pressed_img  # 保存引用以避免垃圾回收
-        btn.pack()
-
-        # 儲存原始命令
-        btn.command = command
-
-        # 只綁定按下和釋放事件
-        btn.bind("<ButtonPress-1>", lambda e, b=btn: self._on_button_press(e, b))
-        btn.bind("<ButtonRelease-1>", lambda e, b=btn: self._on_button_release(e, b))
-
-        # 儲存按鈕引用
-        self.toolbar_buttons[button_id] = btn
-
-        # 添加提示文字
-        if tooltip:
-            self._create_tooltip(btn, tooltip)
-
-    def _on_button_press(self, event, button):
-        """滑鼠按下按鈕事件處理"""
-        if hasattr(button, 'pressed_image'):
-            button.configure(image=button.pressed_image)
-            # 保存按下的位置
-            button.press_x = event.x
-            button.press_y = event.y
-
-    def _on_button_release(self, event, button):
-        """滑鼠釋放按鈕事件處理"""
-        if hasattr(button, 'normal_image'):
-            button.configure(image=button.normal_image)
-
-            # 判斷釋放是否在按鈕範圍內
-            if hasattr(button, 'press_x') and hasattr(button, 'press_y'):
-                # 檢查滑鼠是否仍在按鈕上
-                if (0 <= event.x <= button.winfo_width() and
-                    0 <= event.y <= button.winfo_height()):
-                    # 在按鈕上釋放，執行命令
-                    if hasattr(button, 'command') and callable(button.command):
-                        button.command()
-
-    def _on_button_click(self, event, button):
-        """按鈕點擊事件處理"""
-        if hasattr(button, 'command') and callable(button.command):
-            button.command()
-
-    def create_text_toolbar(self):
-        """創建文字按鈕工具列（備選方案）"""
-        # 定義工具列按鈕
-        buttons = [
-            {"text": "載入 SRT", "command": self.load_srt, "width": 0},
-            {"text": "匯入音頻", "command": self.import_audio, "width": 0},
-            {"text": "載入 Word", "command": self.import_word_document, "width": 0},
-            {"text": "調整時間", "command": self.align_end_times, "width": 0},
-            {"text": "匯出 SRT", "command": lambda: self.export_srt(from_toolbar=True), "width": 0}
-        ]
-
-        self.toolbar_buttons = {}
-        for i, btn_info in enumerate(buttons):
-            btn = ttk.Button(
-                self.toolbar_frame,
-                text=btn_info["text"],
-                command=btn_info["command"],
-                width=btn_info["width"]
-            )
-            btn.pack(side=tk.LEFT, padx=3)
-            self.toolbar_buttons[f"button_{i}"] = btn
-
-    def _create_tooltip(self, widget, text):
-        """為控件創建提示文字"""
-        def enter(event):
-            x, y, _, _ = widget.bbox("insert")
-            x += widget.winfo_rootx() + 0
-            y += widget.winfo_rooty() + 60
-
-            # 創建提示框
-            self.tooltip = tk.Toplevel(widget)
-            self.tooltip.wm_overrideredirect(True)
-            self.tooltip.wm_geometry(f"+{x}+{y}")
-
-            label = ttk.Label(self.tooltip, text=text, background="#ffffe0", relief="solid", borderwidth=3 , padding=(5,2))
-            label.pack()
-
-        def leave(event):
-            if hasattr(self, 'tooltip'):
-                self.tooltip.destroy()
-                delattr(self, 'tooltip')
-
-        widget.bind("<Enter>", enter)
-        widget.bind("<Leave>", leave)
-
-    def create_main_content(self) -> None:
-        """創建主要內容區域"""
-        # 建立內容框架
-        self.content_frame = ttk.Frame(self.main_frame)
-        self.content_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=(2,3))
-
-        # 使用 GUI 建構器創建內容容器
-        container = self.gui_builder.create_main_content(self.content_frame)
-
-        # 使用容器建立 Treeview
-        self.result_frame = container
-
-        # 建立 Treeview
-        self.create_treeview()
-
-        # 調試輸出
-        self.logger.debug("主要內容區域創建完成")
-
-    def create_treeview(self) -> None:
-        """創建 Treeview"""
-        # 結果框架
-        self.result_frame = ttk.Frame(self.content_frame)
-        self.result_frame.pack(fill=tk.BOTH, expand=True)
-
-        # 創建 Treeview
-        self.tree = ttk.Treeview(self.result_frame)
-
-        # 設置 TreeView 字型
-        style = ttk.Style()
-        tree_font = self.font_manager.get_font(size=10)  # 顯式指定較小的字型大小
-        style.configure("Treeview", font=tree_font)
-        style.configure("Treeview.Heading", font=tree_font)
-
-        # 初始化 TreeView 管理器
-        self.tree_manager = TreeViewManager(self.tree)
-
-        # 設置列配置前確保 Treeview 已顯示
-        self.setup_treeview_columns()
-
-        # 防止使用者調整欄位寬度
-        def handle_resize(event):
-            if event.widget.identify_region(event.x, event.y) == "separator":
-                return "break"
-
-        self.tree.bind('<Button-1>', handle_resize)
-
-        # 設置卷軸
-        self.setup_treeview_scrollbars()
-
-        self.tree.tag_configure('mismatch', background='#FFDDDD')  # 淺紅色背景標記不匹配項目
-        self.tree.tag_configure('use_word_text', background='#00BFFF')  # 淺藍色背景標記使用 Word 文本的項目
-
-        # 更新校正狀態管理器的樹視圖引用
-        if hasattr(self, 'correction_state_manager'):
-            self.correction_state_manager.tree = self.tree
-
-        self.logger.debug("Treeview 創建完成")
-
-    def setup_treeview_columns(self) -> None:
-        """設置 Treeview 列配置"""
-        try:
-            # 獲取當前模式的列配置
-            columns = self.columns.get(self.display_mode, [])
-
-            # 添加診斷日誌
-            self.logger.debug(f"設置樹狀視圖列，顯示模式: {self.display_mode}, 列: {columns}")
-
-            # 更新 Treeview 列
-            self.tree["columns"] = columns
-            self.tree['show'] = 'headings'  # 確保顯示所有列標題
-
-            # 配置每一列
-            for col in columns:
-                config = self.column_config.COLUMNS.get(col, {
-                    'width': 100,
-                    'stretch': True if col in ['SRT Text', 'Word Text'] else False,
-                    'anchor': 'w' if col in ['SRT Text', 'Word Text'] else 'center'
-                })
-
-                # 明確設置每列的寬度、拉伸和錨點
-                self.tree.column(col, width=config['width'], stretch=config['stretch'], anchor=config['anchor'])
-                self.tree.heading(col, text=col, anchor='center')
-
-                # 對於 SRT Text 列，確保它可見並有適當的寬度
-                if col == 'SRT Text':
-                    self.tree.column(col, width=300, stretch=True, anchor='w')
-
-
-            # 確保標籤設置
-            self.tree.tag_configure('mismatch', background='#FFDDDD')
-            self.tree.tag_configure('use_word_text', background='#00BFFF')
-
-        except Exception as e:
-            self.logger.error(f"設置樹狀視圖列時出錯: {str(e)}")
-            show_error("錯誤", f"設置顯示列時發生錯誤: {str(e)}", self.master)
 
     def _handle_double_click(self, event):
         """處理雙擊事件，防止編輯 V/X 欄位"""
@@ -1867,36 +1587,6 @@ class AlignmentGUI(BaseWindow):
         finally:
             # 確保焦點回到主視窗
             self.master.focus_force()
-
-
-    def setup_treeview_scrollbars(self) -> None:
-        """設置 Treeview 卷軸"""
-        # 垂直卷軸
-        self.tree_scrollbar = ttk.Scrollbar(
-            self.result_frame,
-            orient='vertical',
-            command=self.tree.yview
-        )
-        self.tree_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-
-        # 配置 Treeview 的卷軸命令
-        self.tree['yscrollcommand'] = self.tree_scrollbar.set
-
-        # 將 Treeview 放入框架 - 注意順序很重要
-        self.tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-
-    def create_status_bar(self) -> None:
-        """創建狀態列"""
-        # 檢查並創建狀態變數
-        if not hasattr(self, 'status_var'):
-            self.status_var = tk.StringVar()
-
-        self.status_label = ttk.Label(
-            self.main_frame,
-            textvariable=self.status_var,
-            style='Custom.TLabel'
-        )
-        self.status_label.pack(side=tk.BOTTOM, fill=tk.X, pady=2)
 
     def on_tree_click(self, event: tk.Event) -> None:
         """處理樹狀圖的點擊事件"""
@@ -2969,7 +2659,7 @@ class AlignmentGUI(BaseWindow):
 
     # 在修改 Treeview 數據的同時更新 SRT 數據
     def update_srt_data_from_treeview(self) -> None:
-        """從 Treeview 更新 SRT 數據"""
+        """從 Treeview 更新 SRT 數據 - 修正版本"""
         # 添加遞歸保護
         if hasattr(self, '_updating_srt_data') and self._updating_srt_data:
             return
@@ -2991,20 +2681,21 @@ class AlignmentGUI(BaseWindow):
                 end_col = 2
                 text_col = 3
 
-            # 遍歷樹視圖中的所有項目
-            for i, item in enumerate(self.tree_manager.get_all_items(), 1):
+            self.logger.debug(f"開始從樹視圖獲取 SRT 數據，顯示模式: {self.display_mode}")
+
+            # 遍歷樹視圖中的所有項目 - 修改部分：確保順序正確
+            all_items = self.tree_manager.get_all_items()
+            # 按照實際樹視圖順序處理，確保索引連續
+            new_srt_index = 1  # 從1開始的連續索引
+
+            for item in all_items:
                 try:
                     values = self.tree_manager.get_item_values(item)
 
-                    # 安全地獲取數據，避免索引錯誤
+                    # 確保 values 有足夠的元素
                     if len(values) <= index_col:
-                        continue  # 跳過無效的值
-
-                    # 獲取索引、時間和文本，使用預設值避免錯誤
-                    try:
-                        index = int(values[index_col]) if values[index_col].isdigit() else i
-                    except (ValueError, TypeError, AttributeError):
-                        index = i
+                        self.logger.warning(f"項目 {item} 的值列表長度不足，跳過")
+                        continue
 
                     # 獲取時間 - 使用明確的錯誤處理
                     start_time = values[start_col] if len(values) > start_col else "00:00:00,000"
@@ -3020,13 +2711,22 @@ class AlignmentGUI(BaseWindow):
                         if len(values) > word_text_col and values[word_text_col]:
                             text = values[word_text_col]
 
-                    # 考慮校正狀態
+                    # 考慮校正狀態 - 修改部分：使用樹視圖中的實際顯示文本
                     try:
+                        # 獲取當前項目的索引
                         item_index = str(values[index_col])
-                        if item_index in self.correction_service.correction_states:
-                            state = self.correction_service.correction_states[item_index]
-                            if state == 'correct' and item_index in self.correction_service.corrected_texts:
-                                text = self.correction_service.corrected_texts[item_index]
+
+                        # 獲取校正圖標
+                        vx_col = -1  # 校正圖標總是在最後一列
+                        correction_icon = values[vx_col] if len(values) > abs(vx_col) else ""
+
+                        # 根據校正圖標決定使用哪個文本
+                        if correction_icon == "✅":  # 已校正
+                            # 已在GUI中顯示校正後的文本，不需要再次獲取
+                            pass
+                        elif correction_icon == "❌":  # 未校正
+                            # 已在GUI中顯示原始文本，不需要再次獲取
+                            pass
                     except Exception as e:
                         self.logger.warning(f"處理校正狀態時出錯: {e}")
 
@@ -3039,17 +2739,25 @@ class AlignmentGUI(BaseWindow):
                         start = pysrt.SubRipTime(0, 0, 0, 0)
                         end = pysrt.SubRipTime(0, 0, 10, 0)  # 默認10秒
 
-                    # 創建 SRT 項目
+                    # 創建 SRT 項目 - 修改部分：使用連續的索引
                     sub = pysrt.SubRipItem(
-                        index=i,  # 使用連續的索引
+                        index=new_srt_index,  # 使用連續的索引
                         start=start,
                         end=end,
                         text=text if text is not None else ""
                     )
                     new_srt_data.append(sub)
 
+                    # 更新樹視圖中顯示的索引 - 保持同步
+                    if str(values[index_col]) != str(new_srt_index):
+                        values[index_col] = str(new_srt_index)
+                        self.tree.item(item, values=tuple(values))
+
+                    # 索引增加，確保連續性
+                    new_srt_index += 1
+
                 except Exception as e:
-                    self.logger.warning(f"處理項目 {i} 時出錯: {e}, 跳過該項目")
+                    self.logger.warning(f"處理項目時出錯: {e}, 跳過該項目")
                     continue
 
             # 更新 SRT 數據
@@ -3635,7 +3343,7 @@ class AlignmentGUI(BaseWindow):
 
     # 在 renumber_items 函數中，確保校正狀態正確轉移
     def renumber_items(self, skip_correction_update=False) -> None:
-        """重新編號項目並保持校正狀態"""
+        """重新編號項目並保持校正狀態 - 修正版本"""
         try:
             # 首先隱藏任何顯示的時間滑桿，因為重新編號會改變時間值
             if hasattr(self, 'slider_controller'):
@@ -3711,13 +3419,21 @@ class AlignmentGUI(BaseWindow):
                         original_text = old_original_texts.get(old_index, "")
                         corrected_text = old_corrected_texts.get(old_index, "")
 
-                        # 使用新索引設置校正狀態
+                        # 使用新索引設置校正狀態 - 修正部分：確保索引一致性
+                        new_index = str(i)
                         self.correction_service.set_correction_state(
-                            str(i),
+                            new_index,
                             original_text,
                             corrected_text,
                             correction_state
                         )
+
+                        # 更新樹視圖的圖標顯示
+                        if correction_state == 'correct':
+                            text_pos = 4 if self.display_mode in [self.DISPLAY_MODE_ALL, self.DISPLAY_MODE_AUDIO_SRT] else 3
+                            if text_pos < len(values):
+                                values[text_pos] = corrected_text
+                                self.tree_manager.update_item(item, values=tuple(values))
 
             # 重新排序完成後，更新 SRT 數據
             self.update_srt_data_from_treeview()
@@ -3734,7 +3450,8 @@ class AlignmentGUI(BaseWindow):
 
         except Exception as e:
             self.logger.error(f"重新編號項目時出錯: {e}", exc_info=True)
-            show_error("錯誤", f"重新編號失敗: {str(e)}", self.master)
+            self.show_error("錯誤", f"重新編號失敗: {str(e)}", self.master)
+
 
     # 最後，修改 get_current_state 方法，以保存 use_word_text 的狀態
     def get_current_state(self) -> Dict[str, Any]:
@@ -3820,7 +3537,7 @@ class AlignmentGUI(BaseWindow):
         :param message: 狀態訊息（可選）
         """
         if message:
-            self.gui_builder.update_status(message)
+            self.ui_manager.update_status(message)
 
         # 更新檔案狀態
         self.update_file_info()
@@ -4522,7 +4239,7 @@ class AlignmentGUI(BaseWindow):
                 self.restore_tree_data(current_data, old_mode, self.display_mode)
 
             # 綁定窗口大小變化事件
-            self.master.bind("<Configure>", self.on_window_resize)
+            self.master.bind("<Configure>", self.ui_manager.on_window_resize)
 
             # 設置標籤樣式
             self.tree.tag_configure('mismatch', background='#FFDDDD')  # 淺紅色背景標記不匹配項目
@@ -4533,31 +4250,6 @@ class AlignmentGUI(BaseWindow):
         except Exception as e:
             self.logger.error(f"刷新 Treeview 結構時出錯: {e}", exc_info=True)
             show_error("錯誤", f"更新顯示結構失敗: {str(e)}", self.master)
-
-    def on_window_resize(self, event=None) -> None:
-        """
-        處理窗口大小變化事件 - 簡化版，不調整列寬
-        僅用於記錄窗口大小變化
-        """
-        # 僅在必要時啟用
-        return
-
-        # 以下代碼暫時禁用，直到解決顯示問題
-        """
-        # 僅處理主窗口大小變化
-        if event and event.widget == self.master:
-            try:
-                # 獲取當前窗口尺寸
-                window_width = self.master.winfo_width()
-                window_height = self.master.winfo_height()
-
-                # 記錄窗口大小變化
-                self.logger.debug(f"窗口大小變化: {window_width}x{window_height}")
-
-            except Exception as e:
-                # 僅記錄錯誤
-                self.logger.error(f"處理窗口大小變化時出錯: {e}")
-        """
 
     def adjust_values_for_mode(self, values, source_mode, target_mode):
         """
@@ -5070,12 +4762,11 @@ class AlignmentGUI(BaseWindow):
             if hasattr(self, 'current_hovering_item') and hasattr(self, 'current_hovering_column'):
                 if (item != self.current_hovering_item or
                     (column and int(column[1:]) - 1 != self.get_column_index(self.current_hovering_column))):
-                    if hasattr(self, 'floating_icon'):
-                        self.floating_icon.place_forget()
-                        self.floating_icon_fixed = False
+                    # 使用 ui_manager 隱藏浮動圖標
+                    self.ui_manager.hide_floating_icon()
 
             # 如果圖標已固定，不再移動
-            if hasattr(self, 'floating_icon_fixed') and self.floating_icon_fixed:
+            if self.ui_manager.floating_icon_fixed:
                 return
 
             # 檢查是否為選中的項目
@@ -5092,8 +4783,7 @@ class AlignmentGUI(BaseWindow):
 
             # 如果不在文本欄位上或不是被選中的項目，隱藏圖標
             if not is_text_column or not is_selected:
-                if hasattr(self, 'floating_icon') and not self.floating_icon_fixed:
-                    self.floating_icon.place_forget()
+                self.ui_manager.hide_floating_icon()
                 return
 
             # 獲取文本內容
@@ -5110,28 +4800,12 @@ class AlignmentGUI(BaseWindow):
             self.current_hovering_item = item
             self.current_hovering_column = column_name
 
-            # 創建或更新浮動圖標
-            if not hasattr(self, 'floating_icon'):
-                # 創建一個表示"添加"的圖標，使用統一的樣式
-                self.floating_icon = tk.Label(
-                    self.tree,
-                    text="✚",  # 使用十字形加號
-                    bg="#E0F7FA",  # 淺藍色背景
-                    fg="#00796B",  # 深綠色前景
-                    font=("Arial", 12),
-                    cursor="hand2",
-                    relief=tk.RAISED,  # 突起的外觀
-                    borderwidth=1,  # 添加邊框
-                    padx=3,  # 水平內邊距
-                    pady=1   # 垂直內邊距
-                )
-                # 初始化圖標固定狀態
-                self.floating_icon_fixed = False
-                # 添加點擊事件
-                self.floating_icon.bind("<Button-1>", self.on_icon_click)
-
-            # 更新圖標位置跟隨游標
-            self.floating_icon.place(x=event.x + 10, y=event.y - 10)
+            # 使用 ui_manager 顯示浮動圖標
+            self.ui_manager.show_floating_icon(
+                event.x + 10,
+                event.y - 10,
+                lambda e: self.on_icon_click(e)
+            )
 
         except Exception as e:
             self.logger.error(f"顯示浮動校正圖標時出錯: {e}", exc_info=True)
@@ -5287,9 +4961,8 @@ class AlignmentGUI(BaseWindow):
 
     def on_mouse_leave_tree(self, event):
         """當鼠標離開樹狀視圖時的處理"""
-        # 如果圖標未固定，則隱藏
-        if hasattr(self, 'floating_icon') and not (hasattr(self, 'floating_icon_fixed') and self.floating_icon_fixed):
-            self.floating_icon.place_forget()
+        # 使用 ui_manager 隱藏浮動圖標
+        self.ui_manager.hide_floating_icon()
 
     def update_correction_display(self):
         """更新校正顯示，並立即應用校正"""

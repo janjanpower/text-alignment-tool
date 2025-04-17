@@ -1,16 +1,14 @@
-"""GUI 建構器模組，負責創建各種界面元素"""
+"""GUI 建構器模組，負責基礎UI元素的創建"""
 
-import os
 import logging
+import os
 import tkinter as tk
 from tkinter import ttk
 from typing import Dict, List, Any, Optional, Callable, Tuple
 
-from gui.components.columns import ColumnConfig
-
 
 class GUIBuilder:
-    """處理 GUI 元素的建構，如菜單、工具列、內容區域等"""
+    """處理基礎 GUI 元素的建構，如菜單、工具列、內容區域等"""
 
     def __init__(self, parent, main_frame):
         """
@@ -27,6 +25,9 @@ class GUIBuilder:
         self.file_info_label = None
         self.status_var = None
         self.status_label = None
+
+        # 保存創建的工具提示彈窗
+        self.tooltip = None
 
     def create_menu(self, menu_frame, menu_commands: Dict[str, Dict[str, Callable]]) -> None:
         """
@@ -58,7 +59,7 @@ class GUIBuilder:
 
     def create_toolbar(self, toolbar_frame, buttons: List[Dict[str, Any]]) -> None:
         """
-        創建工具列
+        創建基本文字工具列
         :param toolbar_frame: 工具列框架
         :param buttons: 按鈕配置列表，格式 [{'text': '按鈕文字', 'command': 按鈕命令, 'width': 寬度}, ...]
         """
@@ -79,6 +80,98 @@ class GUIBuilder:
                 btn.pack(side=tk.LEFT, padx=5)
         except Exception as e:
             self.logger.error(f"創建工具列時出錯: {e}")
+
+    def create_image_button(self, toolbar_frame, button_config: Dict, normal_img, pressed_img) -> tk.Label:
+        """
+        創建圖像按鈕
+        :param toolbar_frame: 工具列框架
+        :param button_config: 按鈕配置
+        :param normal_img: 正常狀態的圖像
+        :param pressed_img: 按下狀態的圖像
+        :return: 創建的按鈕
+        """
+        try:
+            command = button_config.get('command', None)
+            tooltip = button_config.get('tooltip', '')
+
+            # 創建按鈕框架
+            btn_frame = ttk.Frame(toolbar_frame)
+            btn_frame.pack(side=tk.LEFT, padx=5)
+
+            # 創建標籤按鈕
+            btn = tk.Label(
+                btn_frame,
+                image=normal_img,
+                cursor="hand2"
+            )
+            btn.normal_image = normal_img  # 保存引用以避免垃圾回收
+            btn.pressed_image = pressed_img  # 保存引用以避免垃圾回收
+            btn.pack()
+
+            # 儲存原始命令
+            btn.command = command
+
+            # 綁定按下和釋放事件
+            btn.bind("<ButtonPress-1>", lambda e, b=btn: self._on_button_press(e, b))
+            btn.bind("<ButtonRelease-1>", lambda e, b=btn: self._on_button_release(e, b))
+
+            # 添加提示文字
+            if tooltip:
+                self.create_tooltip(btn, tooltip)
+
+            return btn
+        except Exception as e:
+            self.logger.error(f"創建圖像按鈕時出錯: {e}")
+            return None
+
+    def _on_button_press(self, event, button):
+        """滑鼠按下按鈕事件處理"""
+        if hasattr(button, 'pressed_image'):
+            button.configure(image=button.pressed_image)
+            # 保存按下的位置
+            button.press_x = event.x
+            button.press_y = event.y
+
+    def _on_button_release(self, event, button):
+        """滑鼠釋放按鈕事件處理"""
+        if hasattr(button, 'normal_image'):
+            button.configure(image=button.normal_image)
+
+            # 判斷釋放是否在按鈕範圍內
+            if hasattr(button, 'press_x') and hasattr(button, 'press_y'):
+                # 檢查滑鼠是否仍在按鈕上
+                if (0 <= event.x <= button.winfo_width() and
+                    0 <= event.y <= button.winfo_height()):
+                    # 在按鈕上釋放，執行命令
+                    if hasattr(button, 'command') and callable(button.command):
+                        button.command()
+
+    def create_tooltip(self, widget, text: str) -> None:
+        """
+        為控件創建提示文字
+        :param widget: 要添加提示的控件
+        :param text: 提示文字
+        """
+        def enter(event):
+            x, y, _, _ = widget.bbox("insert")
+            x += widget.winfo_rootx() + 0
+            y += widget.winfo_rooty() + 60
+
+            # 創建提示框
+            self.tooltip = tk.Toplevel(widget)
+            self.tooltip.wm_overrideredirect(True)
+            self.tooltip.wm_geometry(f"+{x}+{y}")
+
+            label = ttk.Label(self.tooltip, text=text, background="#ffffe0", relief="solid", borderwidth=3, padding=(5,2))
+            label.pack()
+
+        def leave(event):
+            if self.tooltip:
+                self.tooltip.destroy()
+                self.tooltip = None
+
+        widget.bind("<Enter>", enter)
+        widget.bind("<Leave>", leave)
 
     def create_main_content(self, content_frame) -> ttk.Frame:
         """
@@ -165,44 +258,6 @@ class GUIBuilder:
             empty_tree = ttk.Treeview(frame)
             empty_scrollbar = ttk.Scrollbar(frame)
             return empty_tree, empty_scrollbar
-
-    def setup_treeview_columns(self, tree, display_mode, columns_config):
-        """
-        設置樹狀視圖的列
-        :param tree: 樹狀視圖
-        :param display_mode: 顯示模式
-        :param columns_config: 列配置
-        """
-        try:
-            # 獲取當前模式的列配置
-            columns = columns_config.get(display_mode, [])
-
-            # 更新樹狀視圖列
-            tree["columns"] = columns
-            tree['show'] = 'headings'
-
-            # 配置每一列
-            for col in columns:
-                config = ColumnConfig.COLUMNS.get(col, {
-                    'width': 100,
-                    'stretch': True if col in ['SRT Text', 'Word Text'] else False,
-                    'anchor': 'w' if col in ['SRT Text', 'Word Text'] else 'center'
-                })
-
-                tree.column(col,
-                    width=config['width'],
-                    stretch=config['stretch'],
-                    anchor=config['anchor'])
-                tree.heading(col, text=col, anchor='center')
-
-            # 設置標籤樣式
-            tree.tag_configure('mismatch', background='#FFDDDD')  # 淺紅色背景標記不匹配項目
-            tree.tag_configure('use_word_text', background='#00BFFF')  # 淺藍色背景標記使用 Word 文本的項目
-
-            return True
-        except Exception as e:
-            self.logger.error(f"設置樹狀視圖列時出錯: {e}")
-            return False
 
     def update_file_info(self, info_text: str) -> None:
         """
