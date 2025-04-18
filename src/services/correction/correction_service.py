@@ -66,34 +66,13 @@ class CorrectionService:
         :param corrections: 校正對照表，如果為 None 則使用當前的校正表
         :return: 是否成功儲存
         """
-        if not self.database_file:
-            self.logger.error("未設定校正資料庫檔案路徑")
-            return False
+        result = self._save_corrections_without_callback()
 
-        try:
-            # 確保目錄存在
-            os.makedirs(os.path.dirname(self.database_file), exist_ok=True)
+        # 觸發回調函數，通知校正資料已更新
+        if result and self.on_correction_change and callable(self.on_correction_change):
+            self.on_correction_change()
 
-            # 使用傳入的校正表或當前校正表
-            correction_data = corrections if corrections is not None else self.corrections
-
-            with open(self.database_file, 'w', encoding='utf-8-sig', newline='') as file:
-                writer = csv.writer(file)
-                writer.writerow(["錯誤字", "校正字"])
-                for error, correction in correction_data.items():
-                    writer.writerow([error, correction])
-
-            self.logger.info(f"成功儲存 {len(correction_data)} 條校正規則至 {self.database_file}")
-
-            # 觸發回調函數，通知校正資料已更新
-            if self.on_correction_change and callable(self.on_correction_change):
-                self.on_correction_change()
-
-            return True
-
-        except Exception as e:
-            self.logger.error(f"儲存校正資料庫失敗: {e}")
-            return False
+        return result
 
     def set_database_file(self, database_file: str) -> None:
         """
@@ -122,47 +101,50 @@ class CorrectionService:
         # 添加校正規則
         self.corrections[error] = correction
 
-        # 儲存到資料庫
+        # 儲存到資料庫，但不觸發回調（避免重複）
+        needs_callback = True
         if self.database_file:
-            saved = self.save_corrections()
+            saved = self._save_corrections_without_callback()
             if not saved:
-                # 如果保存失敗，但回調仍需要觸發
-                if self.on_correction_change and callable(self.on_correction_change):
-                    self.on_correction_change()
+                # 如果保存失敗，但仍需要觸發回調
+                pass
+            else:
+                # 保存成功，之後將觸發一次回調
+                needs_callback = False
 
         # 如果不需要應用到現有文本，直接返回
-        if not apply_to_existing:
-            # 確保回調觸發
-            if self.on_correction_change and callable(self.on_correction_change):
-                self.on_correction_change()
-            return 1
-
-        # 計數更新的項目
         updated_count = 0
+        if apply_to_existing:
+            # 計數更新的項目
+            # 檢查並更新所有現有的文本...
+            updated_count = self._apply_to_existing_texts(error, correction)
 
-        # 檢查並更新所有現有的文本
-        for index in list(self.original_texts.keys()):
-            original_text = self.original_texts.get(index, "")
-
-            if error in original_text:
-                # 應用新的校正規則
-                corrected_text = original_text.replace(error, correction)
-
-                # 只有當校正結果不同時才更新
-                if corrected_text != original_text:
-                    # 更新校正文本
-                    self.corrected_texts[index] = corrected_text
-
-                    # 確保狀態設為 'correct'
-                    self.correction_states[index] = 'correct'
-
-                    updated_count += 1
-
-        # 確保回調觸發
-        if self.on_correction_change and callable(self.on_correction_change):
+        # 確保只觸發一次回調
+        if needs_callback and self.on_correction_change and callable(self.on_correction_change):
             self.on_correction_change()
 
-        return updated_count
+        return updated_count if apply_to_existing else 1
+
+    # 新增輔助方法，用於不觸發回調的保存
+    def _save_corrections_without_callback(self) -> bool:
+        """儲存校正資料庫但不觸發回調"""
+        if not self.database_file:
+            return False
+
+        try:
+            # 使用當前校正表
+            with open(self.database_file, 'w', encoding='utf-8-sig', newline='') as file:
+                writer = csv.writer(file)
+                writer.writerow(["錯誤字", "校正字"])
+                for error, correction in self.corrections.items():
+                    writer.writerow([error, correction])
+
+            self.logger.info(f"成功儲存 {len(self.corrections)} 條校正規則至 {self.database_file}")
+            return True
+
+        except Exception as e:
+            self.logger.error(f"儲存校正資料庫失敗: {e}")
+            return False
 
     def safe_apply_correction(self, error: str, correction: str, tree_view, display_mode: str) -> int:
         """
@@ -320,12 +302,15 @@ class CorrectionService:
         if error in self.corrections:
             del self.corrections[error]
 
-            # 儲存到資料庫
+            # 儲存到資料庫，但不觸發回調
+            needs_callback = True
             if self.database_file:
-                self.save_corrections()
+                saved = self._save_corrections_without_callback()
+                if saved:
+                    needs_callback = False
 
-            # 觸發回調函數，通知校正資料已更新
-            if self.on_correction_change and callable(self.on_correction_change):
+            # 確保只觸發一次回調
+            if needs_callback and self.on_correction_change and callable(self.on_correction_change):
                 self.on_correction_change()
 
             return True

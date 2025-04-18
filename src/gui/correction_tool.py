@@ -139,6 +139,12 @@ class CorrectionTool(BaseWindow):
 
     def on_correction_change(self):
         """校正數據變化的回調函數"""
+        # 防止短時間內重複更新
+        current_time = time.time()
+        if hasattr(self, '_last_update_time') and current_time - self._last_update_time < 0.1:
+            return
+        self._last_update_time = current_time
+
         # 清空原有數據
         self.data_rows = []
 
