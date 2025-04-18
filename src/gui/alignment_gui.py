@@ -1596,8 +1596,12 @@ class AlignmentGUI(BaseWindow):
             column = self.tree.identify_column(event.x)
             item = self.tree.identify_row(event.y)
 
-            self.logger.debug(f"點擊事件: column={column}")
+            # 無論點擊哪裡，首先檢查是否有已定點的浮動圖標，如果有則隱藏
+            # 這是最關鍵的修改 - 無條件隱藏已定點的圖標
+            if hasattr(self, 'ui_manager') and hasattr(self.ui_manager, 'floating_icon_fixed') and self.ui_manager.floating_icon_fixed:
+                self.ui_manager.unfix_floating_icon()
 
+            # 如果沒有點擊有效區域，直接返回
             if not (region and column and item):
                 return
 
@@ -1612,15 +1616,23 @@ class AlignmentGUI(BaseWindow):
             column_name = self.tree["columns"][column_idx]
             self.logger.debug(f"點擊的列名: {column_name}")
 
+            # 檢查該項目是否有 use_word_text 標籤 (藍色框)
+            item_tags = self.tree.item(item, "tags")
+            has_word_text = "use_word_text" in item_tags if item_tags else False
+
             # 處理文本列點擊事件（SRT Text 或 Word Text）
             if region == "cell" and is_selected and column_name in ["SRT Text", "Word Text"]:
-                # 檢查是否點擊了與當前懸停文本不同的項目
-                if (hasattr(self, 'current_hovering_item') and
-                    (self.current_hovering_item != item or self.current_hovering_column != column_name)):
-                    # 隱藏之前的圖標
-                    if hasattr(self, 'floating_icon'):
-                        self.floating_icon.place_forget()
-                        self.floating_icon_fixed = False
+                # 如果是 SRT Text 列且項目有藍色框，或者是 Word Text 列且點擊了與當前懸停文本不同的項目或列，則隱藏圖標
+                if (column_name == "SRT Text" and has_word_text) or (
+                    hasattr(self, 'current_hovering_item') and
+                    hasattr(self, 'current_hovering_column') and
+                    self.ui_manager.floating_icon_fixed and
+                    (self.current_hovering_item != item or
+                    self.current_hovering_column != column_name)):
+                    # 取消固定並隱藏浮動圖標
+                    self.ui_manager.unfix_floating_icon()
+                    if column_name == "SRT Text" and has_word_text:
+                        return
 
                 # 獲取值
                 values = list(self.tree.item(item)["values"])
@@ -1636,28 +1648,13 @@ class AlignmentGUI(BaseWindow):
                 self.current_hovering_item = item
                 self.current_hovering_column = column_name
 
-                # 如果已有圖標，固定它
-                if hasattr(self, 'floating_icon'):
-                    self.floating_icon_fixed = True
-                    # 更新圖標位置（放在點擊位置）
-                    self.floating_icon.place(x=event.x + 10, y=event.y - 10)
-                else:
-                    # 創建新圖標
-                    self.floating_icon = tk.Label(
-                        self.tree,
-                        text="✚",  # 使用十字形加號
-                        bg="#E0F7FA",  # 淺藍色背景
-                        fg="#00796B",  # 深綠色前景
-                        font=("Arial", 12),
-                        cursor="hand2",
-                        relief=tk.RAISED,  # 突起的外觀
-                        borderwidth=1,  # 添加邊框
-                        padx=3,  # 水平內邊距
-                        pady=1   # 垂直內邊距
-                    )
-                    self.floating_icon_fixed = True
-                    self.floating_icon.bind("<Button-1>", self.on_icon_click)
-                    self.floating_icon.place(x=event.x + 10, y=event.y - 10)
+                # 固定圖標並顯示在點擊位置
+                self.ui_manager.show_floating_icon(
+                    event.x + 10,
+                    event.y - 10,
+                    lambda e: self.on_icon_click(e)
+                )
+                self.ui_manager.fix_floating_icon()
 
             # 隱藏合併符號
             if hasattr(self, 'merge_symbol'):
@@ -1669,6 +1666,10 @@ class AlignmentGUI(BaseWindow):
 
             # 處理時間欄位的點擊
             if column_name in ["Start", "End"] and region == "cell":
+                # 在點擊時間欄位時，也隱藏已定點的浮動圖標
+                if hasattr(self, 'ui_manager') and self.ui_manager.floating_icon_fixed:
+                    self.ui_manager.unfix_floating_icon()
+
                 # 顯示時間調整滑桿
                 if hasattr(self, 'slider_controller'):
                     self.slider_controller.show_slider(event, item, column, column_name)
@@ -1681,6 +1682,10 @@ class AlignmentGUI(BaseWindow):
 
             # 處理 V/X 列點擊
             if column_name == "V/X":
+                # 在點擊校正圖標時，也隱藏已定點的浮動圖標
+                if hasattr(self, 'ui_manager') and self.ui_manager.floating_icon_fixed:
+                    self.ui_manager.unfix_floating_icon()
+
                 # 獲取當前項目的索引
                 if self.display_mode == self.DISPLAY_MODE_ALL:
                     display_index = str(values[1])
@@ -1737,7 +1742,7 @@ class AlignmentGUI(BaseWindow):
                     if hasattr(self, 'state_manager'):
                         current_state = self.get_current_state()
                         correction_state = self.correction_service.serialize_state()
-                        self.save_operation_state('操作類型', '操作描述', {'key': 'value'})
+                        self.save_operation_state('toggle_correction', '切換校正狀態', {'index': display_index})
 
                     # 更新 SRT 數據
                     self.update_srt_data_from_treeview()
@@ -1778,7 +1783,7 @@ class AlignmentGUI(BaseWindow):
                         if hasattr(self, 'state_manager'):
                             current_state = self.get_current_state()
                             correction_state = self.correction_service.serialize_state()
-                            self.save_operation_state('操作類型', '操作描述', {'key': 'value'})
+                            self.save_operation_state('init_correction', '初始化校正狀態', {'index': display_index})
 
                         # 更新 SRT 數據
                         self.update_srt_data_from_treeview()
@@ -1788,6 +1793,10 @@ class AlignmentGUI(BaseWindow):
                 # 檢查項目是否依然存在
                 if not self.tree.exists(item):
                     return
+
+                # 隱藏任何已定點的浮動圖標
+                if hasattr(self, 'ui_manager') and self.ui_manager.floating_icon_fixed:
+                    self.ui_manager.unfix_floating_icon()
 
                 # 保存當前標籤和校正狀態，避免丟失
                 current_tags = list(self.tree.item(item, "tags") or tuple())
@@ -1846,11 +1855,16 @@ class AlignmentGUI(BaseWindow):
                 if hasattr(self, 'state_manager'):
                     current_state = self.get_current_state()
                     correction_state = self.correction_service.serialize_state()
-                    self.save_operation_state('操作類型', '操作描述', {'key': 'value'})
+                    self.save_operation_state('toggle_word_text', '切換使用Word文本',
+                                            {'item': item, 'use_word': self.use_word_text.get(item, False)})
                 return
 
             # 處理音頻播放列的點擊
             elif column_name == 'V.O':
+                # 在點擊音頻播放列時，也隱藏已定點的浮動圖標
+                if hasattr(self, 'ui_manager') and self.ui_manager.floating_icon_fixed:
+                    self.ui_manager.unfix_floating_icon()
+
                 # 先檢查音頻是否已匯入
                 if not self.audio_imported:
                     show_warning("警告", "未匯入音頻，請先匯入音頻檔案", self.master)
@@ -1970,6 +1984,10 @@ class AlignmentGUI(BaseWindow):
         try:
             # 顯示添加校正對話框
             if hasattr(self, 'current_hovering_text') and self.current_hovering_text:
+                # 在顯示對話框前取消固定狀態，這樣對話框關閉後圖標不會殘留
+                if hasattr(self, 'ui_manager'):
+                    self.ui_manager.unfix_floating_icon()
+
                 self.show_add_correction_dialog(self.current_hovering_text)
             else:
                 self.logger.warning("找不到當前懸停文本，無法打開校正對話框")
@@ -4758,32 +4776,35 @@ class AlignmentGUI(BaseWindow):
             column = self.tree.identify_column(event.x)
             item = self.tree.identify_row(event.y)
 
-            # 如果游標移到新的項目或列，且之前有固定的圖標，則隱藏它
-            if hasattr(self, 'current_hovering_item') and hasattr(self, 'current_hovering_column'):
-                if (item != self.current_hovering_item or
-                    (column and int(column[1:]) - 1 != self.get_column_index(self.current_hovering_column))):
-                    # 使用 ui_manager 隱藏浮動圖標
-                    self.ui_manager.hide_floating_icon()
-
-            # 如果圖標已固定，不再移動
-            if self.ui_manager.floating_icon_fixed:
-                return
+            # 如果圖標已固定，不再移動但繼續跟蹤鼠標位置
+            # 注意：這裡不提前返回，保持跟蹤當前位置
 
             # 檢查是否為選中的項目
             is_selected = item in self.tree_manager.get_selected_items()
 
-            # 只有在文本欄位上且是被選中的項目才顯示圖標
+            # 檢查該項目是否有 use_word_text 標籤 (藍色框)
+            item_tags = self.tree.item(item, "tags")
+            has_word_text = "use_word_text" in item_tags if item_tags else False
+
+            # 只有在文本欄位上且是被選中的項目且不是藍色框標記的項目才顯示圖標
             is_text_column = False
             if region == "cell" and column and item and is_selected:
                 column_idx = int(column[1:]) - 1
                 if column_idx >= 0 and column_idx < len(self.tree["columns"]):
                     column_name = self.tree["columns"][column_idx]
-                    if column_name in ["SRT Text", "Word Text"]:
+                    # 只在SRT Text列上顯示，如果是SRT Text列有藍色框，則不顯示
+                    if column_name == "SRT Text" and not has_word_text:
+                        is_text_column = True
+                    elif column_name == "Word Text":  # Word Text 列無論是否藍色框都可以顯示
                         is_text_column = True
 
-            # 如果不在文本欄位上或不是被選中的項目，隱藏圖標
-            if not is_text_column or not is_selected:
+            # 如果游標不在適合顯示的文本欄位上或不是被選中的項目，且圖標未固定，則隱藏圖標
+            if (not is_text_column or not is_selected) and not self.ui_manager.floating_icon_fixed:
                 self.ui_manager.hide_floating_icon()
+                return
+
+            # 如果不在可顯示區域，直接返回
+            if not is_text_column or not is_selected:
                 return
 
             # 獲取文本內容
@@ -4800,12 +4821,14 @@ class AlignmentGUI(BaseWindow):
             self.current_hovering_item = item
             self.current_hovering_column = column_name
 
-            # 使用 ui_manager 顯示浮動圖標
-            self.ui_manager.show_floating_icon(
-                event.x + 10,
-                event.y - 10,
-                lambda e: self.on_icon_click(e)
-            )
+            # 只有在圖標未固定時才顯示浮動圖標
+            if not self.ui_manager.floating_icon_fixed:
+                # 使用 ui_manager 顯示浮動圖標
+                self.ui_manager.show_floating_icon(
+                    event.x + 10,
+                    event.y - 10,
+                    lambda e: self.on_icon_click(e)
+                )
 
         except Exception as e:
             self.logger.error(f"顯示浮動校正圖標時出錯: {e}", exc_info=True)
@@ -4961,8 +4984,9 @@ class AlignmentGUI(BaseWindow):
 
     def on_mouse_leave_tree(self, event):
         """當鼠標離開樹狀視圖時的處理"""
-        # 使用 ui_manager 隱藏浮動圖標
-        self.ui_manager.hide_floating_icon()
+        # 只隱藏未固定的浮動圖標
+        if hasattr(self, 'ui_manager') and not self.ui_manager.floating_icon_fixed:
+            self.ui_manager.hide_floating_icon()
 
     def update_correction_display(self):
         """更新校正顯示，並立即應用校正"""

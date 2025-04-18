@@ -1,6 +1,7 @@
 """UI 管理器模組，負責管理所有用戶界面元素"""
 
 import logging
+import os
 import tkinter as tk
 from tkinter import ttk
 from typing import Dict, List, Optional, Any, Callable, Tuple
@@ -48,6 +49,53 @@ class UIManager:
         # 顯示模式和列配置
         self.PLAY_ICON = "▶"
         self.column_config = ColumnConfig()
+
+        # 預載入校正圖標
+        self.correction_icon = None
+        self.preload_correction_icon()
+
+    def preload_correction_icon(self):
+        """預載入校正圖標，確保保留透明度"""
+        try:
+            from PIL import Image, ImageTk
+
+            # 獲取當前模組所在目錄
+            current_dir = os.path.dirname(os.path.abspath(__file__))
+            gui_dir = os.path.dirname(current_dir) if "components" in current_dir else current_dir
+            src_dir = os.path.dirname(gui_dir)
+            project_root = os.path.dirname(src_dir)
+
+            # 可能的圖標路徑列表
+            possible_paths = [
+                os.path.join(project_root, "assets", "icons", "quickadd_icon.png"),
+                os.path.join(src_dir, "assets", "icons", "quickadd_icon.png"),
+                os.path.join(gui_dir, "assets", "icons", "quickadd_icon.png"),
+                os.path.join(current_dir, "assets", "icons", "quickadd_icon.png")
+            ]
+
+            # 尋找圖標文件
+            icon_path = None
+            for path in possible_paths:
+                if os.path.exists(path):
+                    icon_path = path
+                    self.logger.debug(f"找到校正圖標: {path}")
+                    break
+
+            if icon_path:
+                # 載入圖標，保留 RGBA 格式以保持透明度
+                img = Image.open(icon_path)
+                # 確保圖片是 RGBA 模式，保留透明通道
+                if img.mode != 'RGBA':
+                    img = img.convert('RGBA')
+                img = img.resize((24,24), Image.LANCZOS)  # 調整大小
+                self.correction_icon = ImageTk.PhotoImage(img)
+                self.logger.debug("成功預載入透明校正圖標")
+            else:
+                self.logger.warning("找不到校正圖標文件 add_normal.png")
+                self.correction_icon = None
+        except Exception as e:
+            self.logger.error(f"預載入校正圖標時出錯: {e}")
+            self.correction_icon = None
 
     def setup_frames(self, main_frame):
         """
@@ -267,30 +315,92 @@ class UIManager:
 
     def create_floating_correction_icon(self, callback=None):
         """
-        創建浮動校正圖標
+        創建浮動校正圖標，使用樹狀視圖的背景顏色，並添加提示文字
         :param callback: 點擊回調
         :return: 創建的圖標
         """
         if not hasattr(self, 'floating_icon') or self.floating_icon is None:
-            self.floating_icon = tk.Label(
-                self.tree,
-                text="✚",  # 使用十字形加號
-                bg="#E0F7FA",  # 淺藍色背景
-                fg="#00796B",  # 深綠色前景
-                font=("Arial", 12),
-                cursor="hand2",
-                relief=tk.RAISED,  # 突起的外觀
-                borderwidth=1,  # 添加邊框
-                padx=3,  # 水平內邊距
-                pady=1   # 垂直內邊距
-            )
+            # 獲取樹狀視圖的背景顏色
+            try:
+                tree_bg = self.tree.cget("background")
+            except:
+                # 如果無法獲取，使用系統默認顏色
+                tree_bg = "SystemButtonFace"
+
+            # 使用預載入的圖標
+            if hasattr(self, 'correction_icon') and self.correction_icon:
+                # 創建帶圖標的標籤，使用樹狀視圖的背景顏色
+                self.floating_icon = tk.Label(
+                    self.tree,
+                    image=self.correction_icon,
+                    bg="SystemButtonFace",  # 使用系統按鈕默認顏色，在大多數系統上是透明的
+                    bd=0,   # 無邊框
+                    highlightthickness=0,  # 無高亮邊框
+                    cursor="hand2"
+                )
+            else:
+                # 沒有預載入的圖標，使用文字作為備用
+                self.floating_icon = tk.Label(
+                    self.tree,
+                    text="✚",  # 使用十字形加號作為備用
+                    bg="SystemButtonFace",  # 使用系統按鈕默認顏色，在大多數系統上是透明的
+                    bd=0,   # 無邊框
+                    highlightthickness=0,  # 無高亮邊框
+                    font=("Arial", 12),
+                    cursor="hand2"
+                )
+
             self.floating_icon_fixed = False
 
             # 如果提供了回調，綁定點擊事件
             if callback and callable(callback):
                 self.floating_icon.bind("<Button-1>", callback)
 
+            # 添加提示文字
+            self.add_tooltip_to_floating_icon("添加校正字")
+
         return self.floating_icon
+
+    def add_tooltip_to_floating_icon(self, tooltip_text: str):
+        """
+        為浮動校正圖標添加提示文字
+        :param tooltip_text: 提示文字內容
+        """
+        if not hasattr(self, 'floating_icon') or not self.floating_icon:
+            return
+
+        # 創建提示文字所需的函數
+        def show_tooltip(event):
+            x = y = 0
+            # 獲取圖標的位置
+            x = self.floating_icon.winfo_rootx() + 20
+            y = self.floating_icon.winfo_rooty() - 20
+
+            # 創建提示框
+            self.tooltip = tk.Toplevel(self.floating_icon)
+            self.tooltip.wm_overrideredirect(True)  # 移除窗口邊框
+            self.tooltip.wm_geometry(f"+{x}+{y}")
+            self.tooltip.wm_attributes("-topmost", True)  # 置頂顯示
+
+            # 創建標籤
+            label = ttk.Label(
+                self.tooltip,
+                text=tooltip_text,
+                background="#ffffe0",  # 淺黃色背景
+                relief="solid",
+                borderwidth=1,
+                padding=(5, 2)
+            )
+            label.pack()
+
+        def hide_tooltip(event):
+            if hasattr(self, 'tooltip') and self.tooltip:
+                self.tooltip.destroy()
+                self.tooltip = None
+
+        # 綁定鼠標進入和離開事件
+        self.floating_icon.bind("<Enter>", show_tooltip)
+        self.floating_icon.bind("<Leave>", hide_tooltip)
 
     def show_floating_icon(self, x, y, callback=None):
         """
@@ -305,10 +415,12 @@ class UIManager:
             # 更新現有圖標的回調
             self.floating_icon.bind("<Button-1>", callback)
 
-        self.floating_icon.place(x=x, y=y)
+        # 確保位置正確，尤其是透明圖標可能需要調整位置以對齊文本
+        # 通常圖標應該略微偏上以達到良好的視覺效果
+        self.floating_icon.place(x=x, y=y-10)  # y坐標稍微上移，使圖標與文本對齊
 
     def hide_floating_icon(self):
-        """隱藏浮動校正圖標"""
+        """隱藏浮動校正圖標，但只在未固定時"""
         if hasattr(self, 'floating_icon') and self.floating_icon and not self.floating_icon_fixed:
             self.floating_icon.place_forget()
 
@@ -317,9 +429,11 @@ class UIManager:
         self.floating_icon_fixed = True
 
     def unfix_floating_icon(self):
-        """取消固定浮動圖標"""
+        """取消固定浮動圖標並立即隱藏它"""
         self.floating_icon_fixed = False
-        self.hide_floating_icon()
+        # 直接強制隱藏，不檢查固定狀態
+        if hasattr(self, 'floating_icon') and self.floating_icon:
+            self.floating_icon.place_forget()
 
     def update_file_info(self, info_text):
         """
