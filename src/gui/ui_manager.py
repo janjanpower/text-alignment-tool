@@ -60,7 +60,7 @@ class UIManager:
 
         # 創建工具列框架
         self.toolbar_frame = ttk.Frame(main_frame)
-        self.toolbar_frame.pack(fill=tk.X, padx=0, pady=0)
+        self.toolbar_frame.pack(fill=tk.X, padx=5, pady=5)
 
         # 創建內容框架
         self.content_frame = ttk.Frame(main_frame)
@@ -95,8 +95,8 @@ class UIManager:
         :param image_manager: 圖片管理器
         """
         # 設置按鈕圖片尺寸
-        button_width = 50
-        button_height = 50
+        button_width = 108
+        button_height = 30
 
         # 預載入所有按鈕圖片
         image_manager.load_button_images(width=button_width, height=button_height)

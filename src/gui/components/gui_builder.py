@@ -154,8 +154,8 @@ class GUIBuilder:
         """
         def enter(event):
             x, y, _, _ = widget.bbox("insert")
-            x += widget.winfo_rootx() + 0
-            y += widget.winfo_rooty() + 60
+            x += widget.winfo_rootx() + 20
+            y += widget.winfo_rooty() - 20
 
             # 創建提示框
             self.tooltip = tk.Toplevel(widget)
