@@ -38,15 +38,6 @@ class ProjectInputDialog(BaseDialog):
         button_frame = ttk.Frame(self.main_frame)
         button_frame.pack(side=tk.BOTTOM, fill=tk.X, padx=10, pady=0)
 
-        # 確定按鈕
-        ok_button = ttk.Button(
-            button_frame,
-            text="確定",
-            command=self.ok,
-            width=10
-        )
-        ok_button.pack(side=tk.RIGHT, padx=5, pady=(0,15))
-
         # 取消按鈕
         cancel_button = ttk.Button(
             button_frame,
@@ -55,6 +46,15 @@ class ProjectInputDialog(BaseDialog):
             width=10
         )
         cancel_button.pack(side=tk.RIGHT, padx=5, pady=(0,15))
+
+        # 確定按鈕
+        ok_button = ttk.Button(
+            button_frame,
+            text="確定",
+            command=self.ok,
+            width=10
+        )
+        ok_button.pack(side=tk.RIGHT, padx=5, pady=(0,15))
 
         # 確保輸入框獲得焦點
         self.window.after(100, lambda: self.name_entry.focus_force())
@@ -188,14 +188,17 @@ class ProjectManager(BaseWindow):
         """載入所需的圖示"""
         from PIL import Image, ImageTk
 
-        # 取得圖示檔案的目錄路徑
-        icons_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "icons")
+        # 取得圖示檔案的目錄路徑 - 更新為assets/icons
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        project_root = os.path.dirname(current_dir)
+        icons_dir = os.path.join(project_root, "assets", "icons")
 
         try:
             # 檢查圖示目錄是否存在
             if not os.path.exists(icons_dir):
-                print(f"圖示目錄不存在: {icons_dir}")
+                self.logger.warning(f"圖示目錄不存在: {icons_dir}")
                 os.makedirs(icons_dir)
+                self.logger.info(f"已創建圖示目錄: {icons_dir}")
 
             # 定義圖示檔案的完整路徑
             add_normal_path = os.path.join(icons_dir, "add_normal.png")
@@ -208,36 +211,41 @@ class ProjectManager(BaseWindow):
                 img = Image.open(add_normal_path)
                 img = img.resize(self.icon_size, Image.Resampling.LANCZOS)
                 self.add_icon = ImageTk.PhotoImage(img)
+                self.logger.debug(f"成功載入圖標: add_normal")
             else:
-                print(f"找不到新增按鈕圖示: {add_normal_path}")
+                self.logger.warning(f"找不到新增按鈕圖示: {add_normal_path}")
                 self.add_icon = tk.PhotoImage()
 
             if os.path.exists(add_hover_path):
                 img = Image.open(add_hover_path)
                 img = img.resize(self.icon_size, Image.Resampling.LANCZOS)
                 self.add_hover_icon = ImageTk.PhotoImage(img)
+                self.logger.debug(f"成功載入圖標: add_hover")
             else:
-                print(f"找不到新增按鈕懸停圖示: {add_hover_path}")
+                self.logger.warning(f"找不到新增按鈕懸停圖示: {add_hover_path}")
                 self.add_hover_icon = tk.PhotoImage()
 
             if os.path.exists(delete_normal_path):
                 img = Image.open(delete_normal_path)
                 img = img.resize(self.icon_size, Image.Resampling.LANCZOS)
                 self.delete_normal_icon = ImageTk.PhotoImage(img)
+                self.logger.debug(f"成功載入圖標: delete_normal")
             else:
-                print(f"找不到刪除按鈕圖示: {delete_normal_path}")
+                self.logger.warning(f"找不到刪除按鈕圖示: {delete_normal_path}")
                 self.delete_normal_icon = tk.PhotoImage()
 
             if os.path.exists(delete_hover_path):
                 img = Image.open(delete_hover_path)
                 img = img.resize(self.icon_size, Image.Resampling.LANCZOS)
                 self.delete_hover_icon = ImageTk.PhotoImage(img)
+                self.logger.debug(f"成功載入圖標: delete_hover")
             else:
-                print(f"找不到刪除按鈕圖示: {delete_hover_path}")
+                self.logger.warning(f"找不到刪除按鈕圖示: {delete_hover_path}")
                 self.delete_hover_icon = tk.PhotoImage()
 
         except Exception as e:
-            print(f"載入圖示時發生錯誤: {str(e)}")
+            self.logger.error(f"載入圖示時出錯: {e}")
+            # 確保所有圖標變數都被初始化，即使出錯
             self.add_icon = tk.PhotoImage()
             self.add_hover_icon = tk.PhotoImage()
             self.delete_normal_icon = tk.PhotoImage()

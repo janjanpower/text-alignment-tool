@@ -64,40 +64,50 @@ class LoginWindow(BaseWindow):
         title_label = ttk.Label(main_frame, text="SRT文本處理系統", font=("Noto Sans TC", 13))
         title_label.pack(pady=(0, 20))
 
-        # 載入圖標
+        # 載入圖標 - 更新為新的圖標路徑
         try:
-            icons_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "icons")
-            account_icon_path = os.path.join(icons_dir, "account.png")
-            password_icon_path = os.path.join(icons_dir, "password.png")
+            # 獲取專案根目錄
+            current_dir = os.path.dirname(os.path.abspath(__file__))
+            project_root = os.path.dirname(current_dir)
 
-            if os.path.exists(account_icon_path) and os.path.exists(password_icon_path):
-                from PIL import Image, ImageTk
+            # 指向assets/icons
+            icons_dir = os.path.join(project_root, "assets", "icons")
 
-                # 載入帳號圖標
-                account_img = Image.open(account_icon_path)
-                account_img = account_img.resize((20, 20), Image.Resampling.LANCZOS)
-                self.account_icon = ImageTk.PhotoImage(account_img)
+            # 定義圖標檔案名稱
+            icon_files = {
+                "account": "account.png",
+                "password": "password.png"
+            }
 
-                # 載入密碼圖標
-                password_img = Image.open(password_icon_path)
-                password_img = password_img.resize((20, 20), Image.Resampling.LANCZOS)
-                self.password_icon = ImageTk.PhotoImage(password_img)
-            else:
-                self.account_icon = None
-                self.password_icon = None
-                self.logger.warning(f"找不到圖標文件: {account_icon_path} 或 {password_icon_path}")
+            # 記錄成功載入的圖標
+            self.icons = {}
+
+            # 載入所有圖標
+            from PIL import Image, ImageTk
+
+            for icon_name, file_name in icon_files.items():
+                icon_path = os.path.join(icons_dir, file_name)
+                if os.path.exists(icon_path):
+                    try:
+                        img = Image.open(icon_path)
+                        img = img.resize((20, 20), Image.Resampling.LANCZOS)
+                        self.icons[icon_name] = ImageTk.PhotoImage(img)
+                        self.logger.debug(f"成功載入圖標: {icon_name}")
+                    except Exception as e:
+                        self.logger.warning(f"載入圖標 {icon_name} 時出錯: {e}")
+                else:
+                    self.logger.warning(f"找不到圖標文件: {icon_path}")
         except Exception as e:
-            self.account_icon = None
-            self.password_icon = None
             self.logger.error(f"載入圖標時出錯: {e}")
+            self.icons = {}
 
         # 使用者名稱輸入框
         username_frame = ttk.Frame(main_frame)
         username_frame.pack(pady=5)
 
         # 帳號圖標
-        if hasattr(self, 'account_icon') and self.account_icon:
-            account_icon_label = ttk.Label(username_frame, image=self.account_icon)
+        if "account" in self.icons:
+            account_icon_label = ttk.Label(username_frame, image=self.icons["account"])
             account_icon_label.pack(side=tk.LEFT, padx=(0, 5))
 
         username_label = ttk.Label(username_frame, text="帳 號", width=6, font=("Noto Sans TC", 10))
@@ -118,8 +128,8 @@ class LoginWindow(BaseWindow):
         password_frame.pack(pady=5)
 
         # 密碼圖標
-        if hasattr(self, 'password_icon') and self.password_icon:
-            password_icon_label = ttk.Label(password_frame, image=self.password_icon)
+        if "password" in self.icons:
+            password_icon_label = ttk.Label(password_frame, image=self.icons["password"])
             password_icon_label.pack(side=tk.LEFT, padx=(0, 5))
 
         password_label = ttk.Label(password_frame, text="密 碼", width=6, font=("Noto Sans TC", 10))
@@ -381,51 +391,201 @@ class RegisterDialog(BaseDialog):
     def create_register_form(self):
         """創建註冊表單"""
         # 主框架
-        main_frame = ttk.Frame(self.main_frame, padding="20")
-        main_frame.pack(fill=tk.BOTH, expand=True)
+        main_frame = ttk.Frame(self.main_frame)
+        main_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=20)
+
+        # 標題
+        title_label = ttk.Label(main_frame, text="SRT文本處理系統 - 註冊", font=("Noto Sans TC", 13))
+        title_label.pack(pady=(0, 20))
+
+        # 載入圖標 - 基於新的資料夾結構
+        try:
+            # 獲取專案根目錄
+            current_dir = os.path.dirname(os.path.abspath(__file__))
+            project_root = os.path.dirname(current_dir)
+
+            # 指向assets/icons
+            icons_dir = os.path.join(project_root, "assets", "icons")
+
+            # 定義圖標檔案名稱
+            icon_files = {
+                "account": "account.png",
+                "password": "password.png",
+                "email": "email_icon.png",
+                "check": "check_icon.png",
+                "checked": "checked_icon.png"
+            }
+
+            # 記錄成功載入的圖標
+            self.icons = {}
+
+            # 載入所有圖標
+            from PIL import Image, ImageTk
+
+            for icon_name, file_name in icon_files.items():
+                icon_path = os.path.join(icons_dir, file_name)
+                if os.path.exists(icon_path):
+                    try:
+                        img = Image.open(icon_path)
+                        img = img.resize((20, 20), Image.Resampling.LANCZOS)
+                        self.icons[icon_name] = ImageTk.PhotoImage(img)
+                        self.logger.debug(f"成功載入圖標: {icon_name}")
+                    except Exception as e:
+                        self.logger.warning(f"載入圖標 {icon_name} 時出錯: {e}")
+                else:
+                    self.logger.warning(f"找不到圖標文件: {icon_path}")
+
+            # 確保有基本圖標，如果缺失則使用替代方案
+            if "account" not in self.icons and "password" in self.icons:
+                self.icons["account"] = self.icons["password"]
+            if "email" not in self.icons and "account" in self.icons:
+                self.icons["email"] = self.icons["account"]
+            if "check" not in self.icons and "password" in self.icons:
+                self.icons["check"] = self.icons["password"]
+            if "checked" not in self.icons and "check" in self.icons:
+                self.icons["checked"] = self.icons["check"]
+
+        except Exception as e:
+            self.logger.error(f"載入圖標時出錯: {e}")
+            self.icons = {}
 
         # 使用者名稱輸入框
         username_frame = ttk.Frame(main_frame)
-        username_frame.pack(fill=tk.X, pady=5)
-        ttk.Label(username_frame, text="使用者名稱:").pack(side=tk.LEFT)
-        self.username_entry = ttk.Entry(username_frame)
-        self.username_entry.pack(side=tk.RIGHT, fill=tk.X, expand=True, padx=5)
+        username_frame.pack(pady=5)
+
+        # 帳號圖標
+        if "account" in self.icons:
+            account_icon_label = ttk.Label(username_frame, image=self.icons["account"])
+            account_icon_label.pack(side=tk.LEFT, padx=(0, 5))
+
+        username_label = ttk.Label(username_frame, text="帳　號", width=6, font=("Noto Sans TC", 10))
+        username_label.pack(side=tk.LEFT)
+        username_container = ttk.Frame(username_frame)
+        username_container.pack(side=tk.LEFT, fill=tk.X, padx=5)
+        self.username_entry = tk.Entry(
+            username_container,
+            bg="#334D6D",
+            fg="white",
+            width=25,
+            insertbackground="white"
+        )
+        self.username_entry.pack(fill=tk.X)
 
         # 電子郵件輸入框
         email_frame = ttk.Frame(main_frame)
-        email_frame.pack(fill=tk.X, pady=5)
-        ttk.Label(email_frame, text="電子郵件:").pack(side=tk.LEFT)
-        self.email_entry = ttk.Entry(email_frame)
-        self.email_entry.pack(side=tk.RIGHT, fill=tk.X, expand=True, padx=5)
+        email_frame.pack(pady=5)
+
+        # 郵箱圖標
+        if "email" in self.icons:
+            email_icon_label = ttk.Label(email_frame, image=self.icons["email"])
+            email_icon_label.pack(side=tk.LEFT, padx=(0, 5))
+
+        email_label = ttk.Label(email_frame, text="郵　箱", width=6, font=("Noto Sans TC", 10))
+        email_label.pack(side=tk.LEFT)
+        email_container = ttk.Frame(email_frame)
+        email_container.pack(side=tk.LEFT, fill=tk.X, padx=5)
+        self.email_entry = tk.Entry(
+            email_container,
+            bg="#334D6D",
+            fg="white",
+            width=25,
+            insertbackground="white"
+        )
+        self.email_entry.pack(fill=tk.X)
 
         # 密碼輸入框
         password_frame = ttk.Frame(main_frame)
-        password_frame.pack(fill=tk.X, pady=5)
-        ttk.Label(password_frame, text="密碼:").pack(side=tk.LEFT)
-        self.password_entry = ttk.Entry(password_frame, show="*")
-        self.password_entry.pack(side=tk.RIGHT, fill=tk.X, expand=True, padx=5)
+        password_frame.pack(pady=5)
+
+        # 密碼圖標
+        if "password" in self.icons:
+            password_icon_label = ttk.Label(password_frame, image=self.icons["password"])
+            password_icon_label.pack(side=tk.LEFT, padx=(0, 5))
+
+        password_label = ttk.Label(password_frame, text="密　碼", width=6, font=("Noto Sans TC", 10))
+        password_label.pack(side=tk.LEFT)
+        password_container = ttk.Frame(password_frame)
+        password_container.pack(side=tk.LEFT, fill=tk.X, padx=5)
+        self.password_entry = tk.Entry(
+            password_container,
+            bg="#334D6D",
+            fg="white",
+            width=25,
+            insertbackground="white",
+            show="*"
+        )
+        self.password_entry.pack(fill=tk.X)
 
         # 確認密碼輸入框
         confirm_frame = ttk.Frame(main_frame)
-        confirm_frame.pack(fill=tk.X, pady=5)
-        ttk.Label(confirm_frame, text="確認密碼:").pack(side=tk.LEFT)
-        self.confirm_entry = ttk.Entry(confirm_frame, show="*")
-        self.confirm_entry.pack(side=tk.RIGHT, fill=tk.X, expand=True, padx=5)
+        confirm_frame.pack(pady=5)
+
+        # 確認圖標（初始使用check_icon）
+        self.confirm_icon_label = ttk.Label(
+            confirm_frame,
+            image=self.icons.get("check")
+        )
+        self.confirm_icon_label.pack(side=tk.LEFT, padx=(0, 5))
+
+        confirm_label = ttk.Label(confirm_frame, text="確　認", width=6, font=("Noto Sans TC", 10))
+        confirm_label.pack(side=tk.LEFT)
+        confirm_container = ttk.Frame(confirm_frame)
+        confirm_container.pack(side=tk.LEFT, fill=tk.X, padx=5)
+        self.confirm_entry = tk.Entry(
+            confirm_container,
+            bg="#334D6D",
+            fg="white",
+            width=25,
+            insertbackground="white",
+            show="*"
+        )
+        self.confirm_entry.pack(fill=tk.X)
+
+        # 檢查密碼一致性並更改圖標
+        def check_password_match(*args):
+            if self.password_entry.get() == self.confirm_entry.get() and self.password_entry.get():
+                # 密碼一致且不為空，使用已確認圖標
+                if "checked" in self.icons:
+                    self.confirm_icon_label.configure(image=self.icons["checked"])
+            else:
+                # 密碼不一致或為空，使用確認前圖標
+                if "check" in self.icons:
+                    self.confirm_icon_label.configure(image=self.icons["check"])
+
+        # 綁定密碼變更事件
+        self.password_var = tk.StringVar()
+        self.password_entry.configure(textvariable=self.password_var)
+        self.password_var.trace_add("write", check_password_match)
+
+        self.confirm_var = tk.StringVar()
+        self.confirm_entry.configure(textvariable=self.confirm_var)
+        self.confirm_var.trace_add("write", check_password_match)
 
         # 按鈕框架
         button_frame = ttk.Frame(main_frame)
         button_frame.pack(fill=tk.X, pady=(20, 0))
 
+        # 內部按鈕容器，用於置中按鈕
+        inner_button_frame = ttk.Frame(button_frame)
+        inner_button_frame.pack(anchor=tk.CENTER)
+
         # 註冊按鈕
-        register_button = ttk.Button(button_frame, text="註冊", command=self.register)
-        register_button.pack(side=tk.RIGHT, padx=5)
+        register_button = ttk.Button(inner_button_frame, text="註冊", command=self.register, width=10)
+        register_button.pack(side=tk.LEFT, padx=5)
 
         # 取消按鈕
-        cancel_button = ttk.Button(button_frame, text="取消", command=self.cancel)
-        cancel_button.pack(side=tk.RIGHT, padx=5)
+        cancel_button = ttk.Button(inner_button_frame, text="取消", command=self.cancel, width=10)
+        cancel_button.pack(side=tk.LEFT, padx=5)
 
         # 設置焦點
         self.username_entry.focus_set()
+
+        # 設置鍵盤事件
+        self.username_entry.bind("<Return>", lambda e: self.email_entry.focus_set())
+        self.email_entry.bind("<Return>", lambda e: self.password_entry.focus_set())
+        self.password_entry.bind("<Return>", lambda e: self.confirm_entry.focus_set())
+        self.confirm_entry.bind("<Return>", lambda e: self.register())
+        self.window.bind("<Escape>", lambda e: self.cancel())
 
     def register(self):
         """註冊處理"""
