@@ -43,6 +43,10 @@ class BaseDialog:
         self.main_frame = ttk.Frame(self.window, style='Custom.TFrame')
         self.main_frame.pack(fill=tk.BOTH, expand=True)
 
+        # 初始化按鈕管理器
+        from gui.components.button_manager import ButtonManager
+        self.button_manager = ButtonManager(self.window)
+
         # 設置樣式
         self.setup_styles()
 

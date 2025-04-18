@@ -219,13 +219,44 @@ class TextEditDialog(simpledialog.Dialog):
             foreground="black",
             font=("Arial", 12)
         ).pack(pady=2)
+
     def buttonbox(self):
+        """創建對話框按鈕區域"""
+        # 初始化按鈕管理器
+        from gui.components.button_manager import ButtonManager
+        self.button_manager = ButtonManager(self)
+
+        # 按鈕框架
         button_frame = ttk.Frame(self.main_frame, style="TextEdit.TFrame")
         button_frame.pack(side=tk.BOTTOM, pady=5)
-        ok_button = ttk.Button(button_frame, text="確定", command=self.ok, style="TextEdit.TButton", width=10)
-        ok_button.pack(side=tk.LEFT, padx=5)
-        cancel_button = ttk.Button(button_frame, text="取消", command=self.cancel, style="TextEdit.TButton", width=10)
-        cancel_button.pack(side=tk.LEFT, padx=5)
+
+        # 使用按鈕管理器創建按鈕
+        button_configs = [
+            {
+                'id': 'ok',
+                'normal_icon': 'ok_icon.png',
+                'hover_icon': 'ok_hover.png',
+                'command': self.ok,
+                'tooltip': '確認修改',
+                'side': tk.LEFT,
+                'padx': 5
+            },
+            {
+                'id': 'cancel',
+                'normal_icon': 'cancel_icon.png',
+                'hover_icon': 'cancel_hover.png',
+                'command': self.cancel,
+                'tooltip': '取消修改',
+                'side': tk.LEFT,
+                'padx': 5
+            }
+        ]
+
+        # 創建按鈕
+        self.dialog_buttons = self.button_manager.create_button_set(button_frame, button_configs)
+
+        # 綁定回車鍵和 ESC 鍵
+        self.bind("<Escape>", self.cancel)
 
     def start_move(self, event):
         self.x = event.x

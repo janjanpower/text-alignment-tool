@@ -38,14 +38,17 @@ class QuickCorrectionDialog(BaseDialog):
                 self.correction_service = None
                 logging.error("無法導入 CorrectionService")
 
+        # 先調用父類初始化
         super().__init__(parent, title="添加錯誤校正", width=350, height=200)
-
-        # 初始化按鈕管理器
-        self.button_manager = ButtonManager(self.window)
 
     def create_dialog(self) -> None:
         """創建對話框視窗"""
         super().create_dialog()
+
+        # 在調用 super().create_dialog() 之後初始化按鈕管理器
+        from gui.components.button_manager import ButtonManager
+        self.button_manager = ButtonManager(self.window)
+
         self.create_content()
 
     def create_content(self):
@@ -99,7 +102,7 @@ class QuickCorrectionDialog(BaseDialog):
             },
             {
                 'id': 'cancel',
-                'normal_icon': 'cancel.png',
+                'normal_icon': 'cancel_icon.png',
                 'hover_icon': 'cancel_hover.png',
                 'command': self.cancel,
                 'tooltip': '取消操作',

@@ -303,16 +303,24 @@ class ProjectManager(BaseWindow):
         # 確定按鈕容器
         button_container = ttk.Frame(container)
         button_container.pack(fill=tk.X, pady=(20, 0))
+        # 保存引用以便在其他方法中使用
+        self.button_container = button_container
 
-        # 確定按鈕
-        confirm_button = ttk.Button(
-            button_container,
-            text="確定",
-            command=self.confirm,
-            style='Custom.TButton',
-            width=15
-        )
-        confirm_button.pack(side=tk.RIGHT)
+        # 使用按鈕管理器創建確定按鈕
+        button_configs = [
+            {
+                'id': 'confirm',
+                'normal_icon': 'ok_icon.png',
+                'hover_icon': 'ok_hover.png',
+                'command': self.confirm,
+                'tooltip': '確認選擇專案',
+                'side': tk.RIGHT,
+                'padx': 5
+            }
+        ]
+
+        # 創建按鈕
+        self.project_buttons = self.button_manager.create_button_set(button_container, button_configs)
 
         # 綁定按鈕事件
         self.setup_button_events()

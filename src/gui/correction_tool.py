@@ -17,6 +17,7 @@ from gui.components.button_manager import ButtonManager  # 導入按鈕管理器
 
 class CorrectionInputDialog(BaseDialog):
     """校正項輸入對話框"""
+
     def __init__(self, parent=None, correction_service=None):
         """
         初始化校正輸入對話框
@@ -27,14 +28,18 @@ class CorrectionInputDialog(BaseDialog):
         """
         self.result = None  # 確保在 super().__init__ 之前初始化 result
         self.correction_service = correction_service
-        super().__init__(parent, title="新增資料", width=300, height=200)
 
-        # 初始化按鈕管理器
-        self.button_manager = ButtonManager(self.window)
+        # 先調用父類初始化
+        super().__init__(parent, title="新增資料", width=300, height=200)
 
     def create_dialog(self) -> None:
         """創建對話框視窗"""
         super().create_dialog()
+
+        # 在調用 super().create_dialog() 之後初始化按鈕管理器
+        from gui.components.button_manager import ButtonManager
+        self.button_manager = ButtonManager(self.window)
+
         self.create_content()
 
     def create_content(self):
@@ -86,7 +91,7 @@ class CorrectionInputDialog(BaseDialog):
             },
             {
                 'id': 'cancel',
-                'normal_icon': 'cancel.png',
+                'normal_icon': 'cancel_icon.png',
                 'hover_icon': 'cancel_hover.png',
                 'command': self.cancel,
                 'tooltip': '取消操作',
@@ -178,43 +183,43 @@ class CorrectionTool(BaseWindow):
 
         # 使用按鈕管理器創建按鈕
         button_configs = [
-            {
-                'id': 'logout',
-                'normal_icon': 'loginout_icon.png',
-                'hover_icon': 'loginout_hover.png',
-                'command': self.logout,
-                'tooltip': '登出系統',
-                'side': tk.LEFT,
-                'padx': 2
-            },
-            {
-                'id': 'text_management',
-                'normal_icon': 'text_icon.png',
-                'hover_icon': 'text_hover.png',
-                'command': self.enter_alignment_tool,
-                'tooltip': '進入文本管理',
-                'side': tk.RIGHT,
-                'padx': 2
-            },
-            {
-                'id': 'add_data',
-                'normal_icon': 'adddata_icon.png',
-                'hover_icon': 'adddata_hover.png',
-                'command': self.add_correction,
-                'tooltip': '新增校正資料',
-                'side': tk.RIGHT,
-                'padx': 2
-            },
-            {
-                'id': 'delete_data',
-                'normal_icon': 'deletedata_icon.png',
-                'hover_icon': 'deletedata_hover.png',
-                'command': self.delete_correction,
-                'tooltip': '刪除校正資料',
-                'side': tk.RIGHT,
-                'padx': 2
-            }
-        ]
+        {
+            'id': 'logout',
+            'normal_icon': 'loginout_icon.png',
+            'hover_icon': 'loginout_hover.png',
+            'command': self.logout,
+            'tooltip': '登出系統',
+            'side': tk.LEFT,
+            'padx': 2
+        },
+        {
+            'id': 'text_management',
+            'normal_icon': 'text_icon.png',
+            'hover_icon': 'text_hover.png',
+            'command': self.enter_alignment_tool,
+            'tooltip': '進入文本管理',
+            'side': tk.RIGHT,
+            'padx': 2
+        },
+        {
+            'id': 'add_data',
+            'normal_icon': 'adddata_icon.png',
+            'hover_icon': 'adddata_hover.png',
+            'command': self.add_correction,
+            'tooltip': '新增校正資料',
+            'side': tk.RIGHT,
+            'padx': 2
+        },
+        {
+            'id': 'delete_data',
+            'normal_icon': 'deletedata_icon.png',
+            'hover_icon': 'deletedata_hover.png',
+            'command': self.delete_correction,
+            'tooltip': '刪除校正資料',
+            'side': tk.RIGHT,
+            'padx': 2
+        }
+         ]
 
         # 創建按鈕
         self.toolbar_buttons = self.button_manager.create_button_set(toolbar, button_configs)

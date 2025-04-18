@@ -173,7 +173,7 @@ class LoginWindow(BaseWindow):
         inner_button_frame = ttk.Frame(button_frame)
         inner_button_frame.pack(anchor=tk.CENTER)
 
-        # 使用按鈕管理器創建圖片按鈕
+        # 使用按鈕管理器創建按鈕
         button_configs = [
             {
                 'id': 'login',
@@ -635,7 +635,7 @@ class RegisterDialog(BaseDialog):
             },
             {
                 'id': 'cancel',
-                'normal_icon': 'cancel.png',
+                'normal_icon': 'cancel_icon.png',
                 'hover_icon': 'cancel_hover.png',
                 'command': self.cancel,
                 'tooltip': '取消註冊',

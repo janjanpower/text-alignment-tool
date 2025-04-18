@@ -9,11 +9,11 @@ class CustomMessageBox(tk.Toplevel):
     """自定義訊息框類別"""
 
     def __init__(self, title: str = "訊息",
-                 message: str = "",
-                 message_type: str = "info",
-                 parent: Optional[tk.Tk] = None,
-                 min_width: int = 250,
-                 min_height: int = 180) -> None:
+             message: str = "",
+             message_type: str = "info",
+             parent: Optional[tk.Tk] = None,
+             min_width: int = 250,
+             min_height: int = 180) -> None:
         """
         初始化自定義訊息框
         :param title: 視窗標題
@@ -43,6 +43,10 @@ class CustomMessageBox(tk.Toplevel):
 
         # 初始化結果
         self.result = None
+
+         # 初始化按鈕管理器 (移至此處)
+        from gui.components.button_manager import ButtonManager
+        self.button_manager = ButtonManager(self)
 
         # 創建界面
         self.setup_ui(title, message)
@@ -192,42 +196,53 @@ class CustomMessageBox(tk.Toplevel):
 
     def create_buttons(self, button_frame: ttk.Frame) -> None:
         """創建按鈕"""
-        style = ttk.Style()
-        style.configure('MessageBox.TButton', padding=5)
-
         if self.message_type == "question":
-            ok_button = ttk.Button(
-                button_frame,
-                text="確定",
-                command=self.ok,
-                style='MessageBox.TButton',
-                width=10
-            )
-            ok_button.pack(side=tk.LEFT, padx=5)
+            # 使用按鈕管理器創建按鈕
+            button_configs = [
+                {
+                    'id': 'ok',
+                    'normal_icon': 'ok_icon.png',
+                    'hover_icon': 'ok_hover.png',
+                    'command': self.ok,
+                    'tooltip': '確認',
+                    'side': tk.LEFT,
+                    'padx': 5
+                },
+                {
+                    'id': 'cancel',
+                    'normal_icon': 'cancel_icon.png',
+                    'hover_icon': 'cancel_hover.png',
+                    'command': self.cancel,
+                    'tooltip': '取消',
+                    'side': tk.RIGHT,
+                    'padx': 5
+                }
+            ]
 
-            cancel_button = ttk.Button(
-                button_frame,
-                text="取消",
-                command=self.cancel,
-                style='MessageBox.TButton',
-                width=10
-            )
-            cancel_button.pack(side=tk.RIGHT, padx=5)
+            # 創建按鈕
+            self.dialog_buttons = self.button_manager.create_button_set(button_frame, button_configs)
 
             # 設置預設焦點
-            self.after(100, lambda: ok_button.focus_set())
+            self.after(100, lambda: self.focus_set())
         else:
-            ok_button = ttk.Button(
-                button_frame,
-                text="確定",
-                command=self.ok,
-                style='MessageBox.TButton',
-                width=10
-            )
-            ok_button.pack(side=tk.RIGHT, padx=5)
+            # 對於非問題類型，只創建 OK 按鈕
+            button_configs = [
+                {
+                    'id': 'ok',
+                    'normal_icon': 'ok_icon.png',
+                    'hover_icon': 'ok_hover.png',
+                    'command': self.ok,
+                    'tooltip': '確認',
+                    'side': tk.RIGHT,
+                    'padx': 5
+                }
+            ]
+
+            # 創建按鈕
+            self.dialog_buttons = self.button_manager.create_button_set(button_frame, button_configs)
 
             # 設置預設焦點
-            self.after(100, lambda: ok_button.focus_set())
+            self.after(100, lambda: self.focus_set())
 
     def start_drag(self, event: tk.Event) -> None:
         """開始拖曳"""
