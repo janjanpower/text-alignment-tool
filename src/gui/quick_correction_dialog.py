@@ -4,6 +4,7 @@ import logging
 import os
 from gui.base_dialog import BaseDialog
 from gui.custom_messagebox import show_warning, show_info, show_error
+from gui.components.button_manager import ButtonManager  # 導入按鈕管理器
 
 class QuickCorrectionDialog(BaseDialog):
     """快速添加校正對話框"""
@@ -38,6 +39,9 @@ class QuickCorrectionDialog(BaseDialog):
                 logging.error("無法導入 CorrectionService")
 
         super().__init__(parent, title="添加錯誤校正", width=350, height=200)
+
+        # 初始化按鈕管理器
+        self.button_manager = ButtonManager(self.window)
 
     def create_dialog(self) -> None:
         """創建對話框視窗"""
@@ -82,10 +86,30 @@ class QuickCorrectionDialog(BaseDialog):
         button_frame = ttk.Frame(content_frame)
         button_frame.pack(side=tk.BOTTOM, pady=10)
 
-        ttk.Button(button_frame, text="確定", command=self.ok,
-                  width=10).pack(side=tk.LEFT, padx=5)
-        ttk.Button(button_frame, text="取消", command=self.cancel,
-                  width=10).pack(side=tk.LEFT, padx=5)
+        # 使用按鈕管理器創建按鈕
+        button_configs = [
+            {
+                'id': 'ok',
+                'normal_icon': 'ok_icon.png',
+                'hover_icon': 'ok_hover.png',
+                'command': self.ok,
+                'tooltip': '確認添加',
+                'side': tk.LEFT,
+                'padx': 5
+            },
+            {
+                'id': 'cancel',
+                'normal_icon': 'cancel.png',
+                'hover_icon': 'cancel_hover.png',
+                'command': self.cancel,
+                'tooltip': '取消操作',
+                'side': tk.LEFT,
+                'padx': 5
+            }
+        ]
+
+        # 創建按鈕
+        self.dialog_buttons = self.button_manager.create_button_set(button_frame, button_configs)
 
         # 綁定事件
         self.error_entry.bind('<Return>', lambda e: self.correction_entry.focus())

@@ -59,8 +59,6 @@ class ProjectInputDialog(BaseDialog):
         # 確保輸入框獲得焦點
         self.window.after(100, lambda: self.name_entry.focus_force())
 
-
-
     def validate(self) -> bool:
         """驗證輸入"""
         project_name = self.name_entry.get().strip()

@@ -16,6 +16,8 @@ from typing import Optional, Callable
 
 from utils.resource_cleaner import ResourceCleaner
 from utils.font_manager import FontManager
+from gui.components.button_manager import ButtonManager  # 導入按鈕管理器
+
 class BaseWindow:
     """基礎視窗類別，提供共用的視窗功能"""
 
@@ -41,6 +43,9 @@ class BaseWindow:
 
         # 立即初始化字型管理器
         self.font_manager = FontManager(self.config if hasattr(self, 'config') else None)
+
+        # 初始化按鈕管理器
+        self.button_manager = ButtonManager(self.master)
 
         # 保存視窗尺寸
         self.window_width = width
@@ -77,9 +82,6 @@ class BaseWindow:
 
         # 設置樣式
         self.setup_styles()
-
-        # 初始化字型管理器
-        self.font_manager = FontManager(self.config if hasattr(self, 'config') else None)
 
         # 統一設定關閉協議
         self.master.protocol("WM_DELETE_WINDOW", self._handle_close)
@@ -307,10 +309,18 @@ class BaseWindow:
             except Exception as e:
                 self.logger.error(f"解綁事件時出錯: {e}")
 
+            # 6. 清理按鈕管理器
+            try:
+                if hasattr(self, 'button_manager'):
+                    # 釋放按鈕相關的資源
+                    self.button_manager.buttons.clear()
+                    self.button_manager.button_icons.clear()
+            except Exception as e:
+                self.logger.error(f"清理按鈕管理器時出錯: {e}")
+
             self.logger.debug("資源清理完成")
         except Exception as e:
             self.logger.error(f"清理資源過程中出錯: {e}")
-
 
     def _unbind_all_events(self) -> None:
         """解綁所有事件"""

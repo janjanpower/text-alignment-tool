@@ -13,6 +13,7 @@ from gui.custom_messagebox import show_info, show_warning, show_error, ask_quest
 from gui.alignment_gui import AlignmentGUI
 from services.correction.correction_service import CorrectionService
 from gui.quick_correction_dialog import QuickCorrectionDialog
+from gui.components.button_manager import ButtonManager  # 導入按鈕管理器
 
 class CorrectionInputDialog(BaseDialog):
     """校正項輸入對話框"""
@@ -27,6 +28,9 @@ class CorrectionInputDialog(BaseDialog):
         self.result = None  # 確保在 super().__init__ 之前初始化 result
         self.correction_service = correction_service
         super().__init__(parent, title="新增資料", width=300, height=200)
+
+        # 初始化按鈕管理器
+        self.button_manager = ButtonManager(self.window)
 
     def create_dialog(self) -> None:
         """創建對話框視窗"""
@@ -69,10 +73,30 @@ class CorrectionInputDialog(BaseDialog):
         button_frame = ttk.Frame(content_frame)
         button_frame.pack(side=tk.BOTTOM, pady=10)
 
-        ttk.Button(button_frame, text="確定", command=self.ok,
-                  width=10).pack(side=tk.LEFT, padx=5)
-        ttk.Button(button_frame, text="取消", command=self.cancel,
-                  width=10).pack(side=tk.LEFT, padx=5)
+        # 使用按鈕管理器創建按鈕
+        button_configs = [
+            {
+                'id': 'ok',
+                'normal_icon': 'ok_icon.png',
+                'hover_icon': 'ok_hover.png',
+                'command': self.ok,
+                'tooltip': '確認添加',
+                'side': tk.LEFT,
+                'padx': 5
+            },
+            {
+                'id': 'cancel',
+                'normal_icon': 'cancel.png',
+                'hover_icon': 'cancel_hover.png',
+                'command': self.cancel,
+                'tooltip': '取消操作',
+                'side': tk.LEFT,
+                'padx': 5
+            }
+        ]
+
+        # 創建按鈕
+        self.dialog_buttons = self.button_manager.create_button_set(button_frame, button_configs)
 
         # 綁定事件
         self.error_entry.bind('<Return>', lambda e: self.correction_entry.focus())
@@ -119,12 +143,14 @@ class CorrectionTool(BaseWindow):
         self.project_path = project_path
         self.database_file = os.path.join(project_path, "corrections.csv")
 
+        # 定義 on_correction_change 方法的引用
+        self.on_correction_change = self.on_correction_change_handler  # 添加這行
+
         # 初始化校正服務
         self.correction_service = CorrectionService(
             database_file=self.database_file,
             on_correction_change=self.on_correction_change
         )
-
         # 從校正服務獲取資料
         self.data_rows = [(error, correction) for error, correction in self.correction_service.get_all_corrections().items()]
 
@@ -134,34 +160,11 @@ class CorrectionTool(BaseWindow):
         # 調用父類初始化，並設置包含專案名稱的標題
         super().__init__(title=f"校正資料庫 - {project_name}", width=600, height=300, master=master)
 
+        # 初始化按鈕管理器
+        self.button_manager = ButtonManager(self.main_frame)
+
         # 創建界面
         self.create_correction_interface()
-
-    def on_correction_change(self):
-        """校正數據變化的回調函數"""
-        # 防止短時間內重複更新
-        current_time = time.time()
-        if hasattr(self, '_last_update_time') and current_time - self._last_update_time < 0.1:
-            return
-        self._last_update_time = current_time
-
-        # 清空原有數據
-        self.data_rows = []
-
-        # 從校正服務獲取最新數據
-        self.data_rows = [(error, correction) for error, correction in
-                        self.correction_service.get_all_corrections().items()]
-
-        # 確保沒有重複項
-        unique_data = {}
-        for error, correction in self.data_rows:
-            unique_data[error] = correction
-
-        # 更新為去重後的數據
-        self.data_rows = list(unique_data.items())
-
-        # 更新顯示
-        self.update_display()
 
     def create_correction_interface(self) -> None:
         """創建校正工具界面"""
@@ -173,22 +176,48 @@ class CorrectionTool(BaseWindow):
         toolbar = ttk.Frame(main_frame)
         toolbar.pack(fill=tk.X, pady=(0, 10))
 
-        # 按鈕配置
-        buttons = [
-            ("登出", self.logout),  # 添加登出按鈕，靠左
-            ("文本管理", self.enter_alignment_tool),
-            ("新增資料", self.add_correction),
-            ("刪除資料", self.delete_correction),
+        # 使用按鈕管理器創建按鈕
+        button_configs = [
+            {
+                'id': 'logout',
+                'normal_icon': 'loginout_icon.png',
+                'hover_icon': 'loginout_hover.png',
+                'command': self.logout,
+                'tooltip': '登出系統',
+                'side': tk.LEFT,
+                'padx': 2
+            },
+            {
+                'id': 'text_management',
+                'normal_icon': 'text_icon.png',
+                'hover_icon': 'text_hover.png',
+                'command': self.enter_alignment_tool,
+                'tooltip': '進入文本管理',
+                'side': tk.RIGHT,
+                'padx': 2
+            },
+            {
+                'id': 'add_data',
+                'normal_icon': 'adddata_icon.png',
+                'hover_icon': 'adddata_hover.png',
+                'command': self.add_correction,
+                'tooltip': '新增校正資料',
+                'side': tk.RIGHT,
+                'padx': 2
+            },
+            {
+                'id': 'delete_data',
+                'normal_icon': 'deletedata_icon.png',
+                'hover_icon': 'deletedata_hover.png',
+                'command': self.delete_correction,
+                'tooltip': '刪除校正資料',
+                'side': tk.RIGHT,
+                'padx': 2
+            }
         ]
 
-        # 登出按鈕單獨配置，靠左
-        ttk.Button(toolbar, text=buttons[0][0], command=buttons[0][1],
-                width=15, style='Custom.TButton').pack(side=tk.LEFT, padx=2)
-
-        # 其他按鈕靠右
-        for text, command in buttons[1:]:
-            ttk.Button(toolbar, text=text, command=command,
-                    width=15, style='Custom.TButton').pack(side=tk.RIGHT, padx=2)
+        # 創建按鈕
+        self.toolbar_buttons = self.button_manager.create_button_set(toolbar, button_configs)
 
         # Treeview 和卷軸
         tree_container = ttk.Frame(main_frame)
@@ -477,6 +506,32 @@ class CorrectionTool(BaseWindow):
         except Exception as e:
             show_error("錯誤", f"切換失敗：{str(e)}", self.master)
             sys.exit(1)
+
+    def on_correction_change_handler(self):
+        """校正數據變化的回調函數"""
+        # 防止短時間內重複更新
+        current_time = time.time()
+        if hasattr(self, '_last_update_time') and current_time - self._last_update_time < 0.1:
+            return
+        self._last_update_time = current_time
+
+        # 清空原有數據
+        self.data_rows = []
+
+        # 從校正服務獲取最新數據
+        self.data_rows = [(error, correction) for error, correction in
+                        self.correction_service.get_all_corrections().items()]
+
+        # 確保沒有重複項
+        unique_data = {}
+        for error, correction in self.data_rows:
+            unique_data[error] = correction
+
+        # 更新為去重後的數據
+        self.data_rows = list(unique_data.items())
+
+        # 更新顯示
+        self.update_display()
 
     def cleanup(self):
         """清理資源"""

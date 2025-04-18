@@ -72,11 +72,11 @@ class BaseDialog:
         )
         self.title_label.pack(side=tk.LEFT, padx=5)
 
-        # 關閉按鈕
+        # 關閉按鈕 - 確保調用 cancel 方法
         self.close_button = tk.Button(
             self.title_bar,
             text="×",
-            command=self.cancel,
+            command=self.cancel,  # 修改這裡，使用 self.cancel
             bg='#334D6D',
             fg='white',
             bd=0,
@@ -151,6 +151,12 @@ class BaseDialog:
     def close(self) -> None:
         """關閉對話框"""
         try:
+            # 清理按鈕管理器資源
+            if hasattr(self, 'button_manager'):
+                self.button_manager.buttons.clear()
+                self.button_manager.button_icons.clear()
+
+            # 釋放其他資源
             self.window.grab_release()
             self.window.destroy()
         except Exception as e:

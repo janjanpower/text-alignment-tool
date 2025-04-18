@@ -29,6 +29,13 @@ class GUIBuilder:
         # 保存創建的工具提示彈窗
         self.tooltip = None
 
+        # 圖片管理器引用，稍後可以設置
+        self.image_manager = None
+
+    def set_image_manager(self, image_manager):
+        """設置圖片管理器"""
+        self.image_manager = image_manager
+
     def create_menu(self, menu_frame, menu_commands: Dict[str, Dict[str, Callable]]) -> None:
         """
         創建選單列
@@ -57,29 +64,59 @@ class GUIBuilder:
         except Exception as e:
             self.logger.error(f"創建選單時出錯: {e}")
 
-    def create_toolbar(self, toolbar_frame, buttons: List[Dict[str, Any]]) -> None:
+    def create_toolbar(self, toolbar_frame, buttons: List[Dict[str, Any]]) -> Dict[str, tk.Widget]:
         """
-        創建基本文字工具列
+        創建工具列，支援文字或圖片按鈕
         :param toolbar_frame: 工具列框架
-        :param buttons: 按鈕配置列表，格式 [{'text': '按鈕文字', 'command': 按鈕命令, 'width': 寬度}, ...]
+        :param buttons: 按鈕配置列表
+        :return: 創建的按鈕字典 {button_id: button_widget}
         """
+        created_buttons = {}
+
         try:
             # 使用 enumerate 來追蹤每個按鈕的位置
             for index, button_config in enumerate(buttons):
+                button_id = button_config.get('id', f'button_{index}')
                 text = button_config.get('text', '')
                 command = button_config.get('command', None)
                 width = button_config.get('width', 15)
+                tooltip = button_config.get('tooltip', text)
+                icon_id = button_config.get('icon_id', None)
+                side = button_config.get('side', tk.LEFT)
 
-                btn = ttk.Button(
-                    toolbar_frame,
-                    text=text,
-                    command=command,
-                    width=width,
-                    style='Custom.TButton'
-                )
-                btn.pack(side=tk.LEFT, padx=5)
+                # 判斷是否使用圖示按鈕
+                if icon_id and self.image_manager:
+                    # 創建圖示按鈕
+                    btn = self.image_manager.create_image_button(
+                        toolbar_frame,
+                        icon_id,
+                        command,
+                        tooltip=tooltip
+                    )
+                    btn.pack(side=side, padx=5)
+                else:
+                    # 創建文字按鈕
+                    btn = ttk.Button(
+                        toolbar_frame,
+                        text=text,
+                        command=command,
+                        width=width,
+                        style='Custom.TButton'
+                    )
+                    btn.pack(side=side, padx=5)
+
+                    # 添加提示文字
+                    if tooltip:
+                        self.create_tooltip(btn, tooltip)
+
+                # 保存創建的按鈕
+                created_buttons[button_id] = btn
+
+            return created_buttons
+
         except Exception as e:
             self.logger.error(f"創建工具列時出錯: {e}")
+            return created_buttons
 
     def create_image_button(self, toolbar_frame, button_config: Dict, normal_img, pressed_img) -> tk.Label:
         """
@@ -93,10 +130,11 @@ class GUIBuilder:
         try:
             command = button_config.get('command', None)
             tooltip = button_config.get('tooltip', '')
+            side = button_config.get('side', tk.LEFT)
 
             # 創建按鈕框架
             btn_frame = ttk.Frame(toolbar_frame)
-            btn_frame.pack(side=tk.LEFT, padx=5)
+            btn_frame.pack(side=side, padx=5)
 
             # 創建標籤按鈕
             btn = tk.Label(
@@ -162,7 +200,7 @@ class GUIBuilder:
             self.tooltip.wm_overrideredirect(True)
             self.tooltip.wm_geometry(f"+{x}+{y}")
 
-            label = ttk.Label(self.tooltip, text=text, background="#ffffe0", relief="solid", borderwidth=3, padding=(5,2))
+            label = ttk.Label(self.tooltip, text=text, background="#ffffe0", relief="solid", borderwidth=1, padding=(5,2))
             label.pack()
 
         def leave(event):
@@ -274,3 +312,54 @@ class GUIBuilder:
         """
         if self.status_var:
             self.status_var.set(status_text)
+
+    def create_button_set(self, frame, button_configs, image_manager=None):
+        """
+        創建一組按鈕，支援圖示按鈕和文字按鈕
+
+        :param frame: 父框架
+        :param button_configs: 按鈕配置列表
+        :param image_manager: 圖片管理器 (可選)
+        :return: 創建的按鈕字典 {button_id: button_widget}
+        """
+        buttons = {}
+
+        for config in button_configs:
+            button_id = config.get('id', f'btn_{len(buttons)}')
+            text = config.get('text', '')
+            command = config.get('command')
+            icon_id = config.get('icon_id')
+            tooltip = config.get('tooltip', text)
+            width = config.get('width', 10)
+            side = config.get('side', tk.LEFT)
+            padx = config.get('padx', 5)
+            pady = config.get('pady', 0)
+
+            # 判斷是使用圖示按鈕還是文字按鈕
+            if icon_id and image_manager:
+                # 建立圖示按鈕
+                btn = image_manager.create_image_button(
+                    frame,
+                    icon_id,
+                    command,
+                    tooltip=tooltip
+                )
+            else:
+                # 建立文字按鈕
+                btn = ttk.Button(
+                    frame,
+                    text=text,
+                    command=command,
+                    width=width
+                )
+                # 添加提示文字
+                if tooltip:
+                    self.create_tooltip(btn, tooltip)
+
+            # 放置按鈕
+            btn.pack(side=side, padx=padx, pady=pady)
+
+            # 保存按鈕引用
+            buttons[button_id] = btn
+
+        return buttons

@@ -1,5 +1,6 @@
 """登入視窗類別模組"""
 
+
 import datetime
 import json
 import os
@@ -15,6 +16,8 @@ from gui.project_manager import ProjectManager
 from utils.font_manager import FontManager
 from services.config_manager import ConfigManager
 from gui.alignment_gui import AlignmentGUI
+from gui.components.button_manager import ButtonManager  # 導入按鈕管理器
+
 class LoginWindow(BaseWindow):
     """登入視窗類別"""
 
@@ -25,6 +28,9 @@ class LoginWindow(BaseWindow):
         # 確保字型管理器存在
         if not hasattr(self, 'font_manager'):
             self.font_manager = FontManager(self.config if hasattr(self, 'config') else None)
+
+        # 初始化按鈕管理器
+        self.button_manager = ButtonManager(self.main_frame)
 
         # 初始化資料庫連接
         self.db_manager = DatabaseManager()
@@ -145,6 +151,7 @@ class LoginWindow(BaseWindow):
             show="*"  # 確保密碼顯示為 * 號
         )
         self.password_entry.pack(fill=tk.X)
+
         # 記住帳號勾選框
         self.remember_var = tk.BooleanVar(value=False)
         remember_frame = ttk.Frame(main_frame)
@@ -166,13 +173,30 @@ class LoginWindow(BaseWindow):
         inner_button_frame = ttk.Frame(button_frame)
         inner_button_frame.pack(anchor=tk.CENTER)
 
-        # 登入按鈕
-        login_button = ttk.Button(inner_button_frame, text="登入", command=self.login, width=10)
-        login_button.pack(side=tk.LEFT, padx=5)
+        # 使用按鈕管理器創建圖片按鈕
+        button_configs = [
+            {
+                'id': 'login',
+                'normal_icon': 'login_icon.png',
+                'hover_icon': 'login_hover.png',
+                'command': self.login,
+                'tooltip': '登入系統',
+                'side': tk.LEFT,
+                'padx': 10
+            },
+            {
+                'id': 'register',
+                'normal_icon': 'register_icon.png',
+                'hover_icon': 'register_hover.png',
+                'command': self.show_register,
+                'tooltip': '註冊帳號',
+                'side': tk.LEFT,
+                'padx': 10
+            }
+        ]
 
-        # 註冊按鈕
-        register_button = ttk.Button(inner_button_frame, text="註冊", command=self.show_register, width=10)
-        register_button.pack(side=tk.LEFT, padx=5)
+        # 創建按鈕
+        self.login_buttons = self.button_manager.create_button_set(inner_button_frame, button_configs)
 
         # 設置焦點和綁定 Enter 鍵
         self.username_entry.focus_set()
@@ -354,12 +378,29 @@ class LoginWindow(BaseWindow):
 
     def show_register(self):
         """顯示註冊視窗"""
+        # 先禁用登入視窗，保持其存在但不可操作
+        self.master.attributes('-disabled', True)
+
+        # 建立並顯示註冊對話框
         register_dialog = RegisterDialog(self.master)
+
+        # 等待註冊對話框關閉
+        self.master.wait_window(register_dialog.window)
+
+        # 重新啟用登入視窗
+        self.master.attributes('-disabled', False)
+
+        # 如果註冊成功，填入使用者名稱並設置焦點
         if register_dialog.result:
-            # 註冊成功後自動填入使用者名稱
             self.username_entry.delete(0, tk.END)
             self.username_entry.insert(0, register_dialog.result)
             self.password_entry.focus_set()
+        else:
+            # 如果註冊取消或關閉，則焦點回到使用者名稱輸入框
+            self.username_entry.focus_set()
+
+        # 強制讓登入視窗獲取焦點
+        self.master.focus_force()
 
     def cleanup(self):
         """清理資源"""
@@ -375,11 +416,22 @@ class RegisterDialog(BaseDialog):
     def __init__(self, parent=None):
         """初始化註冊對話框"""
         self.result = None
+
+        # 先調用父類初始化
         super().__init__(parent, title="註冊新使用者", width=400, height=300)
+
+        # 在 window 創建後再初始化按鈕管理器
+        from gui.components.button_manager import ButtonManager
+        self.button_manager = ButtonManager(self.window)
 
     def create_dialog(self) -> None:
         """創建對話框視窗"""
         super().create_dialog()
+
+        # 確保按鈕管理器已初始化
+        if not hasattr(self, 'button_manager'):
+            from gui.components.button_manager import ButtonManager
+            self.button_manager = ButtonManager(self.window)
 
         # 初始化資料庫連接
         self.db_manager = DatabaseManager()
@@ -397,6 +449,7 @@ class RegisterDialog(BaseDialog):
         # 標題
         title_label = ttk.Label(main_frame, text="SRT文本處理系統 - 註冊", font=("Noto Sans TC", 13))
         title_label.pack(pady=(0, 20))
+
 
         # 載入圖標 - 基於新的資料夾結構
         try:
@@ -569,13 +622,30 @@ class RegisterDialog(BaseDialog):
         inner_button_frame = ttk.Frame(button_frame)
         inner_button_frame.pack(anchor=tk.CENTER)
 
-        # 註冊按鈕
-        register_button = ttk.Button(inner_button_frame, text="註冊", command=self.register, width=10)
-        register_button.pack(side=tk.LEFT, padx=5)
+        # 使用按鈕管理器創建圖片按鈕
+        button_configs = [
+            {
+                'id': 'register',
+                'normal_icon': 'register_icon.png',
+                'hover_icon': 'register_hover.png',
+                'command': self.register,
+                'tooltip': '註冊新帳號',
+                'side': tk.LEFT,
+                'padx': 10
+            },
+            {
+                'id': 'cancel',
+                'normal_icon': 'cancel.png',
+                'hover_icon': 'cancel_hover.png',
+                'command': self.cancel,
+                'tooltip': '取消註冊',
+                'side': tk.LEFT,
+                'padx': 10
+            }
+        ]
 
-        # 取消按鈕
-        cancel_button = ttk.Button(inner_button_frame, text="取消", command=self.cancel, width=10)
-        cancel_button.pack(side=tk.LEFT, padx=5)
+        # 創建按鈕
+        self.register_buttons = self.button_manager.create_button_set(inner_button_frame, button_configs)
 
         # 設置焦點
         self.username_entry.focus_set()
@@ -638,3 +708,26 @@ class RegisterDialog(BaseDialog):
         # 關閉資料庫連接
         if hasattr(self, 'db_session'):
             self.db_manager.close_session(self.db_session)
+
+    def ok(self, event=None):
+        """確定按鈕事件"""
+        try:
+            if self.validate():
+                self.apply()
+                # 釋放窗口控制權，但不立即銷毀
+                self.window.grab_release()
+                self.window.destroy()
+        except tk.TclError:
+            # 窗口可能已關閉
+            pass
+
+    def cancel(self, event=None):
+        """取消按鈕事件"""
+        try:
+            self.result = None
+            # 釋放窗口控制權，但不立即銷毀
+            self.window.grab_release()
+            self.window.destroy()
+        except tk.TclError:
+            # 窗口可能已關閉
+            pass
