@@ -539,6 +539,64 @@ class TimeSliderController:
             import traceback
             self.logger.error(traceback.format_exc())
 
+    def _update_slider_audio_view(self, start_ms, end_ms):
+        """更新音頻視圖顯示，確保正確顯示所有文本的時間範圍"""
+        try:
+            # 確保音頻段落和可視化器存在
+            if not self.audio_segment or not self.audio_visualizer:
+                return
+
+            # 關鍵修正：檢查並交換顛倒的時間
+            if start_ms > end_ms:
+                self.logger.warning(f"時間範圍顛倒: {start_ms} - {end_ms}，自動交換")
+                start_ms, end_ms = end_ms, start_ms
+
+            # 確保時間範圍有效
+            audio_length = len(self.audio_segment) if hasattr(self, 'audio_segment') and self.audio_segment else 100000
+            start_ms = max(0, min(start_ms, audio_length))
+            end_ms = max(start_ms + 100, min(end_ms, audio_length))    # 確保至少100ms的時間範圍
+
+            # 修正：確保時間範圍有效
+            if end_ms <= start_ms:
+                self.logger.warning(f"計算出的視圖範圍無效: {start_ms} - {end_ms}")
+                # 根據開始時間創建合理的結束時間
+                end_ms = min(start_ms + 2000, audio_length)  # 至少顯示2秒
+
+            # 計算視圖範圍，保持選擇區域在中間
+            duration = end_ms - start_ms
+            center_time = (start_ms + end_ms) / 2
+
+            # 動態調整視圖寬度，確保合適的上下文
+            view_width = max(duration * 3, 2000)  # 至少顯示2秒或時間範圍的3倍
+            display_start = max(0, center_time - view_width / 2)
+            display_end = min(audio_length, center_time + view_width / 2)
+
+            # 確保視圖寬度符合預期
+            if display_end - display_start < view_width:
+                # 如果範圍受到音頻長度限制，調整起點確保寬度
+                if display_end == audio_length:
+                    display_start = max(0, audio_length - view_width)
+                # 或者調整終點確保寬度
+                else:
+                    display_end = min(audio_length, display_start + view_width)
+
+            # 確保視圖範圍始終有效
+            if display_end <= display_start:
+                self.logger.warning(f"無法創建有效的視圖範圍: {display_start} - {display_end}")
+                display_start = 0
+                display_end = min(2000, audio_length)  # 默認顯示前2秒或全部內容
+
+            # 更新波形和選擇區域
+            self.audio_visualizer.update_waveform_and_selection(
+                (display_start, display_end),
+                (start_ms, end_ms)
+            )
+
+        except Exception as e:
+            self.logger.error(f"更新音頻視圖時出錯: {e}")
+            import traceback
+            self.logger.error(traceback.format_exc())
+
     def _calculate_slider_range(self, slider_params):
         """計算滑桿範圍"""
         column_name = slider_params['column_name']
