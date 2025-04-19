@@ -48,40 +48,15 @@ class AudioVisualizer:
     def _preprocess_audio(self, audio_segment):
         """
         預處理音頻數據，確保音頻的一致性和可用性
-
-        Args:
-            audio_segment (AudioSegment): 待處理的音頻段落
-
-        Returns:
-            numpy.ndarray: 處理後的音頻樣本數據
         """
         try:
-            # 詳細的前置檢查
-            if audio_segment is None:
-                self.logger.error("音頻段落為 None")
-                return np.zeros(1000, dtype=np.float32)
+            # 確保音頻為標準格式
+            audio_segment = audio_segment.set_sample_width(2)
+            audio_segment = audio_segment.set_frame_rate(44100)
+            audio_segment = audio_segment.set_channels(1)
 
-            if len(audio_segment) == 0:
-                self.logger.error("音頻段落長度為 0")
-                return np.zeros(1000, dtype=np.float32)
-
-            # 強制標準化音頻格式
-            try:
-                # 確保音頻為 16-bit PCM
-                audio_segment = audio_segment.set_sample_width(2)
-                # 設置為 44.1kHz 單聲道
-                audio_segment = audio_segment.set_frame_rate(44100)
-                audio_segment = audio_segment.set_channels(1)
-            except Exception as format_e:
-                self.logger.error(f"音頻格式標準化失敗: {format_e}")
-                return np.zeros(1000, dtype=np.float32)
-
-            # 安全獲取樣本數據
-            try:
-                samples = np.array(audio_segment.get_array_of_samples(), dtype=np.float32)
-            except Exception as sample_e:
-                self.logger.error(f"獲取音頻樣本失敗: {sample_e}")
-                return np.zeros(1000, dtype=np.float32)
+            # 獲取樣本數據
+            samples = np.array(audio_segment.get_array_of_samples(), dtype=np.float32)
 
             # 檢查樣本數據
             if len(samples) == 0:
@@ -93,15 +68,18 @@ class AudioVisualizer:
             if max_abs > 0:
                 samples = samples / max_abs
             else:
-                samples = np.zeros_like(samples)
+                # 返回一個有輕微波動的默認波形，而不是全零
+                t = np.linspace(0, 1, 1000)
+                samples = np.sin(2 * np.pi * 5 * t) * 0.1  # 輕微正弦波
 
-            # 日誌記錄
             self.logger.debug(f"音頻預處理成功: 樣本數 = {len(samples)}, 最大振幅 = {max_abs}")
 
             return samples
 
         except Exception as e:
             self.logger.error(f"音頻預處理的整體異常: {e}")
+            import traceback
+            self.logger.error(traceback.format_exc())
             return np.zeros(1000, dtype=np.float32)
 
     def _calculate_dynamic_view_range(self, start_time: int, end_time: int) -> Tuple[int, int]:
@@ -118,6 +96,8 @@ class AudioVisualizer:
         try:
             # 計算選擇範圍的持續時間
             selection_duration = end_time - start_time
+            if selection_duration <= 0:  # 新增：檢查防止無效的選擇範圍
+                return (0, 2000)
 
             # 基礎視圖範圍：根據選擇範圍動態調整
             # 時間越短，視圖範圍越小（放大）；時間越長，視圖範圍越大（縮小）
@@ -173,32 +153,20 @@ class AudioVisualizer:
             self.original_audio = audio_segment
             self.audio_duration = len(audio_segment)
 
-            # 預處理並緩存音頻數據 - 添加更多檢查
+            # 預處理並緩存音頻數據
             self.samples_cache = self._preprocess_audio(audio_segment)
 
             # 額外檢查緩存的樣本
-            if len(self.samples_cache) == 0:
+            if self.samples_cache is None or len(self.samples_cache) == 0:
                 self.logger.error("預處理後的音頻樣本為空")
                 self._create_empty_waveform("音頻樣本處理失敗")
                 return
 
             self.logger.debug(f"音頻段落設置完成，總時長: {self.audio_duration}ms, 樣本數: {len(self.samples_cache)}")
 
-            # 初始化視圖範圍
-            self.view_quantum_step = max(100, int(self.audio_duration * 0.01))
-
-            # 設置初始視圖範圍
-            initial_view_start = 0
-            initial_view_end = min(self.audio_duration, self.view_quantum_step * 10)
-
-            # 設置當前視圖範圍
-            self.current_view_range = (initial_view_start, initial_view_end)
-
-            # 創建初始波形視圖
-            self.create_waveform_with_selection(
-                (initial_view_start, initial_view_end),
-                (initial_view_start, initial_view_end)
-            )
+            # 設置初始視圖範圍，但先不創建波形
+            self.current_view_range = (0, min(self.audio_duration, 2000))
+            self.current_selection_range = (0, 0)
 
         except Exception as e:
             self.logger.error(f"設置音頻段落時出錯: {e}")
@@ -209,17 +177,37 @@ class AudioVisualizer:
     def update_waveform_and_selection(self, view_range: Tuple[int, int], selection_range: Tuple[int, int]) -> None:
         try:
             if self.samples_cache is None or self.original_audio is None:
+                self.logger.warning("音頻數據未初始化")
                 self._create_empty_waveform("未設置音頻數據")
                 return
 
             view_start, view_end = view_range
             sel_start, sel_end = selection_range
 
-            # 確保範圍有效
+            # 修正: 確保結束時間大於開始時間
+            if view_end <= view_start:
+                self.logger.warning(f"無效的視圖範圍: {view_start} - {view_end}")
+                # 修正邏輯：如果結束時間小於開始時間，可能是參數順序錯誤
+                view_start, view_end = min(view_start, view_end), max(view_start, view_end)
+                # 如果還是無效，設置默認範圍
+                if view_end <= view_start:
+                    view_start = 0
+                    view_end = min(self.audio_duration, 2000)
+                self.logger.debug(f"已修正視圖範圍為: {view_start} - {view_end}")
+
+            # 確保範圍在音頻長度內
             view_start = max(0, view_start)
             view_end = min(self.audio_duration, view_end)
-            sel_start = max(view_start, sel_start)
-            sel_end = min(view_end, sel_end)
+
+            # 確保選擇範圍有效
+            sel_start = max(view_start, min(sel_start, sel_end))
+            sel_end = min(view_end, max(sel_start, sel_end))
+
+            # 計算視圖寬度
+            view_duration = view_end - view_start
+            if view_duration <= 0:
+                view_duration = 2000  # 默認 2 秒視圖
+                view_end = view_start + view_duration
 
             # 創建圖像
             img = Image.new('RGBA', (self.width, self.height), (30, 30, 30, 255))
@@ -230,7 +218,7 @@ class AudioVisualizer:
             draw.line([(0, center_y), (self.width, center_y)], fill=(70, 70, 70, 255), width=1)
 
             # 計算樣本範圍
-            sample_rate = len(self.samples_cache) / self.audio_duration
+            sample_rate = len(self.samples_cache) / self.audio_duration if self.audio_duration > 0 else 44100
             start_sample = int(view_start * sample_rate)
             end_sample = int(view_end * sample_rate)
 
@@ -241,10 +229,19 @@ class AudioVisualizer:
             # 獲取顯示區域的樣本
             display_samples = self.samples_cache[start_sample:end_sample]
 
+            # 確保有樣本數據
+            if len(display_samples) == 0:
+                self.logger.warning("無有效的顯示樣本")
+                # 使用整個樣本範圍
+                display_samples = self.samples_cache
+                if len(display_samples) == 0:
+                    self.logger.warning("音頻緩存為空")
+                    self._create_empty_waveform("無音頻數據")
+                    return
+
             # 智能降採樣
             if len(display_samples) > self.width * 2:
-                # 使用RMS降採樣以保留更多細節
-                samples_per_pixel = len(display_samples) // self.width
+                samples_per_pixel = max(1, len(display_samples) // self.width)
                 downsampled = []
 
                 for i in range(self.width):
@@ -253,17 +250,16 @@ class AudioVisualizer:
 
                     if start_idx < len(display_samples) and end_idx > start_idx:
                         segment = display_samples[start_idx:end_idx]
-                        # 使用RMS值以更好地表示振幅
+                        # 使用RMS值更好地表示振幅
                         rms = np.sqrt(np.mean(segment**2))
                         downsampled.append(rms)
                     else:
                         downsampled.append(0)
             else:
-                # 簡單映射
-                x_scale = self.width / len(display_samples)
+                # 直接映射
                 downsampled = []
                 for i in range(self.width):
-                    sample_idx = int(i / x_scale)
+                    sample_idx = int(i * len(display_samples) / self.width) if len(display_samples) > 0 else 0
                     if sample_idx < len(display_samples):
                         downsampled.append(abs(display_samples[sample_idx]))
                     else:
@@ -271,8 +267,12 @@ class AudioVisualizer:
 
             # 正規化
             downsampled = np.array(downsampled)
-            if np.max(downsampled) > 0:
-                downsampled = downsampled / np.max(downsampled)
+            max_downsampled = np.max(downsampled)
+            if max_downsampled > 0:
+                downsampled = downsampled / max_downsampled
+            else:
+                # 如果全是0，創建一個小的隨機波形
+                downsampled = np.random.rand(self.width) * 0.1
 
             # 繪製波形
             for x in range(self.width):
@@ -284,18 +284,21 @@ class AudioVisualizer:
                     draw.line([(x, y1), (x, y2)], fill=(100, 210, 255, 255), width=2)
 
             # 計算選擇區域在視圖中的精確像素位置
-            view_duration = view_end - view_start
             if view_duration > 0:
-                # 改進的像素位置計算
+                # 新增日誌來調試計算
+                self.logger.debug(f"視圖範圍: {view_start} - {view_end}, 選擇範圍: {sel_start} - {sel_end}")
+
                 pixel_start = int(((sel_start - view_start) / view_duration) * self.width)
                 pixel_end = int(((sel_end - view_start) / view_duration) * self.width)
 
-                # 確保高亮區域至少可見
+                # 確保至少有 1 像素寬度的高亮
                 if pixel_end - pixel_start < 1:
                     pixel_end = pixel_start + 1
 
                 pixel_start = max(0, pixel_start)
                 pixel_end = min(self.width, pixel_end)
+
+                self.logger.debug(f"像素範圍: {pixel_start} - {pixel_end}")
 
                 # 繪製高亮區域
                 if pixel_start < pixel_end:
@@ -306,7 +309,7 @@ class AudioVisualizer:
                     # 半透明藍色高亮
                     overlay_draw.rectangle(
                         [(pixel_start, 0), (pixel_end, self.height)],
-                        fill=(79, 195, 247, 100)  # 降低透明度以便更好地看到波形
+                        fill=(79, 195, 247, 100)
                     )
 
                     # 邊界線
@@ -340,6 +343,8 @@ class AudioVisualizer:
 
         except Exception as e:
             self.logger.error(f"更新波形時出錯: {e}")
+            import traceback
+            self.logger.error(traceback.format_exc())
             self._create_empty_waveform(f"錯誤: {str(e)}")
 
     def _create_empty_waveform(self, message="等待音頻..."):
@@ -394,44 +399,51 @@ class AudioVisualizer:
             start_ms = max(0, start_ms)
             end_ms = min(end_ms, self.audio_duration)
 
-            # 如果選擇區域改變，重新繪製
-            if (start_ms, end_ms) != self.current_selection_range:
-                # 檢查當前視圖範圍
+            # 更新當前選擇範圍
+            self.current_selection_range = (start_ms, end_ms)
+
+            # 檢查當前視圖範圍
+            if not hasattr(self, 'current_view_range') or self.current_view_range == (0, 0):
+                # 如果沒有有效的視圖範圍，計算一個新的
+                duration = end_ms - start_ms
+                center_time = (start_ms + end_ms) / 2
+
+                # 根據選擇範圍動態設置視圖寬度
+                if duration < 500:
+                    view_width = 2000  # 至少 2 秒視圖
+                elif duration < 2000:
+                    view_width = duration * 3
+                else:
+                    view_width = duration * 2
+
+                view_start = max(0, center_time - view_width / 2)
+                view_end = min(self.audio_duration, center_time + view_width / 2)
+
+                # 確保視圖範圍完全包含選擇範圍
+                if start_ms < view_start:
+                    view_start = max(0, start_ms - 500)
+                if end_ms > view_end:
+                    view_end = min(self.audio_duration, end_ms + 500)
+
+                self.current_view_range = (view_start, view_end)
+            else:
                 view_start, view_end = self.current_view_range
 
-                # 如果當前視圖範圍有效
-                if view_start < view_end:
-                    # 檢查選擇區域是否在當前視圖範圍內
-                    if end_ms < view_start or start_ms > view_end:
-                        # 選擇區域完全在視圖範圍外，調整視圖範圍
-                        duration = end_ms - start_ms
-                        center_time = (start_ms + end_ms) / 2
-
-                        # 動態調整視圖寬度
-                        view_width = max(duration * 3, 2000)  # 至少2秒或時間範圍的3倍
-                        new_view_start = max(0, center_time - view_width / 2)
-                        new_view_end = min(self.audio_duration, new_view_start + view_width)
-
-                        # 確保視圖範圍不超出音頻長度
-                        if new_view_end > self.audio_duration:
-                            new_view_start = max(0, self.audio_duration - view_width)
-                            new_view_end = self.audio_duration
-
-                        # 更新視圖範圍和選擇區域
-                        self.update_waveform_and_selection((new_view_start, new_view_end), (start_ms, end_ms))
-                    else:
-                        # 選擇區域與視圖範圍有交集，只需更新選擇區域
-                        self.update_waveform_and_selection(self.current_view_range, (start_ms, end_ms))
-                else:
-                    # 如果當前視圖範圍無效，創建新的視圖範圍
+                # 檢查選擇區域是否在當前視圖範圍內
+                if end_ms < view_start or start_ms > view_end:
+                    # 選擇區域完全在視圖範圍外，重新計算視圖範圍
                     duration = end_ms - start_ms
                     center_time = (start_ms + end_ms) / 2
-                    view_width = max(duration * 3, 2000)
-                    new_view_start = max(0, center_time - view_width / 2)
-                    new_view_end = min(self.audio_duration, new_view_start + view_width)
 
-                    # 更新視圖範圍和選擇區域
-                    self.update_waveform_and_selection((new_view_start, new_view_end), (start_ms, end_ms))
+                    view_width = max(duration * 3, 2000)
+                    view_start = max(0, center_time - view_width / 2)
+                    view_end = min(self.audio_duration, view_start + view_width)
+
+                    self.current_view_range = (view_start, view_end)
+
+            # 更新波形和選擇區域
+            self.update_waveform_and_selection(self.current_view_range, self.current_selection_range)
+
         except Exception as e:
             self.logger.error(f"更新選擇區域時出錯: {e}")
             import traceback

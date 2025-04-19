@@ -1,7 +1,3 @@
-# src/audio/waveform_zoom_manager.py
-from typing import Tuple
-
-
 class WaveformZoomManager:
     """
     波形縮放管理器，負責動態計算視圖範圍和縮放比例
@@ -16,6 +12,9 @@ class WaveformZoomManager:
         計算最佳縮放級別，根據選中文本的持續時間動態調整
         """
         duration = end_time - start_time
+        if duration <= 0:
+            duration = 100  # 最小持續時間
+
         center_time = (start_time + end_time) / 2
 
         # 動態調整縮放係數
@@ -37,39 +36,15 @@ class WaveformZoomManager:
         view_start = max(0, center_time - view_width / 2)
         view_end = min(self.audio_duration, view_start + view_width)
 
-        # 調整確保包含完整選擇區域
+        # 確保包含完整選擇區域
         if view_start > start_time:
             view_start = max(0, start_time - view_width * 0.1)
         if view_end < end_time:
             view_end = min(self.audio_duration, end_time + view_width * 0.1)
 
-        return view_start, view_end
-
-    def calculate_drag_zoom(self, new_time: int, fixed_time: int,
-                           is_start_adjustment: bool,
-                           current_view_range: Tuple[int, int]) -> Tuple[int, int]:
-        """
-        計算拖動時的縮放效果
-        """
-        current_duration = abs(new_time - fixed_time)
-        current_view_width = current_view_range[1] - current_view_range[0]
-
-        # 根據選擇範圍變化調整視圖寬度
-        if current_duration < 500:
-            new_view_width = current_view_width * 0.9  # 放大視圖
-        elif current_duration > 2000:
-            new_view_width = current_view_width * 1.1  # 縮小視圖
-        else:
-            new_view_width = current_view_width
-
-        new_view_width = max(self.min_view_width, min(self.max_view_width, new_view_width))
-
-        # 計算新的視圖範圍
-        if is_start_adjustment:
-            view_end = min(self.audio_duration, fixed_time + new_view_width * 0.3)
-            view_start = max(0, view_end - new_view_width)
-        else:
-            view_start = max(0, fixed_time - new_view_width * 0.3)
-            view_end = min(self.audio_duration, view_start + new_view_width)
+        # 如果計算結果無效，使用默認值
+        if view_end <= view_start:
+            view_start = max(0, center_time - 1000)
+            view_end = min(self.audio_duration, center_time + 1000)
 
         return view_start, view_end

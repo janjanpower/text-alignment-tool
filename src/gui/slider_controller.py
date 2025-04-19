@@ -271,8 +271,15 @@ class TimeSliderController:
 
         # 確保範圍有效
         if min_value >= max_value:
-            min_value = slider_params['current_value'] - 1000
-            max_value = slider_params['current_value'] + 1000
+            self.logger.warning(f"滑桿範圍無效: min={min_value}, max={max_value}")
+            min_value = max(0, slider_params['current_value'] - 5000)
+            max_value = slider_params['current_value'] + 5000
+            self.logger.debug(f"使用替代範圍: {min_value} - {max_value}")
+
+        # 確保當前值在範圍內
+        current_value = slider_params['current_value']
+        current_value = max(min_value, min(current_value, max_value))
+        slider_params['current_value'] = current_value
 
         # 計算滑桿位置
         slider_y = 25  # 基本位置
@@ -302,45 +309,68 @@ class TimeSliderController:
     def _setup_audio_visualization(self, slider_params):
         """設置音頻可視化"""
         if not self.audio_segment:
+            self.logger.warning("無音頻數據可供顯示")
             return
 
-        # 創建音頻可視化容器
-        visualizer_container = tk.Frame(self.slider_frame, bg="#1E1E1E")
-        visualizer_container.place(x=5, y=30, width=290, height=40)
+        try:
+            # 創建音頻可視化容器
+            visualizer_container = tk.Frame(self.slider_frame, bg="#1E1E1E")
+            visualizer_container.place(x=5, y=30, width=290, height=40)
 
-        # 創建可視化器
-        self.audio_visualizer = AudioVisualizer(
-            visualizer_container,
-            width=280,
-            height=30
-        )
-        self.audio_visualizer.show()
+            # 創建可視化器
+            self.audio_visualizer = AudioVisualizer(
+                visualizer_container,
+                width=280,
+                height=30
+            )
+            self.audio_visualizer.show()
 
-        # 設置音頻段落
-        self.audio_visualizer.set_audio_segment(self.audio_segment)
+            # 關鍵：確保音頻段落正確設置
+            self.audio_visualizer.set_audio_segment(self.audio_segment)
 
-        # 初始化縮放管理器
-        if not hasattr(self, 'zoom_manager'):
-            from audio.waveform_zoom_manager import WaveformZoomManager
-            self.zoom_manager = WaveformZoomManager(len(self.audio_segment))
+            # 等待一小段時間確保資源準備完成
+            self.slider_frame.update_idletasks()
 
-        # 計算最佳視圖範圍
-        view_start, view_end = self.zoom_manager.calculate_optimal_zoom(
-            slider_params['item_start_time'],
-            slider_params['item_end_time']
-        )
+            # 計算初始視圖範圍
+            start_time = slider_params['item_start_time']
+            end_time = slider_params['item_end_time']
+            duration = end_time - start_time
+            center_time = (start_time + end_time) / 2
 
-        # 創建初始波形
-        self.audio_visualizer.create_waveform_with_selection(
-            (view_start, view_end),
-            (slider_params['item_start_time'], slider_params['item_end_time'])
-        )
+            # 設置視圖寬度
+            if duration < 500:
+                view_width = 2000
+            elif duration < 2000:
+                view_width = duration * 3
+            else:
+                view_width = duration * 2
 
-        # 更新滑桿目標
-        self.slider_target.update({
-            'view_start': view_start,
-            'view_end': view_end
-        })
+            view_start = max(0, center_time - view_width / 2)
+            view_end = min(len(self.audio_segment), center_time + view_width / 2)
+
+            # 確保視圖範圍包含選擇區域
+            if start_time < view_start:
+                view_start = max(0, start_time - 200)
+            if end_time > view_end:
+                view_end = min(len(self.audio_segment), end_time + 200)
+
+            # 創建初始波形 - 使用更新後的方法
+            self.audio_visualizer.update_waveform_and_selection(
+                (view_start, view_end),
+                (start_time, end_time)
+            )
+
+            # 更新滑桿目標
+            if self.slider_target:
+                self.slider_target.update({
+                    'view_start': view_start,
+                    'view_end': view_end
+                })
+
+        except Exception as e:
+            self.logger.error(f"設置音頻可視化時出錯: {e}")
+            import traceback
+            self.logger.error(traceback.format_exc())
 
     def on_slider_change(self, value):
         """滑桿值變化時的處理"""
@@ -351,15 +381,30 @@ class TimeSliderController:
             # 獲取新時間值
             new_value = float(value)
 
-            # 更新樹狀視圖
+            # 更新樹狀視圖並獲取新的時間範圍
             time_range = self._update_tree_values(new_value)
 
-            # 更新時間標籤
-            self._update_time_label(time_range)
+            # 檢查時間範圍是否有效
+            if time_range:
+                start_time, end_time = time_range
 
-            # 更新音頻可視化
-            if self.audio_visualizer and self.audio_segment:
-                self._update_audio_visualization(time_range)
+                # 確保時間範圍有效
+                if end_time <= start_time:
+                    self.logger.warning(f"調整後的時間範圍無效: {start_time} - {end_time}")
+                    # 修正時間範圍
+                    if self.slider_target["column_name"] == "Start":
+                        start_time = min(new_value, self.slider_target["fixed_point"] - 100)
+                        end_time = self.slider_target["fixed_point"]
+                    else:
+                        start_time = self.slider_target["fixed_point"]
+                        end_time = max(new_value, self.slider_target["fixed_point"] + 100)
+
+                # 更新時間標籤
+                self._update_time_label((start_time, end_time))
+
+                # 更新音頻可視化
+                if self.audio_visualizer and self.audio_segment:
+                    self._update_audio_visualization((start_time, end_time))
 
             # 強制更新界面
             self.tree.update()
@@ -425,37 +470,74 @@ class TimeSliderController:
 
     def _update_audio_visualization(self, time_range):
         """更新音頻可視化"""
-        start_time, end_time = time_range
+        try:
+            start_time, end_time = time_range
 
-        if not hasattr(self, 'zoom_manager') or not self.audio_visualizer:
-            return
+            # 確保時間範圍有效
+            if end_time <= start_time:
+                self.logger.warning(f"無效的時間範圍: {start_time} - {end_time}")
+                # 修正時間範圍
+                start_time, end_time = min(start_time, end_time), max(start_time, end_time)
+                if end_time <= start_time:
+                    end_time = start_time + 100  # 至少100毫秒的範圍
 
-        # 獲取當前視圖範圍
-        current_view_range = (
-            self.slider_target.get("view_start", 0),
-            self.slider_target.get("view_end", len(self.audio_segment))
-        )
+            if not hasattr(self, 'audio_visualizer') or not self.audio_visualizer:
+                return
 
-        # 計算新的視圖範圍
-        is_start_adjustment = self.slider_target["column_name"] == "Start"
-        view_start, view_end = self.zoom_manager.calculate_drag_zoom(
-            end_time if not is_start_adjustment else start_time,
-            self.slider_target["fixed_point"],
-            is_start_adjustment,
-            current_view_range
-        )
+            # 根據新的時間範圍調整視圖
+            duration = end_time - start_time
+            center_time = (start_time + end_time) / 2
 
-        # 更新波形
-        self.audio_visualizer.update_waveform_and_selection(
-            (view_start, view_end),
-            (start_time, end_time)
-        )
+            # 計算適當的視圖寬度
+            if duration < 500:  # 小於0.5秒
+                view_width = 2000
+            elif duration < 2000:  # 小於2秒
+                view_width = duration * 3
+            else:
+                view_width = duration * 2
 
-        # 更新滑桿目標
-        self.slider_target.update({
-            "view_start": view_start,
-            "view_end": view_end
-        })
+            # 確保視圖範圍合理
+            view_start = max(0, center_time - view_width / 2)
+            view_end = min(len(self.audio_segment), center_time + view_width / 2)
+
+            # 檢查視圖範圍是否有效
+            if view_end <= view_start:
+                self.logger.warning(f"計算出的視圖範圍無效: {view_start} - {view_end}")
+                view_start = max(0, center_time - 1000)
+                view_end = center_time + 1000
+                if view_end <= view_start:
+                    view_start = 0
+                    view_end = 2000
+
+            # 確保視圖包含選擇區域
+            if start_time < view_start:
+                view_start = max(0, start_time - 200)
+            if end_time > view_end:
+                view_end = min(len(self.audio_segment), end_time + 200)
+
+            # 最終檢查
+            if view_end <= view_start:
+                self.logger.error(f"最終視圖範圍仍然無效: {view_start} - {view_end}")
+                view_start = 0
+                view_end = min(2000, len(self.audio_segment))
+
+            # 更新波形
+            self.audio_visualizer.update_waveform_and_selection(
+                (view_start, view_end),
+                (start_time, end_time)
+            )
+
+            # 更新滑桿目標
+            if self.slider_target:
+                self.slider_target.update({
+                    "view_start": view_start,
+                    "view_end": view_end
+                })
+
+        except Exception as e:
+            self.logger.error(f"更新音頻可視化時出錯: {e}")
+            import traceback
+            self.logger.error(traceback.format_exc())
 
     def _calculate_slider_range(self, slider_params):
         """計算滑桿範圍"""
@@ -470,44 +552,66 @@ class TimeSliderController:
         max_value = 100000  # 默認最大值
 
         if column_name == "Start":
-            # 最大值是當前項的結束時間
+            # 獲取當前項的結束時間作為最大值
             values = self.tree.item(all_items[item_index], "values")
             if len(values) > end_pos:
                 try:
                     end_time = parse_time(values[end_pos])
-                    max_value = time_to_milliseconds(end_time)
-                except Exception:
+                    end_ms = time_to_milliseconds(end_time)
+                    max_value = max(end_ms, current_value + 1000)  # 確保最大值至少比當前值大
+                except Exception as e:
+                    self.logger.error(f"解析結束時間時出錯: {e}")
                     max_value = current_value + 10000
 
-            # 最小值是上一項的結束時間
+            # 獲取上一項的結束時間作為最小值
             if item_index > 0:
                 prev_values = self.tree.item(all_items[item_index - 1], "values")
                 if len(prev_values) > end_pos:
                     try:
                         prev_end_time = parse_time(prev_values[end_pos])
-                        min_value = time_to_milliseconds(prev_end_time)
-                    except Exception:
+                        prev_end_ms = time_to_milliseconds(prev_end_time)
+                        min_value = min(prev_end_ms, current_value - 1000)  # 確保最小值至少比當前值小
+                        min_value = max(0, min_value)  # 確保不小於0
+                    except Exception as e:
+                        self.logger.error(f"解析前一項結束時間時出錯: {e}")
                         min_value = 0
         else:  # End column
-            # 最小值是當前項的開始時間
+            # 獲取當前項的開始時間作為最小值
             values = self.tree.item(all_items[item_index], "values")
             if len(values) > start_pos:
                 try:
                     start_time = parse_time(values[start_pos])
-                    min_value = time_to_milliseconds(start_time)
-                except Exception:
+                    start_ms = time_to_milliseconds(start_time)
+                    min_value = min(start_ms, current_value - 1000)  # 確保最小值至少比當前值小
+                    min_value = max(0, min_value)  # 確保不小於0
+                except Exception as e:
+                    self.logger.error(f"解析開始時間時出錯: {e}")
                     min_value = max(0, current_value - 10000)
 
-            # 最大值是下一項的開始時間
+            # 獲取下一項的開始時間作為最大值
             if item_index < len(all_items) - 1:
                 next_values = self.tree.item(all_items[item_index + 1], "values")
                 if len(next_values) > start_pos:
                     try:
                         next_start_time = parse_time(next_values[start_pos])
-                        max_value = time_to_milliseconds(next_start_time)
-                    except Exception:
+                        next_start_ms = time_to_milliseconds(next_start_time)
+                        max_value = max(next_start_ms, current_value + 1000)  # 確保最大值至少比當前值大
+                    except Exception as e:
+                        self.logger.error(f"解析下一項開始時間時出錯: {e}")
                         max_value = current_value + 10000
 
+        # 最終檢查：確保範圍有效
+        if min_value >= max_value:
+            self.logger.warning(f"計算出的滑桿範圍無效: min={min_value}, max={max_value}")
+            # 強制修正範圍
+            if column_name == "Start":
+                min_value = max(0, current_value - 5000)
+                max_value = current_value + 5000
+            else:
+                min_value = current_value - 5000
+                max_value = current_value + 10000
+
+        self.logger.debug(f"滑桿範圍計算結果: {min_value} - {max_value}")
         return min_value, max_value
 
     def set_audio_segment(self, audio_segment):

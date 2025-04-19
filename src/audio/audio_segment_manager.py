@@ -192,101 +192,60 @@ class AudioSegmentManager:
     def segment_audio(self, audio, srt_data):
         """
         分割音頻為段落，完全依照 SRT 時間軸而非索引
-        :param audio: 音頻數據
-        :param srt_data: SRT 數據
         """
         try:
-            # 避免重複處理相同數據
-            if hasattr(self, '_last_segmentation') and self._last_segmentation:
-                last_srt_hash = self._last_segmentation.get('srt_hash')
-                current_srt_hash = hash(str([(sub.index, str(sub.start), str(sub.end)) for sub in srt_data]))
-
-                if last_srt_hash == current_srt_hash and self.has_segments():
-                    self.logger.debug("SRT數據未變化，跳過音頻分割處理")
-                    return True
-
             # 確保音頻數據有效
-            if audio is None:
-                self.logger.error("傳入的音頻數據為空")
+            if audio is None or len(audio) == 0:
+                self.logger.error("傳入的音頻數據為空或無效")
                 return False
 
             # 保存完整音頻供後續使用
             self.full_audio = audio
+
             # 清空現有段落
             self.audio_segments = {}
             total_duration = len(audio)
 
-            # 記錄分段處理
-            processed_count = 0
-            error_count = 0
-
-            # 如果 srt_data 為空或無效，創建一個包含整個音頻的預設段落
-            if not srt_data or len(srt_data) == 0:
-                segment = audio.set_frame_rate(self.sample_rate)
-                segment = segment.set_channels(2)
-                segment = segment.set_sample_width(2)
-                self.audio_segments[0] = segment
-                self.logger.debug("SRT 數據為空或無效，創建了包含整個音頻的預設段落")
-                return True
-
             # 為每個 SRT 項目創建對應的音頻段落
             for sub in srt_data:
                 try:
-                    # 確保子項有效
-                    if not hasattr(sub, 'start') or not hasattr(sub, 'end') or not hasattr(sub, 'index'):
-                        self.logger.warning(f"無效的字幕項目: {sub}")
-                        continue
-
-                    # 獲取時間範圍
                     start_ms = self.time_to_milliseconds(sub.start)
                     end_ms = self.time_to_milliseconds(sub.end)
 
-                    # 關鍵修改：檢測並修復相同的開始和結束時間
+                    # 確保時間範圍有效
                     if start_ms >= end_ms:
-                        old_start_ms = start_ms
-                        old_end_ms = end_ms
-
-                        # 修復策略：如果開始=結束，則結束時間增加200毫秒
+                        # 如果開始=結束，則結束時間增加200毫秒
                         end_ms = start_ms + 200
+                        self.logger.warning(f"修復字幕 {sub.index} 的時間範圍: {start_ms}-{end_ms}")
 
-                        self.logger.warning(f"修復字幕 {sub.index} 的時間範圍: {old_start_ms}-{old_end_ms} -> {start_ms}-{end_ms}")
-
-                    # 修正時間範圍
+                    # 確保不超出音頻範圍
                     start_ms = max(0, start_ms)
                     end_ms = min(end_ms, total_duration)
 
-                    # 關鍵修改：切割音頻，確保使用最新的時間範圍
+                    # 切割音頻
                     segment = audio[start_ms:end_ms]
 
-                    # 標準化音頻參數
-                    segment = segment.set_frame_rate(self.sample_rate)
-                    segment = segment.set_channels(2)
-                    segment = segment.set_sample_width(2)
+                    # 確保段落有效
+                    if len(segment) > 0:
+                        # 標準化音頻參數
+                        segment = segment.set_frame_rate(self.sample_rate)
+                        segment = segment.set_channels(2)
+                        segment = segment.set_sample_width(2)
 
-                    # 關鍵修改：確保使用數字索引，而不是字符串
-                    index = int(sub.index)
-                    self.audio_segments[index] = segment
-                    processed_count += 1
-
-                    self.logger.debug(f"音頻段落 {index}: {start_ms}ms - {end_ms}ms (時長: {end_ms-start_ms}ms)")
+                        # 使用數字索引保存
+                        index = int(sub.index)
+                        self.audio_segments[index] = segment
+                        self.logger.debug(f"音頻段落 {index}: {start_ms}ms - {end_ms}ms (時長: {end_ms-start_ms}ms)")
+                    else:
+                        self.logger.warning(f"段落 {sub.index} 長度為0")
 
                 except Exception as e:
                     self.logger.error(f"切割索引 {sub.index} 的音頻段落時出錯: {e}")
-                    error_count += 1
 
-            # 記錄本次分割信息
-            self._last_segmentation = {
-                'srt_hash': hash(str([(sub.index, str(sub.start), str(sub.end)) for sub in srt_data])),
-                'timestamp': time.time()
-            }
-
-            self.logger.info(f"音頻分段完成: 成功 {processed_count}, 失敗 {error_count}, 段落數 {len(self.audio_segments)}")
             return True
 
         except Exception as e:
             self.logger.error(f"分割音頻時出錯: {e}")
-            import traceback
-            self.logger.error(traceback.format_exc())
             return False
 
     def has_segments(self):
