@@ -316,20 +316,16 @@ class TimeSliderController:
         )
         self.audio_visualizer.show()
 
-        # 更新狀態
-        self.state.visualizer = self.audio_visualizer  # 新增 - 保存視覺化器到狀態
-
         # 設置音頻段落
         self.audio_visualizer.set_audio_segment(self.audio_segment)
 
-        # 初始化範圍管理器（如果沒有就需要在 __init__ 中也加上）
-        if not self.range_manager:
-            from audio.visualization_range_manager import VisualizationRangeManager
-            self.range_manager = VisualizationRangeManager(len(self.audio_segment))
-            self.state.range_manager = self.range_manager  # 新增 - 保存範圍管理器到狀態
+        # 初始化縮放管理器
+        if not hasattr(self, 'zoom_manager'):
+            from audio.waveform_zoom_manager import WaveformZoomManager
+            self.zoom_manager = WaveformZoomManager(len(self.audio_segment))
 
-        # 計算初始視圖範圍
-        view_start, view_end = self.range_manager.calculate_initial_view_range(
+        # 計算最佳視圖範圍
+        view_start, view_end = self.zoom_manager.calculate_optimal_zoom(
             slider_params['item_start_time'],
             slider_params['item_end_time']
         )
@@ -340,11 +336,10 @@ class TimeSliderController:
             (slider_params['item_start_time'], slider_params['item_end_time'])
         )
 
-        # 更新滑桿目標的視圖範圍
+        # 更新滑桿目標
         self.slider_target.update({
             'view_start': view_start,
-            'view_end': view_end,
-            'view_width': view_end - view_start
+            'view_end': view_end
         })
 
     def on_slider_change(self, value):
@@ -432,20 +427,21 @@ class TimeSliderController:
         """更新音頻可視化"""
         start_time, end_time = time_range
 
-        if not self.range_manager or not self.audio_visualizer:  # 使用實例屬性而不是 state 屬性
+        if not hasattr(self, 'zoom_manager') or not self.audio_visualizer:
             return
 
         # 獲取當前視圖範圍
         current_view_range = (
-            self.slider_target.get("view_start", 0),  # 改用 self.slider_target
-            self.slider_target.get("view_end", len(self.audio_segment))  # 改用 self.audio_segment
+            self.slider_target.get("view_start", 0),
+            self.slider_target.get("view_end", len(self.audio_segment))
         )
 
         # 計算新的視圖範圍
-        view_start, view_end = self.range_manager.calculate_view_range_on_slide(
-            end_time if self.slider_target["column_name"] == "End" else start_time,
+        is_start_adjustment = self.slider_target["column_name"] == "Start"
+        view_start, view_end = self.zoom_manager.calculate_drag_zoom(
+            end_time if not is_start_adjustment else start_time,
             self.slider_target["fixed_point"],
-            self.slider_target["column_name"] == "Start",
+            is_start_adjustment,
             current_view_range
         )
 
@@ -458,10 +454,8 @@ class TimeSliderController:
         # 更新滑桿目標
         self.slider_target.update({
             "view_start": view_start,
-            "view_end": view_end,
-            "view_width": view_end - view_start
+            "view_end": view_end
         })
-
 
     def _calculate_slider_range(self, slider_params):
         """計算滑桿範圍"""

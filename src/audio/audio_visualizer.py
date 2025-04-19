@@ -207,20 +207,11 @@ class AudioVisualizer:
             self._create_empty_waveform(f"錯誤: {str(e)}")
 
     def update_waveform_and_selection(self, view_range: Tuple[int, int], selection_range: Tuple[int, int]) -> None:
-        """
-        更新波形和選擇區域顯示
-
-        Args:
-            view_range (Tuple[int, int]): 視圖範圍 (開始時間, 結束時間)
-            selection_range (Tuple[int, int]): 選擇範圍 (開始時間, 結束時間)
-        """
         try:
-            # 檢查音頻數據是否存在
             if self.samples_cache is None or self.original_audio is None:
                 self._create_empty_waveform("未設置音頻數據")
                 return
 
-            # 驗證並調整範圍
             view_start, view_end = view_range
             sel_start, sel_end = selection_range
 
@@ -230,18 +221,13 @@ class AudioVisualizer:
             sel_start = max(view_start, sel_start)
             sel_end = min(view_end, sel_end)
 
-            # 記錄當前的視圖和選擇範圍
-            self.current_view_range = (view_start, view_end)
-            self.current_selection_range = (sel_start, sel_end)
+            # 創建圖像
+            img = Image.new('RGBA', (self.width, self.height), (30, 30, 30, 255))
+            draw = ImageDraw.Draw(img)
 
-            # 診斷日誌
-            self.logger.debug(f"視圖範圍: {view_start}-{view_end}")
-            self.logger.debug(f"選擇範圍: {sel_start}-{sel_end}")
-
-            # 檢查樣本數據
-            if len(self.samples_cache) == 0:
-                self._create_empty_waveform("沒有音頻樣本數據")
-                return
+            # 繪製中心線
+            center_y = self.height // 2
+            draw.line([(0, center_y), (self.width, center_y)], fill=(70, 70, 70, 255), width=1)
 
             # 計算樣本範圍
             sample_rate = len(self.samples_cache) / self.audio_duration
@@ -252,45 +238,41 @@ class AudioVisualizer:
             start_sample = max(0, start_sample)
             end_sample = min(len(self.samples_cache), end_sample)
 
-            # 確保有足夠的樣本用於繪製
-            if end_sample <= start_sample:
-                end_sample = min(start_sample + max(100, int(len(self.samples_cache) * 0.01)), len(self.samples_cache))
-
             # 獲取顯示區域的樣本
             display_samples = self.samples_cache[start_sample:end_sample]
 
-            # 診斷：如果樣本數據異常，給出警告
-            if len(display_samples) < 10:
-                self.logger.warning(f"樣本數據異常：僅有 {len(display_samples)} 個樣本")
-                display_samples = np.random.rand(100).astype(np.float32)  # 臨時填充隨機數據
+            # 智能降採樣
+            if len(display_samples) > self.width * 2:
+                # 使用RMS降採樣以保留更多細節
+                samples_per_pixel = len(display_samples) // self.width
+                downsampled = []
 
-            # 降採樣以匹配畫布寬度
-            samples_per_pixel = max(1, len(display_samples) // self.width)
-            downsampled = []
+                for i in range(self.width):
+                    start_idx = i * samples_per_pixel
+                    end_idx = min(start_idx + samples_per_pixel, len(display_samples))
 
-            for i in range(self.width):
-                start_idx = i * samples_per_pixel
-                end_idx = min(start_idx + samples_per_pixel, len(display_samples))
-
-                if start_idx < len(display_samples) and end_idx > start_idx:
-                    segment = display_samples[start_idx:end_idx]
-                    # 使用振幅的峰值而不是標準差，以更好地顯示細節
-                    downsampled.append(np.max(np.abs(segment)) if len(segment) > 0 else 0)
-                else:
-                    downsampled.append(0)
+                    if start_idx < len(display_samples) and end_idx > start_idx:
+                        segment = display_samples[start_idx:end_idx]
+                        # 使用RMS值以更好地表示振幅
+                        rms = np.sqrt(np.mean(segment**2))
+                        downsampled.append(rms)
+                    else:
+                        downsampled.append(0)
+            else:
+                # 簡單映射
+                x_scale = self.width / len(display_samples)
+                downsampled = []
+                for i in range(self.width):
+                    sample_idx = int(i / x_scale)
+                    if sample_idx < len(display_samples):
+                        downsampled.append(abs(display_samples[sample_idx]))
+                    else:
+                        downsampled.append(0)
 
             # 正規化
             downsampled = np.array(downsampled)
             if np.max(downsampled) > 0:
                 downsampled = downsampled / np.max(downsampled)
-
-            # 創建圖像
-            img = Image.new('RGBA', (self.width, self.height), (30, 30, 30, 255))
-            draw = ImageDraw.Draw(img)
-
-            # 繪製中心線
-            center_y = self.height // 2
-            draw.line([(0, center_y), (self.width, center_y)], fill=(70, 70, 70, 255), width=1)
 
             # 繪製波形
             for x in range(self.width):
@@ -301,15 +283,17 @@ class AudioVisualizer:
                     y2 = center_y + wave_height
                     draw.line([(x, y1), (x, y2)], fill=(100, 210, 255, 255), width=2)
 
-            # 計算選擇區域在視圖中的像素位置
+            # 計算選擇區域在視圖中的精確像素位置
             view_duration = view_end - view_start
             if view_duration > 0:
-                # 計算選擇區域的相對像素位置
+                # 改進的像素位置計算
                 pixel_start = int(((sel_start - view_start) / view_duration) * self.width)
                 pixel_end = int(((sel_end - view_start) / view_duration) * self.width)
 
-                # 確保高亮區域至少有最小寬度
-                pixel_end = max(pixel_end, pixel_start + 2)
+                # 確保高亮區域至少可見
+                if pixel_end - pixel_start < 1:
+                    pixel_end = pixel_start + 1
+
                 pixel_start = max(0, pixel_start)
                 pixel_end = min(self.width, pixel_end)
 
@@ -319,48 +303,43 @@ class AudioVisualizer:
                     overlay = Image.new('RGBA', img.size, (0, 0, 0, 0))
                     overlay_draw = ImageDraw.Draw(overlay)
 
-                    # 高亮區域
+                    # 半透明藍色高亮
                     overlay_draw.rectangle(
                         [(pixel_start, 0), (pixel_end, self.height)],
-                        fill=(79, 195, 247, 128)  # 半透明藍色
+                        fill=(79, 195, 247, 100)  # 降低透明度以便更好地看到波形
                     )
 
-                    # 合併高亮層
+                    # 邊界線
+                    overlay_draw.line([(pixel_start, 0), (pixel_start, self.height)],
+                                    fill=(79, 195, 247, 200), width=2)
+                    overlay_draw.line([(pixel_end, 0), (pixel_end, self.height)],
+                                    fill=(79, 195, 247, 200), width=2)
+
+                    # 合併圖層
                     img = Image.alpha_composite(img, overlay)
                     draw = ImageDraw.Draw(img)
 
-                    # 繪製選擇區域邊界
-                    draw.line([(pixel_start, 0), (pixel_start, self.height)], fill=(79, 195, 247, 255), width=2)
-                    draw.line([(pixel_end, 0), (pixel_end, self.height)], fill=(79, 195, 247, 255), width=2)
-
-                    # 添加時間範圍文本
+                    # 添加時間文本
                     try:
-                        # 計算選擇區域持續時間
-                        sel_duration = (sel_end - sel_start) / 1000.0  # 轉換為秒
+                        sel_duration = (sel_end - sel_start) / 1000.0
                         time_text = f"{sel_duration:.2f}s"
-
-                        # 文本位置居中
-                        text_x = pixel_start + (pixel_end - pixel_start) // 2 - len(time_text) * 3
-                        text_x = max(0, min(self.width - len(time_text) * 6, text_x))
-
-                        # 繪製文本
+                        font = ImageFont.load_default()
+                        text_width = font.getlength(time_text)
+                        text_x = pixel_start + (pixel_end - pixel_start - text_width) // 2
+                        text_x = max(2, min(self.width - text_width - 2, text_x))
                         draw.text((text_x, 5), time_text, fill=(255, 255, 255, 200))
-                    except Exception as text_e:
-                        self.logger.error(f"繪製文本時出錯: {text_e}")
+                    except:
+                        pass
 
             # 更新顯示
             self.waveform_image = img
             self.waveform_photo = ImageTk.PhotoImage(img)
             self.canvas.delete("all")
             self.canvas.create_image(0, 0, anchor="nw", image=self.waveform_photo)
-
-            # 強制立即更新顯示
             self.canvas.update()
 
         except Exception as e:
             self.logger.error(f"更新波形時出錯: {e}")
-            import traceback
-            self.logger.error(traceback.format_exc())
             self._create_empty_waveform(f"錯誤: {str(e)}")
 
     def _create_empty_waveform(self, message="等待音頻..."):
