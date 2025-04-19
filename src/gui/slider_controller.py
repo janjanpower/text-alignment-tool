@@ -49,7 +49,10 @@ class TimeSliderController:
         self.callbacks = callback_manager
         self.logger = logging.getLogger(self.__class__.__name__)
 
-        # 新增這些屬性，以保持與原來程式碼的兼容性
+        # 初始化狀態物件 - 這是必要的修改
+        self.state = TimeSliderState()
+
+        # 保持與原來程式碼的兼容性
         self.slider_active = False
         self.slider_target = None
         self.slider_frame = None
@@ -57,6 +60,7 @@ class TimeSliderController:
         self.audio_visualizer = None
         self.audio_segment = None
         self._hide_time_slider_in_progress = False
+        self.range_manager = None  # 增加此屬性
 
         # 自定義樣式
         self._setup_slider_style()
@@ -81,7 +85,7 @@ class TimeSliderController:
             self._create_slider_ui(column_info['bbox'], slider_params)
 
             # 設置音頻可視化（如果有音頻）
-            if self.state.audio_segment:
+            if self.audio_segment:  # 改用 self.audio_segment 而不是 self.state.audio_segment
                 self._setup_audio_visualization(slider_params)
 
         except Exception as e:
@@ -221,7 +225,7 @@ class TimeSliderController:
 
         # 計算總高度
         total_height = LABEL_HEIGHT + PADDING + SLIDER_HEIGHT + PADDING
-        if self.state.audio_segment:
+        if self.audio_segment:  # 改用 self.audio_segment 而不是 self.state.audio_segment
             total_height += AUDIO_HEIGHT + PADDING
 
         # 創建框架
@@ -240,6 +244,8 @@ class TimeSliderController:
             height=total_height
         )
 
+        # 更新狀態
+        self.state.frame = frame  # 新增 - 保存框架到狀態
         return frame
 
     def _create_time_label(self, frame, slider_params):
@@ -270,7 +276,7 @@ class TimeSliderController:
 
         # 計算滑桿位置
         slider_y = 25  # 基本位置
-        if self.state.audio_segment:
+        if self.audio_segment:  # 改用 self.audio_segment 而不是 self.state.audio_segment
             slider_y += 45  # 音頻視圖下方
 
         # 創建滑桿容器
@@ -289,6 +295,8 @@ class TimeSliderController:
         )
         slider.pack(fill=tk.X, expand=True, pady=5)
 
+        # 更新狀態
+        self.state.slider = slider  # 新增 - 保存滑桿到狀態
         return slider
 
     def _setup_audio_visualization(self, slider_params):
@@ -308,13 +316,17 @@ class TimeSliderController:
         )
         self.audio_visualizer.show()
 
+        # 更新狀態
+        self.state.visualizer = self.audio_visualizer  # 新增 - 保存視覺化器到狀態
+
         # 設置音頻段落
         self.audio_visualizer.set_audio_segment(self.audio_segment)
 
         # 初始化範圍管理器（如果沒有就需要在 __init__ 中也加上）
-        if not hasattr(self, 'range_manager') or not self.range_manager:
+        if not self.range_manager:
             from audio.visualization_range_manager import VisualizationRangeManager
             self.range_manager = VisualizationRangeManager(len(self.audio_segment))
+            self.state.range_manager = self.range_manager  # 新增 - 保存範圍管理器到狀態
 
         # 計算初始視圖範圍
         view_start, view_end = self.range_manager.calculate_initial_view_range(
@@ -365,42 +377,42 @@ class TimeSliderController:
 
     def _update_tree_values(self, new_value):
         """更新樹狀視圖的值"""
-        item = self.state.target["item"]
-        column_name = self.state.target["column_name"]  # 注意這裡的 key 是 "column_name"
+        item = self.slider_target["item"]  # 使用 self.slider_target 而不是 self.state.target
+        column_name = self.slider_target["column_name"]
         values = list(self.tree.item(item, "values"))
 
         new_time = milliseconds_to_time(new_value)
-        fixed_point = self.state.target.get("fixed_point", 0)
+        fixed_point = self.slider_target.get("fixed_point", 0)
 
         if column_name == "Start":
             start_time = min(new_value, fixed_point - 10)
             end_time = fixed_point
-            values[self.state.target["start_pos"]] = str(new_time)
+            values[self.slider_target["start_pos"]] = str(new_time)
 
             # 更新上一行
-            item_index = self.state.target["item_index"]
+            item_index = self.slider_target["item_index"]
             if item_index > 0:
-                prev_item = self.state.target["all_items"][item_index - 1]
+                prev_item = self.slider_target["all_items"][item_index - 1]
                 prev_values = list(self.tree.item(prev_item, "values"))
-                prev_values[self.state.target["end_pos"]] = str(new_time)
+                prev_values[self.slider_target["end_pos"]] = str(new_time)
                 self.tree.item(prev_item, values=tuple(prev_values))
         else:  # End column
             start_time = fixed_point
             end_time = max(new_value, fixed_point + 10)
-            values[self.state.target["end_pos"]] = str(new_time)
+            values[self.slider_target["end_pos"]] = str(new_time)
 
             # 更新下一行
-            item_index = self.state.target["item_index"]
-            if item_index < len(self.state.target["all_items"]) - 1:
-                next_item = self.state.target["all_items"][item_index + 1]
+            item_index = self.slider_target["item_index"]
+            if item_index < len(self.slider_target["all_items"]) - 1:
+                next_item = self.slider_target["all_items"][item_index + 1]
                 next_values = list(self.tree.item(next_item, "values"))
-                next_values[self.state.target["start_pos"]] = str(new_time)
+                next_values[self.slider_target["start_pos"]] = str(new_time)
                 self.tree.item(next_item, values=tuple(next_values))
 
         self.tree.item(item, values=tuple(values))
 
         # 更新滑桿目標
-        self.state.target.update({
+        self.slider_target.update({
             "item_start_time": start_time,
             "item_end_time": end_time
         })
@@ -411,7 +423,7 @@ class TimeSliderController:
         """更新時間標籤"""
         start_time, end_time = time_range
 
-        for widget in self.state.frame.winfo_children():
+        for widget in self.slider_frame.winfo_children():  # 使用 self.slider_frame 而不是 self.state.frame
             if isinstance(widget, tk.Label) and widget.cget('fg') == "#4FC3F7":
                 widget.config(text=self._format_time_range(start_time, end_time))
                 break
@@ -420,35 +432,36 @@ class TimeSliderController:
         """更新音頻可視化"""
         start_time, end_time = time_range
 
-        if not self.state.range_manager or not self.state.visualizer:
+        if not self.range_manager or not self.audio_visualizer:  # 使用實例屬性而不是 state 屬性
             return
 
         # 獲取當前視圖範圍
         current_view_range = (
-            self.state.target.get("view_start", 0),
-            self.state.target.get("view_end", len(self.state.audio_segment))
+            self.slider_target.get("view_start", 0),  # 改用 self.slider_target
+            self.slider_target.get("view_end", len(self.audio_segment))  # 改用 self.audio_segment
         )
 
         # 計算新的視圖範圍
-        view_start, view_end = self.state.range_manager.calculate_view_range_on_slide(
-            end_time if self.state.target["column_name"] == "End" else start_time,
-            self.state.target["fixed_point"],
-            self.state.target["column_name"] == "Start",
+        view_start, view_end = self.range_manager.calculate_view_range_on_slide(
+            end_time if self.slider_target["column_name"] == "End" else start_time,
+            self.slider_target["fixed_point"],
+            self.slider_target["column_name"] == "Start",
             current_view_range
         )
 
         # 更新波形
-        self.state.visualizer.update_waveform_and_selection(
+        self.audio_visualizer.update_waveform_and_selection(
             (view_start, view_end),
             (start_time, end_time)
         )
 
         # 更新滑桿目標
-        self.state.target.update({
+        self.slider_target.update({
             "view_start": view_start,
             "view_end": view_end,
             "view_width": view_end - view_start
         })
+
 
     def _calculate_slider_range(self, slider_params):
         """計算滑桿範圍"""
@@ -506,12 +519,16 @@ class TimeSliderController:
     def set_audio_segment(self, audio_segment):
         """設置要可視化的音頻段落"""
         if audio_segment is not None and len(audio_segment) > 0:
-            self.state.audio_segment = audio_segment
+            self.audio_segment = audio_segment  # 設置實例屬性
+            self.state.audio_segment = audio_segment  # 同時更新狀態
             if audio_segment:
-                self.state.range_manager = VisualizationRangeManager(len(audio_segment))
+                self.range_manager = VisualizationRangeManager(len(audio_segment))
+                self.state.range_manager = self.range_manager  # 更新狀態中的範圍管理器
             self.logger.debug(f"設置音頻段落，長度: {len(audio_segment)} ms")
         else:
+            self.audio_segment = None
             self.state.audio_segment = None
+            self.range_manager = None
             self.state.range_manager = None
             self.logger.warning("設置的音頻段落為空或無效")
 
@@ -535,6 +552,7 @@ class TimeSliderController:
                 except tk.TclError:
                     pass
                 self.audio_visualizer = None
+                self.state.visualizer = None  # 清除狀態中的視覺化器
 
             # 清理滑桿界面
             if self.slider_frame:
@@ -545,12 +563,15 @@ class TimeSliderController:
                 except tk.TclError:
                     pass
                 self.slider_frame = None
+                self.state.frame = None  # 清除狀態中的框架
 
             if self.time_slider:
                 self.time_slider = None
+                self.state.slider = None  # 清除狀態中的滑桿
 
             self.slider_active = False
             self.slider_target = None
+            self.state.target = None  # 清除狀態中的目標
 
             # 解除綁定
             try:
@@ -567,7 +588,7 @@ class TimeSliderController:
     def check_slider_focus(self, event):
         """檢查點擊是否在滑桿外部"""
         try:
-            if not self.state.active or not self.state.frame:
+            if not self.slider_active or not self.slider_frame:  # 使用實例屬性檢查
                 return
 
             # 獲取點擊位置
@@ -583,10 +604,10 @@ class TimeSliderController:
                         return
 
             # 獲取滑桿框架的位置
-            slider_x = self.state.frame.winfo_rootx()
-            slider_y = self.state.frame.winfo_rooty()
-            slider_width = self.state.frame.winfo_width()
-            slider_height = self.state.frame.winfo_height()
+            slider_x = self.slider_frame.winfo_rootx()
+            slider_y = self.slider_frame.winfo_rooty()
+            slider_width = self.slider_frame.winfo_width()
+            slider_height = self.slider_frame.winfo_height()
 
             # 檢查點擊是否在滑桿區域外
             if (event.x_root < slider_x or event.x_root > slider_x + slider_width or
@@ -599,7 +620,7 @@ class TimeSliderController:
 
     def apply_time_change(self):
         """應用時間變更"""
-        if not self.state.active:
+        if not self.slider_active:  # 使用實例屬性檢查
             return
 
         try:
@@ -608,6 +629,7 @@ class TimeSliderController:
                 self.callbacks.on_time_change()
         except Exception as e:
             self.logger.error(f"應用時間變更時出錯: {e}")
+
 
     def _format_time_range(self, start_time, end_time):
         """格式化並顯示時間範圍"""
