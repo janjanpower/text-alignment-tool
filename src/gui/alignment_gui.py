@@ -1607,6 +1607,10 @@ class AlignmentGUI(BaseWindow):
             # 檢查是否是選中的項目
             is_selected = item in self.tree_manager.get_selected_items()
 
+            # 檢查該項目是否有 use_word_text 標籤 (藍色框)
+            item_tags = self.tree.item(item, "tags")
+            has_word_text = "use_word_text" in item_tags if item_tags else False  # 這裡定義 has_word_text
+
             # 獲取列名
             column_idx = int(column[1:]) - 1
             if column_idx >= len(self.tree["columns"]):
@@ -1646,7 +1650,6 @@ class AlignmentGUI(BaseWindow):
                     # 使用 after 方法確保滑桿在點擊事件處理完成後顯示
                     self.master.after(100, lambda: self.slider_controller.show_slider(event, item, column, column_name))
                 return
-
 
             # 處理文本列點擊事件（SRT Text 或 Word Text）
             elif region == "cell" and is_selected and column_name in ["SRT Text", "Word Text"]:

@@ -141,7 +141,7 @@ class TimeSliderController:
             self.logger.warning("設置的音頻段落為空或無效")
 
     def _create_slider(self, x, y, width, height, item, column_name, values,
-                      item_index, all_items, index_pos, start_pos, end_pos):
+                  item_index, all_items, index_pos, start_pos, end_pos):
         """創建時間調整滑桿，音頻可視化顯示選取區域前後1秒"""
         try:
             # 如果已有滑桿，先清除
@@ -162,6 +162,14 @@ class TimeSliderController:
             # 創建滑桿框架
             self.slider_frame = tk.Frame(self.tree, bg="#1E1E1E", bd=0, relief="flat")
             frame_width = 200  # 固定寬度
+
+            # 確保在有效範圍內放置滑桿框架
+            tree_width = self.tree.winfo_width()
+            tree_height = self.tree.winfo_height()
+
+            # 調整位置以確保框架在樹狀視圖內部
+            place_x = min(max(0, x + width), tree_width - frame_width)
+            place_y = min(max(0, y + height + 5), tree_height - total_height)
 
             # 解析當前時間值
             current_time_str = values[start_pos if column_name == "Start" else end_pos]
@@ -200,8 +208,8 @@ class TimeSliderController:
 
             # 放置滑桿框架
             self.slider_frame.place(
-                x=x + width,
-                y=y + height + 5,
+                x=place_x,
+                y=place_y,
                 width=frame_width,
                 height=total_height
             )
@@ -228,22 +236,21 @@ class TimeSliderController:
             # 設置音頻可視化（如果有音頻）
             if self.audio_segment:
                 try:
+                    self.logger.debug("===== 開始創建音頻可視化 =====")
+                    self.logger.debug(f"音頻段落長度: {len(self.audio_segment)} ms")
+
                     # 創建音頻可視化容器
                     visualizer_container = tk.Frame(self.slider_frame, bg="#1E1E1E")
-
-                    # 使用 place 確保容器正確定位
                     visualizer_container.place(
                         x=5,
                         y=current_y,
                         width=frame_width-10,
                         height=AUDIO_HEIGHT
                     )
-
-                    self.logger.debug(f"創建了可視化容器: x=5, y={current_y}, width={frame_width-10}, height={AUDIO_HEIGHT}")
-
-                    # 確保框架和容器都已經創建和佈局
-                    self.slider_frame.update_idletasks()
                     visualizer_container.update_idletasks()
+
+                    self.logger.debug(f"可視化容器創建完成: visible={visualizer_container.winfo_viewable()}")
+                    self.logger.debug(f"容器尺寸: {visualizer_container.winfo_width()}x{visualizer_container.winfo_height()}")
 
                     # 創建音頻可視化器
                     self.audio_visualizer = AudioVisualizer(
@@ -251,6 +258,15 @@ class TimeSliderController:
                         width=frame_width-20,
                         height=AUDIO_HEIGHT-10
                     )
+
+                    self.logger.debug("音頻可視化器已創建")
+
+                    # 確保可視化器立即顯示
+                    self.audio_visualizer.show()
+
+                    # 更新一次界面確保容器正確初始化
+                    self.slider_frame.update()
+                    visualizer_container.update()
 
                     # 計算顯示的音頻範圍（前後各加1秒）
                     display_start = max(0, min(start_time, end_time) - 1000)  # 前1秒
@@ -264,36 +280,38 @@ class TimeSliderController:
 
                     # 提取指定範圍的音頻段落
                     if display_end > display_start:
-                        extended_segment = self.audio_segment[display_start:display_end]
-                        self.logger.debug(f"提取的音頻段落長度: {len(extended_segment)} ms")
+                        # 提取指定範圍的音頻段落
+                        segment_start = max(0, display_start)
+                        segment_end = min(total_duration, display_end)
 
-                        # 先顯示容器再創建波形
-                        self.audio_visualizer.show()
+                        if segment_end > segment_start:
+                            extended_segment = self.audio_segment[segment_start:segment_end]
+                            self.logger.debug(f"準備創建波形 - 段落長度: {len(extended_segment)} ms")
 
-                        # 更新一次界面確保容器尺寸正確
-                        self.slider_frame.update_idletasks()
-                        visualizer_container.update_idletasks()
+                            # 創建波形
+                            self.audio_visualizer.create_waveform(extended_segment)
 
-                        # 創建波形
-                        self.audio_visualizer.create_waveform(extended_segment)
+                            # 確保顯示
+                            self.audio_visualizer.show()
 
-                        # 計算高亮區域在擴展視圖中的相對位置
-                        highlight_start = start_time - display_start
-                        highlight_end = end_time - display_start
+                            # 設置高亮區域
+                            highlight_start = start_time - display_start
+                            highlight_end = end_time - display_start
+                            self.audio_visualizer.update_selection(highlight_start, highlight_end)
 
-                        self.logger.debug(f"高亮區域: {highlight_start}ms - {highlight_end}ms")
+                            # 強制更新所有組件
+                            self.slider_frame.update()
+                            visualizer_container.update()
+                            if self.audio_visualizer.canvas:
+                                self.audio_visualizer.canvas.update()
 
-                        # 更新高亮選擇區域
-                        self.audio_visualizer.update_selection(highlight_start, highlight_end)
-
-                        # 保存當前顯示範圍
-                        self.current_display_range = (display_start, display_end)
-
-                        # 再次更新確保所有元素正確顯示
-                        self.slider_frame.update_idletasks()
-                        visualizer_container.update_idletasks()
+                            self.logger.debug("音頻可視化創建完成")
+                            self.logger.debug(f"最終狀態檢查 - 畫布可見: {self.audio_visualizer.canvas.winfo_viewable()}")
+                            self.logger.debug(f"畫布尺寸: {self.audio_visualizer.canvas.winfo_width()}x{self.audio_visualizer.canvas.winfo_height()}")
+                        else:
+                            self.logger.error(f"無效的音頻範圍: {segment_start}ms - {segment_end}ms")
                     else:
-                        self.logger.error(f"無效的音頻範圍: {display_start}ms - {display_end}ms")
+                        self.logger.error(f"無效的顯示範圍: {display_start}ms - {display_end}ms")
 
                     current_y += AUDIO_HEIGHT + PADDING
 
@@ -339,39 +357,17 @@ class TimeSliderController:
             # 綁定事件，點擊其他區域時隱藏滑桿
             self.parent.bind("<Button-1>", self.check_slider_focus)
 
-            # 強制更新界面確保即時顯示
+            # 確保整個滑桿框架可見
+            self.slider_frame.lift()  # 將框架提升到最前
             self.slider_frame.update_idletasks()
+
+            # 強制更新界面確保即時顯示
+            self.parent.update()
 
         except Exception as e:
             self.logger.error(f"創建滑桿時出錯: {e}")
             self.logger.exception(e)
             self.hide_slider()
-
-    def _update_audio_visualization(self, new_value, column_name):
-        """以平滑方式更新音頻視覺化"""
-        if not self.audio_visualizer:
-            return
-
-        try:
-            values = list(self.tree.item(self.slider_target["item"], "values"))
-
-            if column_name == "Start":
-                end_time_str = values[self.slider_target["end_pos"]]
-                try:
-                    end_time = time_to_milliseconds(parse_time(end_time_str))
-                except:
-                    end_time = new_value + 10000
-                self.audio_visualizer.update_selection(new_value, end_time)
-            else:  # End column
-                start_time_str = values[self.slider_target["start_pos"]]
-                try:
-                    start_time = time_to_milliseconds(parse_time(start_time_str))
-                except:
-                    start_time = max(0, new_value - 10000)
-                self.audio_visualizer.update_selection(start_time, new_value)
-        except Exception as e:
-            self.logger.error(f"更新音頻視覺化時出錯: {e}")
-
 
     def _calculate_slider_range(self, column_name, values, item_index, all_items, end_pos, start_pos, current_value=None):
         """計算滑桿範圍的私有方法"""
@@ -512,7 +508,8 @@ class TimeSliderController:
 
             # 更新音頻可視化高亮區域
             if hasattr(self, 'audio_visualizer') and self.audio_visualizer and hasattr(self, 'current_display_range'):
-                display_start, display_end = self.current_display_range
+                # 暫停自動更新以防止閃爍
+                self.parent.update_idletasks()
 
                 # 計算高亮區域在擴展視圖中的相對位置
                 highlight_start = int(start_time - display_start)
@@ -538,6 +535,10 @@ class TimeSliderController:
                 # 更新高亮區域
                 self.audio_visualizer.update_selection(highlight_start, highlight_end)
 
+                # 確保可視化器保持可見
+                if self.audio_visualizer.canvas:
+                    self.audio_visualizer.canvas.lift()
+
             # 強制更新界面確保即時顯示
             self.tree.update_idletasks()
             if hasattr(self, 'slider_frame'):
@@ -545,7 +546,7 @@ class TimeSliderController:
 
         except Exception as e:
             self.logger.error(f"滑桿值變化處理時出錯: {e}")
-            self.logger.exception(e)
+
     def _format_time_range(self, start_time, end_time):
         """格式化並顯示時間範圍"""
         start_sec = int(start_time / 1000)
@@ -554,44 +555,6 @@ class TimeSliderController:
         end_ms = int(end_time % 1000)
         return f"{start_sec}:{start_ms:03d} → {end_sec}:{end_ms:03d}"
 
-    def _format_time_display(self, milliseconds):
-        """格式化毫秒為友好的時間顯示 (秒:毫秒)"""
-        seconds = int(milliseconds / 1000)
-        ms = int(milliseconds % 1000)
-        return f"{seconds}:{ms:03d}"
-
-    def _update_time_range_label(self, start_time, end_time):
-        """顯示時間範圍標籤（無論是否有音頻）"""
-        try:
-            # 格式化時間
-            start_sec = int(start_time / 1000)
-            start_ms = int(start_time % 1000)
-            end_sec = int(end_time / 1000)
-            end_ms = int(end_time % 1000)
-            time_range = f"{start_sec}:{start_ms:03d} → {end_sec}:{end_ms:03d}"
-
-            # 創建或更新時間範圍標籤
-            if not hasattr(self, 'range_label') or self.range_label is None:
-                self.range_label = tk.Label(
-                    self.slider_frame,
-                    text=time_range,
-                    font=("Noto Sans TC", 10),
-                    bg="#1E1E1E",
-                    fg="#4FC3F7"
-                )
-                # 計算位置：在滑桿下方
-                y_pos = 25
-                if hasattr(self, 'audio_visualizer') and self.audio_visualizer:
-                    y_pos = 75  # 音頻可視化下方
-                self.range_label.place(x=5, y=y_pos)
-            else:
-                self.range_label.config(text=time_range)
-
-            # 強制刷新顯示
-            if hasattr(self, 'slider_frame'):
-                self.slider_frame.update_idletasks()
-        except Exception as e:
-            self.logger.error(f"更新時間範圍標籤時出錯: {e}")
 
     def check_slider_focus(self, event):
         """

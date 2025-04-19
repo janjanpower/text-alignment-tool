@@ -14,9 +14,6 @@ class AudioVisualizer:
     def __init__(self, parent: tk.Widget, width: int = 100, height: int = 45):
         """
         初始化音頻可視化器
-        :param parent: 父視窗元件
-        :param width: 可視化區域寬度
-        :param height: 可視化區域高度
         """
         self.logger = logging.getLogger(self.__class__.__name__)
         self.parent = parent
@@ -30,25 +27,36 @@ class AudioVisualizer:
             height=height,
             bg="#1E1E1E",
             highlightthickness=0,
-            bd=0  # 無邊框
+            bd=0
         )
+
+        # 立即放置畫布
+        self.canvas.place(x=0, y=0, width=width, height=height)
 
         # 波形相關變數
         self.waveform_image = None
         self.waveform_photo = None
+        self.canvas_image_id = None
         self.selection_start = 0
         self.selection_end = 0
-        self.audio_duration = 0.0  # 初始化音頻持續時間（秒）
+        self.audio_duration = 0.0
 
-        # 調試日誌
+        # 調試 - 檢查畫布初始化狀態
         self.logger.debug(f"AudioVisualizer 初始化完成: width={width}, height={height}")
+        self.logger.debug(f"父容器: {self.parent}")
+        self.logger.debug(f"畫布創建狀態: exists={self.canvas.winfo_exists()}, viewable={self.canvas.winfo_viewable()}")
 
     def create_waveform(self, audio_segment: AudioSegment) -> None:
         """
         創建音頻波形圖
-        :param audio_segment: 音頻段落
         """
         try:
+            self.logger.debug(f"===== 開始創建波形圖 =====")
+            self.logger.debug(f"畫布尺寸: {self.width}x{self.height}")
+            self.logger.debug(f"音頻段落長度: {len(audio_segment)} ms")
+            self.logger.debug(f"畫布存在性: {self.canvas.winfo_exists()}")
+            self.logger.debug(f"畫布可見性: {self.canvas.winfo_viewable()}")
+
             # 確保音頻段落有效
             if not audio_segment or len(audio_segment) == 0:
                 self.logger.error("音頻段落為空或無效")
@@ -132,12 +140,17 @@ class AudioVisualizer:
 
             # 在畫布上顯示
             self.canvas.delete("all")
-            self.canvas.create_image(0, 0, anchor="nw", image=self.waveform_photo)
+            self.canvas_image_id = self.canvas.create_image(0, 0, anchor="nw", image=self.waveform_photo)
+
+            self.logger.debug(f"圖像已創建，ID: {self.canvas_image_id}")
+            self.logger.debug(f"畫布項目數: {len(self.canvas.find_all())}")
 
             # 強制更新畫布
             self.canvas.update_idletasks()
+            self.parent.update_idletasks()
 
-            self.logger.debug(f"波形創建完成，樣本點數：{len(samples_array)}")
+            self.logger.debug(f"波形創建完成 - 畫布可見: {self.canvas.winfo_viewable()}")
+            self.logger.debug(f"畫布尺寸: {self.canvas.winfo_width()}x{self.canvas.winfo_height()}")
 
         except Exception as e:
             self.logger.error(f"創建波形圖時出錯: {e}")
@@ -233,29 +246,27 @@ class AudioVisualizer:
     def show(self) -> None:
         """顯示波形容器"""
         try:
-            self.logger.debug("調用 show() 方法")
+            self.logger.debug("===== 調用 show() 方法 =====")
+            self.logger.debug(f"畫布存在: {self.canvas.winfo_exists()}")
+            self.logger.debug(f"畫布可見: {self.canvas.winfo_viewable()}")
+            self.logger.debug(f"畫布映射: {self.canvas.winfo_ismapped()}")
+            self.logger.debug(f"父容器可見: {self.parent.winfo_viewable()}")
 
-            # 直接使用 place 方法顯示，避免使用 pack 導致的佈局問題
-            self.canvas.place(x=0, y=0, width=self.width, height=self.height)
+            # 確保畫布可見
+            if not self.canvas.winfo_viewable():
+                self.logger.debug("重新放置畫布")
+                self.canvas.place(x=0, y=0, width=self.width, height=self.height)
 
-            # 確保容器尺寸正確
-            self.canvas.config(width=self.width, height=self.height)
+            # 確保圖像存在
+            if self.waveform_photo and not self.canvas_image_id:
+                self.logger.debug("重新創建圖像")
+                self.canvas_image_id = self.canvas.create_image(0, 0, anchor="nw", image=self.waveform_photo)
 
-            # 先更新父容器再更新自己
-            if self.parent and self.parent.winfo_exists():
-                self.parent.update_idletasks()
+            # 強制刷新
+            self.canvas.update()
+            self.parent.update()
 
-            # 更新畫布
-            self.canvas.update_idletasks()
-
-            # 確保圖像顯示正確
-            if self.waveform_photo:
-                self.canvas.delete("all")
-                self.canvas.create_image(0, 0, anchor="nw", image=self.waveform_photo)
-
-            # 檢查畫布狀態
-            self.logger.debug(f"畫布狀態 - exists: {self.canvas.winfo_exists()}, viewable: {self.canvas.winfo_viewable()}, mapped: {self.canvas.winfo_ismapped()}")
-            self.logger.debug(f"畫布尺寸: {self.canvas.winfo_width()}x{self.canvas.winfo_height()}")
+            self.logger.debug(f"show() 完成 - 畫布最終狀態: viewable={self.canvas.winfo_viewable()}, width={self.canvas.winfo_width()}, height={self.canvas.winfo_height()}")
 
         except Exception as e:
             self.logger.error(f"顯示波形容器時出錯: {e}")
