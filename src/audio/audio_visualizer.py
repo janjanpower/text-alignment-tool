@@ -71,7 +71,7 @@ class AudioVisualizer:
     def update_waveform_and_selection(self, view_range: Tuple[int, int], selection_range: Tuple[int, int]) -> None:
         """即時更新波形和選擇區域"""
         try:
-            if self.samples_cache is None:
+            if self.samples_cache is None or self.original_audio is None:
                 self._create_empty_waveform("未設置音頻數據")
                 return
 
@@ -138,36 +138,45 @@ class AudioVisualizer:
             view_duration = view_end - view_start
             if view_duration > 0:
                 # 確保選擇區與視圖範圍有交集
-                if sel_end > view_start and sel_start < view_end:
-                    # 計算相對位置
-                    relative_start = max(0, (sel_start - view_start) / view_duration)
-                    relative_end = min(1, (sel_end - view_start) / view_duration)
+                if sel_end >= view_start and sel_start <= view_end:
+                    # 計算相對位置 - 關鍵修正：確保選擇區域正確映射到視圖範圍
+                    # 如果選擇區域超出視圖範圍，則將其裁剪到視圖範圍內
+                    display_sel_start = max(sel_start, view_start)
+                    display_sel_end = min(sel_end, view_end)
+
+                    # 計算相對於當前視圖的比例位置
+                    relative_start = (display_sel_start - view_start) / view_duration
+                    relative_end = (display_sel_end - view_start) / view_duration
 
                     # 轉換為像素位置
                     start_x = int(relative_start * self.width)
                     end_x = int(relative_end * self.width)
 
-                    # 確保有最小寬度
+                    # 確保有最小寬度且不超出畫布範圍
                     if end_x - start_x < 2:
                         end_x = min(start_x + 2, self.width)
 
-                    # 繪製高亮區域
-                    overlay = Image.new('RGBA', img.size, (0, 0, 0, 0))
-                    overlay_draw = ImageDraw.Draw(overlay)
+                    start_x = max(0, start_x)
+                    end_x = min(self.width, end_x)
 
-                    # 半透明藍色高亮
-                    overlay_draw.rectangle(
-                        [(start_x, 0), (end_x, self.height)],
-                        fill=(79, 195, 247, 100)  # 調整透明度
-                    )
+                    if start_x < end_x:  # 確保有效的選擇區域
+                        # 繪製高亮區域
+                        overlay = Image.new('RGBA', img.size, (0, 0, 0, 0))
+                        overlay_draw = ImageDraw.Draw(overlay)
 
-                    # 合併圖層
-                    img = Image.alpha_composite(img.convert('RGBA'), overlay)
-                    draw = ImageDraw.Draw(img)
+                        # 半透明藍色高亮
+                        overlay_draw.rectangle(
+                            [(start_x, 0), (end_x, self.height)],
+                            fill=(79, 195, 247, 128)  # 更明顯的高亮
+                        )
 
-                    # 繪製邊界線
-                    draw.line([(start_x, 0), (start_x, self.height)], fill=(79, 195, 247, 255), width=2)
-                    draw.line([(end_x, 0), (end_x, self.height)], fill=(79, 195, 247, 255), width=2)
+                        # 合併圖層
+                        img = Image.alpha_composite(img.convert('RGBA'), overlay)
+                        draw = ImageDraw.Draw(img)
+
+                        # 繪製邊界線 - 更明顯的邊界
+                        draw.line([(start_x, 0), (start_x, self.height)], fill=(79, 195, 247, 255), width=2)
+                        draw.line([(end_x, 0), (end_x, self.height)], fill=(79, 195, 247, 255), width=2)
 
             # 更新顯示
             self.waveform_image = img
@@ -227,12 +236,57 @@ class AudioVisualizer:
 
     def update_selection(self, start_ms: int, end_ms: int) -> None:
         """更新選擇區域（保持現有視圖範圍）"""
-        if self.original_audio is None:
-            return
+        try:
+            if self.original_audio is None:
+                self.logger.warning("音頻未設置，無法更新選擇區域")
+                return
 
-        # 如果選擇區域改變，重新繪製
-        if (start_ms, end_ms) != self.current_selection_range:
-            self.create_waveform_with_selection(self.current_view_range, (start_ms, end_ms))
+            # 確保範圍有效
+            start_ms = max(0, start_ms)
+            end_ms = min(end_ms, self.audio_duration)
+
+            # 如果選擇區域改變，重新繪製
+            if (start_ms, end_ms) != self.current_selection_range:
+                # 檢查當前視圖範圍
+                view_start, view_end = self.current_view_range
+
+                # 如果當前視圖範圍有效
+                if view_start < view_end:
+                    # 檢查選擇區域是否在當前視圖範圍內
+                    if end_ms < view_start or start_ms > view_end:
+                        # 選擇區域完全在視圖範圍外，調整視圖範圍
+                        duration = end_ms - start_ms
+                        center_time = (start_ms + end_ms) / 2
+
+                        # 動態調整視圖寬度
+                        view_width = max(duration * 3, 2000)  # 至少2秒或時間範圍的3倍
+                        new_view_start = max(0, center_time - view_width / 2)
+                        new_view_end = min(self.audio_duration, new_view_start + view_width)
+
+                        # 確保視圖範圍不超出音頻長度
+                        if new_view_end > self.audio_duration:
+                            new_view_start = max(0, self.audio_duration - view_width)
+                            new_view_end = self.audio_duration
+
+                        # 更新視圖範圍和選擇區域
+                        self.update_waveform_and_selection((new_view_start, new_view_end), (start_ms, end_ms))
+                    else:
+                        # 選擇區域與視圖範圍有交集，只需更新選擇區域
+                        self.update_waveform_and_selection(self.current_view_range, (start_ms, end_ms))
+                else:
+                    # 如果當前視圖範圍無效，創建新的視圖範圍
+                    duration = end_ms - start_ms
+                    center_time = (start_ms + end_ms) / 2
+                    view_width = max(duration * 3, 2000)
+                    new_view_start = max(0, center_time - view_width / 2)
+                    new_view_end = min(self.audio_duration, new_view_start + view_width)
+
+                    # 更新視圖範圍和選擇區域
+                    self.update_waveform_and_selection((new_view_start, new_view_end), (start_ms, end_ms))
+        except Exception as e:
+            self.logger.error(f"更新選擇區域時出錯: {e}")
+            import traceback
+            self.logger.error(traceback.format_exc())
 
     def create_waveform_with_selection(self, view_range: Tuple[int, int], selection_range: Tuple[int, int]) -> None:
         """

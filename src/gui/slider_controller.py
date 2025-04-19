@@ -54,8 +54,8 @@ class TimeSliderController:
         try:
             style.map("TimeSlider.Horizontal.TScale",
                     background=[("active", "#1E1E1E")],
-                    troughcolor=[("active", "#333333")],
-                    sliderthickness=[("active", 12)],  # 活動時略微增大
+                    troughcolor=[("active", "#444444")],  # 更明顯的軌道顏色
+                    sliderthickness=[("active", 15)],  # 活動時略微增大
                     foreground=[("active", "#4FC3F7")],  # 活動時的亮藍色
                     bordercolor=[("active", "#4FC3F7")],
                     lightcolor=[("active", "#4FC3F7")],
@@ -108,10 +108,25 @@ class TimeSliderController:
                 start_pos = 1
                 end_pos = 2
 
-            # 確保音頻段落已設置
-            if not self.audio_segment:
-                self.logger.warning("音頻段落未設置，無法顯示音頻視圖")
-                # 即使沒有音頻，也繼續創建滑桿
+            # 安全的時間解析函數
+            def safe_parse_time(time_str):
+                try:
+                    from utils.time_utils import parse_time, time_to_milliseconds
+                    parsed_time = parse_time(str(time_str))
+                    return time_to_milliseconds(parsed_time)
+                except Exception as e:
+                    self.logger.error(f"解析時間失敗: {time_str}, 錯誤: {e}")
+                    return None
+
+            # 解析當前文本項目的時間範圍
+            item_start_time = safe_parse_time(values[start_pos]) if len(values) > start_pos else 0
+            item_end_time = safe_parse_time(values[end_pos]) if len(values) > end_pos else 10000
+
+            # 檢查時間解析是否成功
+            if item_start_time is None or item_end_time is None:
+                self.logger.warning(f"時間解析失敗，使用默認值")
+                item_start_time = item_start_time or 0
+                item_end_time = item_end_time or 10000
 
             # 創建滑桿控件
             self._create_slider(
@@ -121,52 +136,35 @@ class TimeSliderController:
                 index_pos, start_pos, end_pos
             )
 
-            # 確保顯示音頻視圖
-            if self.audio_segment and hasattr(self, 'audio_visualizer') and self.audio_visualizer:
-                # 嘗試解析時間
-                try:
-                    # 直接導入需要的函數
-                    from utils.time_utils import parse_time, time_to_milliseconds
+            # 確保音頻段落已設置
+            if self.audio_segment is None:
+                self.logger.warning("音頻段落未設置，無法顯示音頻視圖")
+                return
 
-                    item_start_time = 0
-                    item_end_time = 0
+            # 創建或更新音頻可視化並確保初始的高亮區域正確
+            if hasattr(self, 'audio_visualizer') and self.audio_visualizer:
+                # 計算合適的視圖範圍 - 確保高亮區域居中且有足夠上下文
+                duration = item_end_time - item_start_time
+                center_time = (item_start_time + item_end_time) / 2
 
-                    if len(values) > start_pos:
-                        start_time_str = values[start_pos]
-                        start_time = parse_time(start_time_str)
-                        item_start_time = time_to_milliseconds(start_time)
+                # 動態調整視圖寬度 - 較小的時間範圍需要更大的上下文
+                min_width = max(1000, duration * 2)  # 至少1秒或時間範圍的2倍
+                view_width = min(len(self.audio_segment), min_width)
 
-                    if len(values) > end_pos:
-                        end_time_str = values[end_pos]
-                        end_time = parse_time(end_time_str)
-                        item_end_time = time_to_milliseconds(end_time)
+                # 計算起止點，確保高亮區域在視圖中居中顯示
+                display_start = max(0, center_time - view_width / 2)
+                display_end = min(len(self.audio_segment), display_start + view_width)
 
-                    # 更新音頻視圖顯示
-                    duration = item_end_time - item_start_time
-                    center_time = (item_start_time + item_end_time) / 2
+                # 確保不超出邊界
+                if display_end > len(self.audio_segment):
+                    display_start = max(0, len(self.audio_segment) - view_width)
+                    display_end = len(self.audio_segment)
 
-                    # 動態調整視圖寬度
-                    view_width = max(duration * 3, 2000)  # 至少顯示2秒或時間範圍的3倍
-                    display_start = max(0, center_time - view_width / 2)
-                    display_end = min(len(self.audio_segment), center_time + view_width / 2)
-
-                    # 確保視圖範圍足夠寬
-                    if display_end - display_start < 1000:  # 至少顯示1秒
-                        if display_start == 0:
-                            display_end = min(len(self.audio_segment), 1000)
-                        else:
-                            display_start = max(0, display_end - 1000)
-
-                    # 更新波形和選擇區域
-                    self.audio_visualizer.update_waveform_and_selection(
-                        (display_start, display_end),
-                        (item_start_time, item_end_time)
-                    )
-
-                except Exception as e:
-                    self.logger.error(f"解析時間並更新音頻視圖時出錯: {e}")
-                    import traceback
-                    self.logger.error(traceback.format_exc())
+                # 更新音頻視圖顯示 - 確保高亮區域正確顯示
+                self.audio_visualizer.update_waveform_and_selection(
+                    (display_start, display_end),
+                    (item_start_time, item_end_time)
+                )
 
         except Exception as e:
             self.logger.error(f"顯示滑桿時出錯: {e}")
@@ -221,7 +219,7 @@ class TimeSliderController:
                 bd=0,
                 relief="flat"
             )
-            frame_width = 200  # 固定寬度
+            frame_width = 300  # 增加寬度以顯示更多波形細節
 
             # 放置滑桿框架
             self.slider_frame.place(
@@ -234,18 +232,22 @@ class TimeSliderController:
             # 安全的時間解析函數
             def safe_parse_time(time_str):
                 try:
+                    from utils.time_utils import parse_time, time_to_milliseconds
                     parsed_time = parse_time(str(time_str))
                     return time_to_milliseconds(parsed_time)
                 except Exception as e:
+                    self.logger.error(f"解析時間失敗: {time_str}, 錯誤: {e}")
                     return None
 
-            # 解析當前文本項目的時間範圍
-            item_start_time = safe_parse_time(values[start_pos])
-            item_end_time = safe_parse_time(values[end_pos])
+            # 確保解析成功，使用默認值作為備選方案
+            item_start_time = safe_parse_time(values[start_pos]) if len(values) > start_pos else 0
+            item_end_time = safe_parse_time(values[end_pos]) if len(values) > end_pos else 10000
 
             # 檢查時間解析是否成功
             if item_start_time is None or item_end_time is None:
-                return
+                self.logger.warning(f"時間解析失敗，使用默認值")
+                item_start_time = item_start_time or 0
+                item_end_time = item_end_time or 10000
 
             # 根據列名決定滑桿的初始值
             if column_name == "Start":
@@ -293,22 +295,24 @@ class TimeSliderController:
                 # 設置音頻段落
                 self.audio_visualizer.set_audio_segment(self.audio_segment)
 
-                # 計算初始視圖範圍
+                # 計算初始視圖範圍 - 優化後的計算邏輯
                 duration = item_end_time - item_start_time
                 center_time = (item_start_time + item_end_time) / 2
-                view_width = max(duration * 3, 2000)  # 確保有適當的上下文
 
+                # 動態調整視圖寬度 - 較小的時間範圍需要更大的上下文
+                min_width = max(2000, duration * 3)  # 至少2秒或時間範圍的3倍
+                view_width = min(len(self.audio_segment), min_width)
+
+                # 計算起止點，確保高亮區域在視圖中居中顯示
                 view_start = max(0, center_time - view_width / 2)
-                view_end = min(len(self.audio_segment), center_time + view_width / 2)
+                view_end = min(len(self.audio_segment), view_start + view_width)
 
-                # 確保顯示範圍足夠
-                if view_end - view_start < 1000:  # 至少顯示1秒
-                    if view_start == 0:
-                        view_end = min(len(self.audio_segment), 1000)
-                    else:
-                        view_start = max(0, view_end - 1000)
+                # 確保不超出邊界
+                if view_end > len(self.audio_segment):
+                    view_start = max(0, len(self.audio_segment) - view_width)
+                    view_end = len(self.audio_segment)
 
-                # 初始化波形視圖 - 使用正確的方法名稱
+                # 初始化波形視圖 - 使用update_waveform_and_selection方法
                 self.audio_visualizer.update_waveform_and_selection(
                     (view_start, view_end),
                     (item_start_time, item_end_time)
@@ -356,14 +360,17 @@ class TimeSliderController:
             self.slider_target = {
                 "item": item,
                 "column": column_name,
-                "index": values[index_pos],
+                "index": values[index_pos] if len(values) > index_pos else "",
                 "item_index": item_index,
                 "all_items": all_items,
                 "index_pos": index_pos,
                 "start_pos": start_pos,
                 "end_pos": end_pos,
                 "item_start_time": item_start_time,  # 保存原始文本開始時間
-                "item_end_time": item_end_time       # 保存原始文本結束時間
+                "item_end_time": item_end_time,      # 保存原始文本結束時間
+                # 添加以下字段以便於後續更新
+                "view_start": view_start if 'view_start' in locals() else 0,
+                "view_end": view_end if 'view_end' in locals() else 0
             }
 
             # 綁定外部點擊事件
@@ -544,8 +551,8 @@ class TimeSliderController:
                     widget.config(text=self._format_time_range(start_time, end_time))
                     break
 
-            # 立即更新音頻可視化 - 這是關鍵部分！
-            if hasattr(self, 'audio_visualizer') and self.audio_visualizer and hasattr(self, 'audio_segment'):
+            # 立即更新音頻可視化 - 這是關鍵修改部分
+            if hasattr(self, 'audio_visualizer') and self.audio_visualizer and hasattr(self, 'audio_segment') and self.audio_segment:
                 if start_time is not None and end_time is not None:
                     # 計算視圖範圍，確保高亮區在中心位置
                     duration = end_time - start_time
@@ -563,7 +570,7 @@ class TimeSliderController:
                         else:
                             view_start = max(0, view_end - 1000)
 
-                    # 立即更新波形和選擇區域
+                    # 更新波形視圖 - 使用update_waveform_and_selection方法，確保視圖立即反映變化
                     self.audio_visualizer.update_waveform_and_selection(
                         (view_start, view_end),
                         (start_time, end_time)

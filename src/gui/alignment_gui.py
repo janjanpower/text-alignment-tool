@@ -1977,8 +1977,8 @@ class AlignmentGUI(BaseWindow):
                     if hasattr(self.audio_player, 'segment_audio'):
                         try:
                             self.audio_player.segment_audio(self.srt_data)
-                        except:
-                            pass
+                        except Exception as inner_e:
+                            self.logger.error(f"二次嘗試更新音頻段落時出錯: {inner_e}")
 
                 # 添加：如果有活動的滑桿，更新對應的音頻可視化
                 if hasattr(self, 'slider_controller') and self.slider_controller.slider_active:
@@ -1987,6 +1987,8 @@ class AlignmentGUI(BaseWindow):
                         item = self.slider_controller.slider_target["item"]
                         values = list(self.tree.item(item, "values"))
                         index_pos = 1 if self.display_mode in [self.DISPLAY_MODE_ALL, self.DISPLAY_MODE_AUDIO_SRT] else 0
+                        start_pos = 2 if self.display_mode in [self.DISPLAY_MODE_ALL, self.DISPLAY_MODE_AUDIO_SRT] else 1
+                        end_pos = 3 if self.display_mode in [self.DISPLAY_MODE_ALL, self.DISPLAY_MODE_AUDIO_SRT] else 2
 
                         if len(values) > index_pos:
                             item_index = int(values[index_pos])
@@ -2000,9 +2002,6 @@ class AlignmentGUI(BaseWindow):
                                     self.slider_controller.set_audio_segment(audio_segment)
 
                                     # 獲取當前項目的時間值
-                                    start_pos = 2 if self.display_mode in [self.DISPLAY_MODE_ALL, self.DISPLAY_MODE_AUDIO_SRT] else 1
-                                    end_pos = 3 if self.display_mode in [self.DISPLAY_MODE_ALL, self.DISPLAY_MODE_AUDIO_SRT] else 2
-
                                     if len(values) > start_pos and len(values) > end_pos:
                                         start_time_str = values[start_pos]
                                         end_time_str = values[end_pos]
@@ -2015,20 +2014,15 @@ class AlignmentGUI(BaseWindow):
                                         end_ms = time_to_milliseconds(end_time)
 
                                         # 立即更新音波視圖
-                                        if hasattr(self.slider_controller, '_update_slider_audio_view'):
-                                            self.slider_controller._update_slider_audio_view(start_ms, end_ms)
+                                        duration = end_ms - start_ms
+                                        center_time = (start_ms + end_ms) / 2
+                                        view_width = max(duration * 3, 2000)  # 至少顯示2秒
 
-                                        # 如果有音頻可視化器，直接更新波形
+                                        view_start = max(0, center_time - view_width / 2)
+                                        view_end = min(len(audio_segment), center_time + view_width / 2)
+
+                                        # 直接更新音波視圖
                                         if hasattr(self.slider_controller, 'audio_visualizer') and self.slider_controller.audio_visualizer:
-                                            # 計算適當的視圖範圍
-                                            duration = end_ms - start_ms
-                                            center_time = (start_ms + end_ms) / 2
-                                            view_width = max(duration * 3, 2000)  # 至少顯示2秒
-
-                                            view_start = max(0, center_time - view_width / 2)
-                                            view_end = min(len(audio_segment), center_time + view_width / 2)
-
-                                            # 直接更新音波視圖
                                             self.slider_controller.audio_visualizer.update_waveform_and_selection(
                                                 (view_start, view_end),
                                                 (start_ms, end_ms)
