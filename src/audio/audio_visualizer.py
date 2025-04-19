@@ -82,6 +82,10 @@ class AudioVisualizer:
             view_start = max(0, view_start)
             view_end = min(self.audio_duration, view_end)
 
+            # 確保選擇範圍有效
+            sel_start = max(0, sel_start)
+            sel_end = min(self.audio_duration, sel_end)
+
             if view_end <= view_start:
                 self._create_empty_waveform("無效的視圖範圍")
                 return
@@ -130,38 +134,40 @@ class AudioVisualizer:
                     y2 = center_y + wave_height
                     draw.line([(x, y1), (x, y2)], fill=(100, 210, 255, 255), width=2)
 
-            # 計算選擇區域在視圖中的位置
+            # 計算選擇區域在視圖中的位置 - 修正這部分以確保高亮區域正確
             view_duration = view_end - view_start
-            if view_duration > 0 and sel_end > view_start and sel_start < view_end:
-                # 計算相對位置
-                relative_start = max(0, (sel_start - view_start) / view_duration)
-                relative_end = min(1, (sel_end - view_start) / view_duration)
+            if view_duration > 0:
+                # 確保選擇區與視圖範圍有交集
+                if sel_end > view_start and sel_start < view_end:
+                    # 計算相對位置
+                    relative_start = max(0, (sel_start - view_start) / view_duration)
+                    relative_end = min(1, (sel_end - view_start) / view_duration)
 
-                # 轉換為像素位置
-                start_x = int(relative_start * self.width)
-                end_x = int(relative_end * self.width)
+                    # 轉換為像素位置
+                    start_x = int(relative_start * self.width)
+                    end_x = int(relative_end * self.width)
 
-                # 確保有最小寬度
-                if end_x - start_x < 2:
-                    end_x = min(start_x + 2, self.width)
+                    # 確保有最小寬度
+                    if end_x - start_x < 2:
+                        end_x = min(start_x + 2, self.width)
 
-                # 繪製高亮區域
-                overlay = Image.new('RGBA', img.size, (0, 0, 0, 0))
-                overlay_draw = ImageDraw.Draw(overlay)
+                    # 繪製高亮區域
+                    overlay = Image.new('RGBA', img.size, (0, 0, 0, 0))
+                    overlay_draw = ImageDraw.Draw(overlay)
 
-                # 半透明藍色高亮
-                overlay_draw.rectangle(
-                    [(start_x, 0), (end_x, self.height)],
-                    fill=(79, 195, 247, 100)  # 調整透明度
-                )
+                    # 半透明藍色高亮
+                    overlay_draw.rectangle(
+                        [(start_x, 0), (end_x, self.height)],
+                        fill=(79, 195, 247, 100)  # 調整透明度
+                    )
 
-                # 合併圖層
-                img = Image.alpha_composite(img.convert('RGBA'), overlay)
-                draw = ImageDraw.Draw(img)
+                    # 合併圖層
+                    img = Image.alpha_composite(img.convert('RGBA'), overlay)
+                    draw = ImageDraw.Draw(img)
 
-                # 繪製邊界線
-                draw.line([(start_x, 0), (start_x, self.height)], fill=(79, 195, 247, 255), width=2)
-                draw.line([(end_x, 0), (end_x, self.height)], fill=(79, 195, 247, 255), width=2)
+                    # 繪製邊界線
+                    draw.line([(start_x, 0), (start_x, self.height)], fill=(79, 195, 247, 255), width=2)
+                    draw.line([(end_x, 0), (end_x, self.height)], fill=(79, 195, 247, 255), width=2)
 
             # 更新顯示
             self.waveform_image = img

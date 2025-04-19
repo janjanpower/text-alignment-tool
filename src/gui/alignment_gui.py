@@ -1915,6 +1915,15 @@ class AlignmentGUI(BaseWindow):
                     self.gui.logger.error(f"解析時間字串時出錯: {e}")
                     return None
 
+            def time_to_milliseconds(self, time_obj):
+                """將時間對象轉換為毫秒"""
+                try:
+                    from utils.time_utils import time_to_milliseconds
+                    return time_to_milliseconds(time_obj)
+                except Exception as e:
+                    self.gui.logger.error(f"將時間轉換為毫秒時出錯: {e}")
+                    return 0
+
             def on_time_change(self):
                 """時間變更後的更新操作 - 確保同步音頻段落"""
                 self.gui.update_after_time_change()
@@ -1927,7 +1936,7 @@ class AlignmentGUI(BaseWindow):
 
 
     def update_after_time_change(self):
-        """時間變更後的更新操作，同步音頻段落"""
+        """時間變更後的更新操作，同步音頻段落並更新音波視圖"""
         try:
             self.logger.debug("開始處理時間變更後的更新")
 
@@ -1978,6 +1987,7 @@ class AlignmentGUI(BaseWindow):
                         item = self.slider_controller.slider_target["item"]
                         values = list(self.tree.item(item, "values"))
                         index_pos = 1 if self.display_mode in [self.DISPLAY_MODE_ALL, self.DISPLAY_MODE_AUDIO_SRT] else 0
+
                         if len(values) > index_pos:
                             item_index = int(values[index_pos])
 
@@ -1989,9 +1999,40 @@ class AlignmentGUI(BaseWindow):
                                 if audio_segment and hasattr(self.slider_controller, 'set_audio_segment'):
                                     self.slider_controller.set_audio_segment(audio_segment)
 
-                                    # 立即刷新滑桿上的音頻可視化
-                                    if hasattr(self.slider_controller, 'audio_visualizer') and self.slider_controller.audio_visualizer:
-                                        self.slider_controller.audio_visualizer.create_waveform(audio_segment)
+                                    # 獲取當前項目的時間值
+                                    start_pos = 2 if self.display_mode in [self.DISPLAY_MODE_ALL, self.DISPLAY_MODE_AUDIO_SRT] else 1
+                                    end_pos = 3 if self.display_mode in [self.DISPLAY_MODE_ALL, self.DISPLAY_MODE_AUDIO_SRT] else 2
+
+                                    if len(values) > start_pos and len(values) > end_pos:
+                                        start_time_str = values[start_pos]
+                                        end_time_str = values[end_pos]
+
+                                        # 解析時間
+                                        start_time = parse_time(start_time_str)
+                                        end_time = parse_time(end_time_str)
+
+                                        start_ms = time_to_milliseconds(start_time)
+                                        end_ms = time_to_milliseconds(end_time)
+
+                                        # 立即更新音波視圖
+                                        if hasattr(self.slider_controller, '_update_slider_audio_view'):
+                                            self.slider_controller._update_slider_audio_view(start_ms, end_ms)
+
+                                        # 如果有音頻可視化器，直接更新波形
+                                        if hasattr(self.slider_controller, 'audio_visualizer') and self.slider_controller.audio_visualizer:
+                                            # 計算適當的視圖範圍
+                                            duration = end_ms - start_ms
+                                            center_time = (start_ms + end_ms) / 2
+                                            view_width = max(duration * 3, 2000)  # 至少顯示2秒
+
+                                            view_start = max(0, center_time - view_width / 2)
+                                            view_end = min(len(audio_segment), center_time + view_width / 2)
+
+                                            # 直接更新音波視圖
+                                            self.slider_controller.audio_visualizer.update_waveform_and_selection(
+                                                (view_start, view_end),
+                                                (start_ms, end_ms)
+                                            )
                     except Exception as e:
                         self.logger.error(f"更新滑桿音頻可視化時出錯: {e}")
 
@@ -3780,10 +3821,61 @@ class AlignmentGUI(BaseWindow):
             self.logger.debug("從樹狀視圖重建 SRT 數據")
 
     def _update_audio_segments(self):
-        """更新音頻段落"""
+        """更新音頻段落並確保音波視圖同步更新"""
         if self.audio_imported and hasattr(self, 'audio_player'):
-            self.audio_player.segment_audio(self.srt_data)
-            self.logger.debug("已更新音頻段落")
+            try:
+                # 使用現有的 segment_audio 方法重新分割整個音頻
+                if hasattr(self, 'srt_data') and self.srt_data:
+                    result = self.audio_player.segment_audio(self.srt_data)
+                    self.logger.info(f"音頻段落重建完成，共 {len(self.srt_data)} 個段落")
+
+                    # 檢查當前是否有活動的滑桿，如果有則更新其音頻視圖
+                    if hasattr(self, 'slider_controller') and self.slider_controller.slider_active:
+                        # 獲取當前滑桿對應的項目信息
+                        slider_target = self.slider_controller.slider_target
+                        if slider_target:
+                            item = slider_target.get("item")
+                            if item and self.tree.exists(item):
+                                # 獲取項目索引
+                                values = self.tree.item(item, "values")
+                                index_pos = 1 if self.display_mode in [self.DISPLAY_MODE_ALL, self.DISPLAY_MODE_AUDIO_SRT] else 0
+
+                                if len(values) > index_pos:
+                                    try:
+                                        item_index = int(values[index_pos])
+                                        # 更新滑桿的音頻段落
+                                        if hasattr(self.audio_player, 'segment_manager'):
+                                            audio_segment = self.audio_player.segment_manager.get_segment(item_index)
+                                            if audio_segment:
+                                                self.slider_controller.set_audio_segment(audio_segment)
+                                                # 重新觸發音頻視圖更新
+                                                column_name = slider_target.get("column")
+                                                if column_name in ["Start", "End"]:
+                                                    # 獲取時間值
+                                                    start_pos = slider_target.get("start_pos", 2 if self.display_mode in [self.DISPLAY_MODE_ALL, self.DISPLAY_MODE_AUDIO_SRT] else 1)
+                                                    end_pos = slider_target.get("end_pos", 3 if self.display_mode in [self.DISPLAY_MODE_ALL, self.DISPLAY_MODE_AUDIO_SRT] else 2)
+
+                                                    if len(values) > start_pos and len(values) > end_pos:
+                                                        start_time_str = values[start_pos]
+                                                        end_time_str = values[end_pos]
+
+                                                        # 解析時間
+                                                        start_time = parse_time(start_time_str)
+                                                        end_time = parse_time(end_time_str)
+
+                                                        start_ms = time_to_milliseconds(start_time)
+                                                        end_ms = time_to_milliseconds(end_time)
+
+                                                        # 觸發音頻視圖更新
+                                                        self.slider_controller._update_slider_audio_view(start_ms, end_ms)
+                                    except Exception as e:
+                                        self.logger.error(f"更新滑桿音頻視圖時出錯: {e}")
+
+                    return result
+            except Exception as e:
+                self.logger.error(f"更新音頻段落時出錯: {e}")
+
+        return False
 
     def on_state_change(self):
         """狀態變更事件處理"""
