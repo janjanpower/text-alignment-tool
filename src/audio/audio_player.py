@@ -266,6 +266,14 @@ class AudioPlayer(ttk.Frame):
                 segment = self.audio
             else:
                 segment = self.segment_manager.audio_segments[index]
+
+                # 關鍵修改：檢查音頻段落是否有效
+                if len(segment) == 0:
+                    self.logger.warning(f"索引 {index} 的音頻段落長度為零，使用替代音頻")
+                    # 創建一個短的默認音頻（200毫秒靜音）
+                    from pydub import AudioSegment
+                    segment = AudioSegment.silent(duration=200)
+
                 self.logger.debug(f"找到索引 {index} 的音頻段落，長度：{len(segment)}ms")
 
             # 處理臨時文件並播放

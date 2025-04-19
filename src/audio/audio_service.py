@@ -51,6 +51,12 @@ class AudioService:
             if result:
                 self.audio_imported = True
                 self.audio_file_path = file_path
+
+                # 確保音頻已預加載到所有段落
+                if hasattr(self, 'srt_data') and self.srt_data and len(self.srt_data) > 0:
+                    self.audio_player.segment_audio(self.srt_data)
+                    self.logger.info(f"已預加載音頻到 {len(self.srt_data)} 個段落")
+
                 self.logger.info(f"音頻載入成功: {file_path}")
                 return True
             else:

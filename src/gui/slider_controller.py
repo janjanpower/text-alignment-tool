@@ -128,41 +128,81 @@ class TimeSliderController:
                 item_start_time = item_start_time or 0
                 item_end_time = item_end_time or 10000
 
+            # 確保結束時間大於開始時間
+            if item_end_time <= item_start_time:
+                item_end_time = item_start_time + 200
+
+            # 確定固定點和調整的時間點
+            if column_name == "Start":
+                self.is_adjusting_start = True
+                fixed_point = item_end_time  # 固定結束時間
+                current_value = item_start_time
+            else:  # End column
+                self.is_adjusting_start = False
+                fixed_point = item_start_time  # 固定開始時間
+                current_value = item_end_time
+
             # 創建滑桿控件
             self._create_slider(
                 x, y, width, height,
                 item, column_name,
                 values, item_index, all_items,
-                index_pos, start_pos, end_pos
+                index_pos, start_pos, end_pos,
+                fixed_point=fixed_point,  # 將 fixed_point 傳遞給 _create_slider
+                current_value=current_value
             )
+
 
             # 確保音頻段落已設置
             if self.audio_segment is None:
                 self.logger.warning("音頻段落未設置，無法顯示音頻視圖")
                 return
 
-            # 創建或更新音頻可視化並確保初始的高亮區域正確
+            # 創建或更新音頻可視化
             if hasattr(self, 'audio_visualizer') and self.audio_visualizer:
-                # 計算合適的視圖範圍 - 確保高亮區域居中且有足夠上下文
-                duration = item_end_time - item_start_time
-                center_time = (item_start_time + item_end_time) / 2
+                # 確保整個文本時間範圍被完整顯示
+                start_time = item_start_time
+                end_time = item_end_time
 
-                # 動態調整視圖寬度 - 較小的時間範圍需要更大的上下文
-                min_width = max(1000, duration * 2)  # 至少1秒或時間範圍的2倍
-                view_width = min(len(self.audio_segment), min_width)
+                # 計算視圖範圍，確保完整顯示文本時間範圍
+                duration = end_time - start_time
+                view_width = max(duration * 3, 3000)  # 至少顯示3秒或時間範圍的3倍
+                center_time = (start_time + end_time) / 2
 
-                # 計算起止點，確保高亮區域在視圖中居中顯示
-                display_start = max(0, center_time - view_width / 2)
-                display_end = min(len(self.audio_segment), display_start + view_width)
+                # 計算視圖起止點，確保文本範圍居中且完整可見
+                view_start = max(0, center_time - view_width / 2)
+                view_end = min(len(self.audio_segment), center_time + view_width / 2)
 
-                # 確保不超出邊界
-                if display_end > len(self.audio_segment):
-                    display_start = max(0, len(self.audio_segment) - view_width)
-                    display_end = len(self.audio_segment)
+                # 如果視圖範圍不足，擴大視圖
+                if view_end - view_start < view_width:
+                    if view_start == 0:
+                        view_end = min(len(self.audio_segment), view_width)
+                    else:
+                        view_start = max(0, view_end - view_width)
 
-                # 更新音頻視圖顯示 - 確保高亮區域正確顯示
+                # 確保選擇區域完整顯示
                 self.audio_visualizer.update_waveform_and_selection(
-                    (display_start, display_end),
+                    (view_start, view_end),
+                    (start_time, end_time)
+                )
+
+                # 確保視圖範圍有效
+                if view_end <= view_start:
+                    view_end = min(len(self.audio_segment), view_start + 2000)
+
+                # 保存視圖參數，用於滑桿拖動時更新
+                self.slider_target.update({
+                    "fixed_point": fixed_point,
+                    "view_start": view_start,
+                    "view_end": view_end,
+                    "view_width": view_width,
+                    "item_start_time": item_start_time,
+                    "item_end_time": item_end_time
+                })
+
+                # 更新音頻視圖 - 顯示當前範圍的波形和高亮區
+                self.audio_visualizer.update_waveform_and_selection(
+                    (view_start, view_end),
                     (item_start_time, item_end_time)
                 )
 
@@ -187,16 +227,45 @@ class TimeSliderController:
             self.logger.warning("設置的音頻段落為空或無效")
 
     def _create_slider(self, x, y, width, height, item, column_name, values,
-               item_index, all_items, index_pos, start_pos, end_pos):
+                   item_index, all_items, index_pos, start_pos, end_pos,
+                   fixed_point=None, current_value=None):
         """創建滑桿"""
         try:
             # 如果已有滑桿，先清除
             self.hide_slider()
 
+            # 如果沒有提供 fixed_point，則根據列名設置
+            if fixed_point is None:
+                if column_name == "Start":
+                    fixed_point = values[end_pos] if len(values) > end_pos else 0
+                else:  # End column
+                    fixed_point = values[start_pos] if len(values) > start_pos else 0
+
+            # 如果沒有提供 current_value，則根據列名設置
+            if current_value is None:
+                if column_name == "Start":
+                    current_value = values[start_pos] if len(values) > start_pos else 0
+                else:  # End column
+                    current_value = values[end_pos] if len(values) > end_pos else 0
+
+            # 將 fixed_point 添加到滑桿目標中
+            self.slider_target = {
+                "item": item,
+                "column": column_name,
+                "index": values[index_pos] if len(values) > index_pos else "",
+                "item_index": item_index,
+                "all_items": all_items,
+                "index_pos": index_pos,
+                "start_pos": start_pos,
+                "end_pos": end_pos,
+                "item_start_time": values[start_pos] if len(values) > start_pos else 0,
+                "item_end_time": values[end_pos] if len(values) > end_pos else 0,
+                "fixed_point": fixed_point,  # 添加固定點
+            }
             # 固定高度設置
             LABEL_HEIGHT = 20  # 時間標籤固定高度
-            AUDIO_HEIGHT = 60  # 音波視圖固定高度
-            SLIDER_HEIGHT = 50  # 滑桿固定高度
+            AUDIO_HEIGHT = 40  # 音波視圖固定高度
+            SLIDER_HEIGHT = 30  # 滑桿固定高度
             PADDING = 5  # 組件間距
 
             # 計算總高度 - 根據是否有音頻來調整
@@ -245,7 +314,7 @@ class TimeSliderController:
 
             # 檢查時間解析是否成功
             if item_start_time is None or item_end_time is None:
-                self.logger.warning(f"時間解析失敗，使用默認值")
+                self.logger.warning(f"時間範圍無效，使用默認值")
                 item_start_time = item_start_time or 0
                 item_end_time = item_end_time or 10000
 
@@ -253,9 +322,11 @@ class TimeSliderController:
             if column_name == "Start":
                 current_value = item_start_time
                 self.is_adjusting_start = True  # 標記正在調整開始時間
+                fixed_point = item_end_time  # 固定點是結束時間
             else:  # End column
                 current_value = item_end_time
                 self.is_adjusting_start = False  # 標記正在調整結束時間
+                fixed_point = item_start_time  # 固定點是開始時間
 
             # 創建時間範圍標籤 - 顯示當前文本的完整時間範圍
             time_range_label = tk.Label(
@@ -275,6 +346,7 @@ class TimeSliderController:
 
             # 如果有音頻，立即顯示音頻可視化
             if hasattr(self, 'audio_segment') and self.audio_segment:
+                # ... 音頻可視化代碼保持不變 ...
                 # 創建音頻可視化容器
                 visualizer_container = tk.Frame(self.slider_frame, bg="#1E1E1E")
                 visualizer_container.place(
@@ -295,26 +367,28 @@ class TimeSliderController:
                 self.audio_visualizer.show()
 
                 # 設置音頻段落
-                self.audio_visualizer.set_audio_segment(self.audio_segment)
+                if self.audio_segment:
+                    self.audio_visualizer.set_audio_segment(self.audio_segment)
 
-                # 計算初始視圖範圍 - 關鍵修改：提供足夠上下文
+                # 計算初始視圖範圍
                 duration = item_end_time - item_start_time
                 center_time = (item_start_time + item_end_time) / 2
 
-                # 動態調整視圖寬度 - 較小的時間範圍需要更大的上下文
+                # 動態調整視圖寬度
                 min_width = max(2000, duration * 3)  # 至少2秒或時間範圍的3倍
                 view_width = min(len(self.audio_segment), min_width)
 
-                # 計算起止點，確保高亮區域在視圖中居中顯示
-                view_start = max(0, center_time - view_width / 2)
-                view_end = min(len(self.audio_segment), view_start + view_width)
+                # 根據調整的是開始還是結束時間，確定視圖範圍
+                if self.is_adjusting_start:  # 調整開始時間
+                    # 以固定點（結束時間）為中心計算視圖範圍
+                    view_end = min(len(self.audio_segment), fixed_point + view_width * 0.2)
+                    view_start = max(0, view_end - view_width)
+                else:  # 調整結束時間
+                    # 以固定點（開始時間）為中心計算視圖範圍
+                    view_start = max(0, fixed_point - view_width * 0.2)
+                    view_end = min(len(self.audio_segment), view_start + view_width)
 
-                # 確保不超出邊界
-                if view_end > len(self.audio_segment):
-                    view_start = max(0, len(self.audio_segment) - view_width)
-                    view_end = len(self.audio_segment)
-
-                # 立即創建初始波形視圖 - 關鍵修改：確保音波視圖立即顯示
+                # 立即創建初始波形視圖
                 self.audio_visualizer.create_waveform_with_selection(
                     (view_start, view_end),
                     (item_start_time, item_end_time)
@@ -340,10 +414,15 @@ class TimeSliderController:
                 height=SLIDER_HEIGHT
             )
 
-            # 計算滑桿範圍
+            # 計算滑桿範圍 - 關鍵修改：確保滑桿範圍有效
             min_value, max_value = self._calculate_slider_range(
                 column_name, values, item_index, all_items, end_pos, start_pos, current_value
             )
+
+            # 確保滑桿範圍有效 - 不允許min=max
+            if min_value >= max_value:
+                min_value = current_value - 1000
+                max_value = current_value + 1000
 
             # 創建滑桿
             self.time_slider = ttk.Scale(
@@ -370,9 +449,11 @@ class TimeSliderController:
                 "end_pos": end_pos,
                 "item_start_time": item_start_time,  # 保存原始文本開始時間
                 "item_end_time": item_end_time,      # 保存原始文本結束時間
+                "fixed_point": fixed_point,          # 固定點時間
                 # 添加以下字段以便於後續更新
                 "view_start": view_start if 'view_start' in locals() else 0,
-                "view_end": view_end if 'view_end' in locals() else 0
+                "view_end": view_end if 'view_end' in locals() else 0,
+                "view_width": view_width if 'view_width' in locals() else 2000
             }
 
             # 綁定外部點擊事件
@@ -484,7 +565,7 @@ class TimeSliderController:
             if not self.slider_active or not self.slider_target:
                 return
 
-            # 獲取新的時間值（毫秒）
+            # 獲取新的時間值（毫秒）- 確保是數值類型
             new_value = float(value)
 
             # 將毫秒轉換為 SubRipTime 對象
@@ -496,19 +577,18 @@ class TimeSliderController:
             column_name = self.slider_target["column"]
             values = list(self.tree.item(item, "values"))
 
-            # 更新時間範圍
+            # 獲取固定點
+            fixed_point = self.slider_target.get("fixed_point", 0)
+
+            # 設置開始和結束時間，確保不會發生歸零問題
             start_time = None
             end_time = None
 
+            # 確保時間值有效
             if column_name == "Start":
-                start_time = new_value
-                end_time_str = values[self.slider_target["end_pos"]]
-                try:
-                    from utils.time_utils import parse_time, time_to_milliseconds
-                    end_time_obj = parse_time(end_time_str)
-                    end_time = time_to_milliseconds(end_time_obj)
-                except:
-                    end_time = new_value + 10000
+                # 調整開始時間，結束時間保持不變
+                start_time = min(new_value, fixed_point - 10)  # 確保不能超過結束時間
+                end_time = fixed_point
 
                 # 更新開始時間
                 values[self.slider_target["start_pos"]] = str(new_time)
@@ -522,14 +602,9 @@ class TimeSliderController:
                     self.tree.item(prev_item, values=tuple(prev_values))
 
             else:  # End column
-                end_time = new_value
-                start_time_str = values[self.slider_target["start_pos"]]
-                try:
-                    from utils.time_utils import parse_time, time_to_milliseconds
-                    start_time_obj = parse_time(start_time_str)
-                    start_time = time_to_milliseconds(start_time_obj)
-                except:
-                    start_time = max(0, new_value - 10000)
+                # 調整結束時間，開始時間保持不變
+                start_time = fixed_point
+                end_time = max(new_value, fixed_point + 10)  # 確保不能小於開始時間
 
                 # 更新結束時間
                 values[self.slider_target["end_pos"]] = str(new_time)
@@ -545,59 +620,56 @@ class TimeSliderController:
             # 更新當前項目的值
             self.tree.item(item, values=tuple(values))
 
-            # 更新時間範圍標籤
+            # 重要：始終更新滑桿目標中的時間範圍，即使沒有音頻
+            self.slider_target.update({
+                "item_start_time": start_time,
+                "item_end_time": end_time
+            })
+
+            # 更新時間範圍標籤 - 無論是否有音頻，都需要更新
             for widget in self.slider_frame.winfo_children():
                 if isinstance(widget, tk.Label) and widget.cget('fg') == "#4FC3F7":
                     widget.config(text=self._format_time_range(start_time, end_time))
                     break
 
-            # 更新音頻可視化 - 關鍵修改：根據調整的是開始時間還是結束時間來不同處理視圖縮放
+            # 更新音頻可視化 - 只在有音頻時執行
             if hasattr(self, 'audio_visualizer') and self.audio_visualizer and hasattr(self, 'audio_segment') and self.audio_segment:
                 if start_time is not None and end_time is not None:
-                    duration = end_time - start_time
-                    center_time = (start_time + end_time) / 2
+                    # 獲取當前視圖參數
+                    current_view_start = self.slider_target.get("view_start", 0)
+                    current_view_end = self.slider_target.get("view_end", 0)
+                    current_view_width = self.slider_target.get("view_width", 2000)
 
-                    # 根據是調整開始還是結束時間來決定視圖縮放方向
-                    if self.is_adjusting_start:
-                        # 調整開始時間時，保持原視圖右邊界不變，左邊界根據需要調整
-                        current_view_start, current_view_end = self.slider_target.get("view_start", 0), self.slider_target.get("view_end", 0)
-                        view_width = current_view_end - current_view_start
+                    # 計算新的視圖範圍，根據是調整開始還是結束時間
+                    if self.is_adjusting_start:  # 調整開始時間
+                        # 固定點是結束時間，從右向左調整
+                        new_view_width = max(current_view_width, (end_time - start_time) * 3)
+                        new_view_end = min(len(self.audio_segment), fixed_point + new_view_width * 0.2)
+                        new_view_start = max(0, new_view_end - new_view_width)
 
-                        # 如果當前視圖不夠大，擴大視圖
-                        min_width = max(duration * 3, 2000)
-                        if view_width < min_width:
-                            view_width = min_width
+                        # 確保開始時間在視圖範圍內
+                        if start_time < new_view_start:
+                            offset = new_view_start - start_time
+                            new_view_start = max(0, start_time)
+                            new_view_end = min(len(self.audio_segment), new_view_end - offset)
+                    else:  # 調整結束時間
+                        # 固定點是開始時間，從左向右調整
+                        new_view_width = max(current_view_width, (end_time - start_time) * 3)
+                        new_view_start = max(0, fixed_point - new_view_width * 0.2)
+                        new_view_end = min(len(self.audio_segment), new_view_start + new_view_width)
 
-                        # 調整視圖邊界，保持右邊界，確保高亮區域在合適位置
-                        new_view_start = max(0, center_time - view_width / 2)
-                        new_view_end = min(len(self.audio_segment), new_view_start + view_width)
-
-                        # 如果超出範圍，調整視圖
-                        if new_view_end > len(self.audio_segment):
-                            new_view_start = max(0, len(self.audio_segment) - view_width)
-                            new_view_end = len(self.audio_segment)
-                    else:
-                        # 調整結束時間時，保持原視圖左邊界不變，右邊界根據需要調整
-                        current_view_start, current_view_end = self.slider_target.get("view_start", 0), self.slider_target.get("view_end", 0)
-                        view_width = current_view_end - current_view_start
-
-                        # 如果當前視圖不夠大，擴大視圖
-                        min_width = max(duration * 3, 2000)
-                        if view_width < min_width:
-                            view_width = min_width
-
-                        # 調整視圖邊界，保持左邊界，確保高亮區域在合適位置
-                        new_view_end = min(len(self.audio_segment), center_time + view_width / 2)
-                        new_view_start = max(0, new_view_end - view_width)
-
-                        # 如果超出範圍，調整視圖
-                        if new_view_start < 0:
-                            new_view_start = 0
-                            new_view_end = min(len(self.audio_segment), view_width)
+                        # 確保結束時間在視圖範圍內
+                        if end_time > new_view_end:
+                            offset = end_time - new_view_end
+                            new_view_end = min(len(self.audio_segment), end_time)
+                            new_view_start = max(0, new_view_start + offset)
 
                     # 更新滑桿目標中的視圖範圍
-                    self.slider_target["view_start"] = new_view_start
-                    self.slider_target["view_end"] = new_view_end
+                    self.slider_target.update({
+                        "view_start": new_view_start,
+                        "view_end": new_view_end,
+                        "view_width": new_view_width
+                    })
 
                     # 更新波形視圖
                     self.audio_visualizer.update_waveform_and_selection(

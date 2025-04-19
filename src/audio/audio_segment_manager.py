@@ -52,6 +52,11 @@ class AudioSegmentManager:
                 self.logger.warning("無法重建段落：缺少完整音頻數據")
                 return False
 
+            # 確保音頻已加載和初始化 - 預加載檢查
+            if len(self.full_audio) == 0:
+                self.logger.error("音頻數據長度為零，無法處理")
+                return False
+
             # 記錄處理前後的段落數量，用於調試
             before_count = len(self.audio_segments) if hasattr(self, 'audio_segments') else 0
 
@@ -61,24 +66,37 @@ class AudioSegmentManager:
 
             # 處理每個 SRT 項目
             successful_count = 0
+            error_count = 0
+
             for sub in srt_data:
                 try:
                     # 獲取字幕的起止時間
                     start_ms = self.time_to_milliseconds(sub.start)
                     end_ms = self.time_to_milliseconds(sub.end)
 
-                    # 確保時間範圍有效
+                    # 修復時間範圍問題
                     if start_ms >= end_ms:
-                        self.logger.warning(f"字幕 {sub.index} 的時間範圍無效: {start_ms}-{end_ms}")
-                        continue
+                        old_start_ms = start_ms
+                        old_end_ms = end_ms
+
+                        # 如果開始=結束，則結束時間增加200毫秒
+                        end_ms = start_ms + 200
+
+                        self.logger.warning(f"修復字幕 {sub.index} 的時間範圍: {old_start_ms}-{old_end_ms} -> {start_ms}-{end_ms}")
 
                     # 確保不超出音頻總長度
                     total_duration = len(self.full_audio)
-                    end_ms = min(end_ms, total_duration)
+                    if end_ms > total_duration:
+                        old_end_ms = end_ms
+                        end_ms = total_duration
+                        self.logger.warning(f"字幕 {sub.index} 的結束時間超出音頻長度: {old_end_ms} -> {end_ms}")
 
                     if start_ms >= total_duration:
-                        self.logger.warning(f"字幕 {sub.index} 的開始時間超出音頻長度: {start_ms}>{total_duration}")
-                        continue
+                        old_start_ms = start_ms
+                        # 使用音頻末尾的一小段
+                        start_ms = max(0, total_duration - 500)
+                        end_ms = total_duration
+                        self.logger.warning(f"字幕 {sub.index} 的開始時間超出音頻長度: {old_start_ms} -> {start_ms}")
 
                     # 從完整音頻中切割此段落
                     segment = self.full_audio[start_ms:end_ms]
@@ -95,6 +113,7 @@ class AudioSegmentManager:
                     self.logger.debug(f"重建段落 {idx}: {start_ms}ms-{end_ms}ms, 長度: {end_ms-start_ms}ms")
 
                 except Exception as e:
+                    error_count += 1
                     self.logger.error(f"重建段落 {sub.index} 時出錯: {e}")
                     # 如果特定段落處理失敗，嘗試使用原始段落
                     try:
@@ -102,12 +121,13 @@ class AudioSegmentManager:
                         if idx in old_segments:
                             self.audio_segments[idx] = old_segments[idx]
                             self.logger.info(f"使用原始段落代替: {idx}")
+                            successful_count += 1
                     except (ValueError, KeyError):
                         pass
 
             # 報告處理結果
             after_count = len(self.audio_segments)
-            self.logger.info(f"音頻段落重建完成: 處理前 {before_count} 個, 處理後 {after_count} 個, 成功 {successful_count} 個")
+            self.logger.info(f"音頻段落重建完成: 處理前 {before_count} 個, 處理後 {after_count} 個, 成功 {successful_count} 個, 錯誤 {error_count} 個")
             return True
 
         except Exception as e:
@@ -221,10 +241,15 @@ class AudioSegmentManager:
                     start_ms = self.time_to_milliseconds(sub.start)
                     end_ms = self.time_to_milliseconds(sub.end)
 
-                    # 確保時間範圍有效
+                    # 關鍵修改：檢測並修復相同的開始和結束時間
                     if start_ms >= end_ms:
-                        self.logger.warning(f"字幕 {sub.index} 的時間範圍無效: {start_ms}-{end_ms}")
-                        continue
+                        old_start_ms = start_ms
+                        old_end_ms = end_ms
+
+                        # 修復策略：如果開始=結束，則結束時間增加200毫秒
+                        end_ms = start_ms + 200
+
+                        self.logger.warning(f"修復字幕 {sub.index} 的時間範圍: {old_start_ms}-{old_end_ms} -> {start_ms}-{end_ms}")
 
                     # 修正時間範圍
                     start_ms = max(0, start_ms)
