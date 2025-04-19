@@ -38,6 +38,10 @@ class AudioVisualizer:
         self.current_selection_range = (0, 0)
         self.samples_cache = None  # 緩存音頻樣本數據
 
+        # 新增縮放控制變數
+        self.zoom_level = 1.0
+        self.last_selection_duration = 0
+
         # 初始狀態設置為空白波形
         self._create_empty_waveform("等待音頻...")
 
@@ -100,20 +104,56 @@ class AudioVisualizer:
             self.logger.error(f"音頻預處理的整體異常: {e}")
             return np.zeros(1000, dtype=np.float32)
 
-    def _ensure_view_context(self, view_start: int, view_end: int, total_duration: int, zoom_factor: float = 1.5) -> Tuple[int, int]:
-        view_width = view_end - view_start
-        context_width = max(view_width * zoom_factor, 3000)  # 至少3秒
+    def _calculate_dynamic_view_range(self, start_time: int, end_time: int) -> Tuple[int, int]:
+        """
+        根據選擇範圍計算動態視圖範圍，確保隨著時間範圍變化自動縮放
 
-        center = (view_start + view_end) / 2
-        new_view_start = max(0, center - context_width / 2)
-        new_view_end = min(total_duration, center + context_width / 2)
+        Args:
+            start_time: 選擇區域開始時間（毫秒）
+            end_time: 選擇區域結束時間（毫秒）
 
-        # 量化範圍（如果之前定義了 view_quantum_step）
-        if hasattr(self, 'view_quantum_step'):
-            new_view_start = (new_view_start // self.view_quantum_step) * self.view_quantum_step
-            new_view_end = (new_view_end // self.view_quantum_step) * self.view_quantum_step
+        Returns:
+            (視圖開始時間, 視圖結束時間)
+        """
+        try:
+            # 計算選擇範圍的持續時間
+            selection_duration = end_time - start_time
 
-        return new_view_start, new_view_end
+            # 基礎視圖範圍：根據選擇範圍動態調整
+            # 時間越短，視圖範圍越小（放大）；時間越長，視圖範圍越大（縮小）
+            base_zoom = 3.0
+            if selection_duration < 500:  # 小於 0.5 秒
+                zoom_factor = 1.5
+            elif selection_duration < 1000:  # 小於 1 秒
+                zoom_factor = 2.0
+            elif selection_duration < 2000:  # 小於 2 秒
+                zoom_factor = 2.5
+            else:  # 大於 2 秒
+                zoom_factor = 3.0
+
+            # 計算總視圖寬度
+            view_width = selection_duration * zoom_factor
+            view_width = max(1000, view_width)  # 最小保持 1 秒的視圖寬度
+
+            # 計算視圖中心
+            center_time = (start_time + end_time) / 2
+
+            # 計算視圖起止點
+            view_start = max(0, center_time - view_width / 2)
+            view_end = min(self.audio_duration, center_time + view_width / 2)
+
+            # 確保視圖範圍不超出音頻邊界
+            if view_end - view_start < view_width:
+                if view_start == 0:
+                    view_end = min(self.audio_duration, view_width)
+                else:
+                    view_start = max(0, self.audio_duration - view_width)
+
+            return view_start, view_end
+
+        except Exception as e:
+            self.logger.error(f"計算動態視圖範圍時出錯: {e}")
+            return (0, 2000)  # 返回默認範圍
 
     def set_audio_segment(self, audio_segment: AudioSegment) -> None:
         """設置音頻段落並預處理"""
@@ -190,9 +230,6 @@ class AudioVisualizer:
             sel_start = max(view_start, sel_start)
             sel_end = min(view_end, sel_end)
 
-            # 確保視圖範圍有足夠上下文
-            view_start, view_end = self._ensure_view_context(view_start, view_end, self.audio_duration)
-
             # 記錄當前的視圖和選擇範圍
             self.current_view_range = (view_start, view_end)
             self.current_selection_range = (sel_start, sel_end)
@@ -237,8 +274,8 @@ class AudioVisualizer:
 
                 if start_idx < len(display_samples) and end_idx > start_idx:
                     segment = display_samples[start_idx:end_idx]
-                    # 使用振幅的統計特徵
-                    downsampled.append(np.std(np.abs(segment)) if len(segment) > 0 else 0)
+                    # 使用振幅的峰值而不是標準差，以更好地顯示細節
+                    downsampled.append(np.max(np.abs(segment)) if len(segment) > 0 else 0)
                 else:
                     downsampled.append(0)
 
