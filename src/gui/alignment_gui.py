@@ -1607,10 +1607,6 @@ class AlignmentGUI(BaseWindow):
             # 檢查是否是選中的項目
             is_selected = item in self.tree_manager.get_selected_items()
 
-            # 檢查該項目是否有 use_word_text 標籤 (藍色框)
-            item_tags = self.tree.item(item, "tags")
-            has_word_text = "use_word_text" in item_tags if item_tags else False  # 這裡定義 has_word_text
-
             # 獲取列名
             column_idx = int(column[1:]) - 1
             if column_idx >= len(self.tree["columns"]):
@@ -1650,6 +1646,7 @@ class AlignmentGUI(BaseWindow):
                     # 使用 after 方法確保滑桿在點擊事件處理完成後顯示
                     self.master.after(100, lambda: self.slider_controller.show_slider(event, item, column, column_name))
                 return
+
 
             # 處理文本列點擊事件（SRT Text 或 Word Text）
             elif region == "cell" and is_selected and column_name in ["SRT Text", "Word Text"]:
@@ -1965,35 +1962,6 @@ class AlignmentGUI(BaseWindow):
                     # 這確保音頻段落與新的時間軸完全同步
                     self.audio_player.segment_audio(self.srt_data)
                     self.logger.info("時間調整後已更新音頻段落")
-
-                    # 添加：如果有活動的滑桿，更新對應的音頻可視化
-                    if hasattr(self, 'slider_controller') and self.slider_controller.slider_active:
-                        try:
-                            # 獲取當前選中的項目索引
-                            item = self.slider_controller.slider_target["item"]
-                            values = list(self.tree.item(item, "values"))
-                            index_pos = 1 if self.display_mode in [self.DISPLAY_MODE_ALL, self.DISPLAY_MODE_AUDIO_SRT] else 0
-                            if len(values) > index_pos:
-                                item_index = int(values[index_pos])
-
-                                # 從音頻段落管理器獲取更新後的音頻段落
-                                if hasattr(self.audio_player, 'segment_manager'):
-                                    audio_segment = self.audio_player.segment_manager.audio_segments[item_index]
-
-                                    # 更新滑桿控制器中的音頻段落
-                                    if audio_segment and hasattr(self.slider_controller, 'set_audio_segment'):
-                                        # 先確保可視化器可見
-                                        if hasattr(self.slider_controller, 'audio_visualizer') and self.slider_controller.audio_visualizer:
-                                            self.slider_controller.audio_visualizer.show()
-
-                                        # 然後更新音頻段落
-                                        self.slider_controller.set_audio_segment(audio_segment)
-
-                                        # 強制更新以確保顯示
-                                        self.master.update_idletasks()
-                        except Exception as e:
-                            self.logger.error(f"更新滑桿音頻可視化時出錯: {e}")
-
                 except Exception as e:
                     self.logger.error(f"更新音頻段落時出錯: {e}", exc_info=True)
                     # 即使出錯，仍然嘗試部分更新
@@ -2002,6 +1970,30 @@ class AlignmentGUI(BaseWindow):
                             self.audio_player.segment_audio(self.srt_data)
                         except:
                             pass
+
+                # 添加：如果有活動的滑桿，更新對應的音頻可視化
+                if hasattr(self, 'slider_controller') and self.slider_controller.slider_active:
+                    try:
+                        # 獲取當前選中的項目索引
+                        item = self.slider_controller.slider_target["item"]
+                        values = list(self.tree.item(item, "values"))
+                        index_pos = 1 if self.display_mode in [self.DISPLAY_MODE_ALL, self.DISPLAY_MODE_AUDIO_SRT] else 0
+                        if len(values) > index_pos:
+                            item_index = int(values[index_pos])
+
+                            # 從音頻段落管理器獲取更新後的音頻段落
+                            if hasattr(self.audio_player, 'segment_manager'):
+                                audio_segment = self.audio_player.segment_manager.get_segment(item_index)
+
+                                # 更新滑桿控制器中的音頻段落
+                                if audio_segment and hasattr(self.slider_controller, 'set_audio_segment'):
+                                    self.slider_controller.set_audio_segment(audio_segment)
+
+                                    # 立即刷新滑桿上的音頻可視化
+                                    if hasattr(self.slider_controller, 'audio_visualizer') and self.slider_controller.audio_visualizer:
+                                        self.slider_controller.audio_visualizer.create_waveform(audio_segment)
+                    except Exception as e:
+                        self.logger.error(f"更新滑桿音頻可視化時出錯: {e}")
 
             # 保存操作狀態
             if hasattr(self, 'state_manager'):
