@@ -117,6 +117,7 @@ class AlignmentGUI(BaseWindow):
 
         # 創建但不立即顯示合併符號
         self.merge_symbol = self.ui_manager.create_merge_symbol()
+
         # 綁定點擊事件
         self.merge_symbol.bind('<Button-1>', lambda e: self.combine_sentences())
 
@@ -1596,8 +1597,11 @@ class AlignmentGUI(BaseWindow):
             column = self.tree.identify_column(event.x)
             item = self.tree.identify_row(event.y)
 
+            # 先隱藏時間滑桿（如果有），無論點擊哪裡
+            if hasattr(self, 'slider_controller'):
+                self.slider_controller.hide_slider()
+
             # 無論點擊哪裡，首先檢查是否有已定點的浮動圖標，如果有則隱藏
-            # 這是最關鍵的修改 - 無條件隱藏已定點的圖標
             if hasattr(self, 'ui_manager') and hasattr(self.ui_manager, 'floating_icon_fixed') and self.ui_manager.floating_icon_fixed:
                 self.ui_manager.unfix_floating_icon()
 
@@ -1620,8 +1624,35 @@ class AlignmentGUI(BaseWindow):
             item_tags = self.tree.item(item, "tags")
             has_word_text = "use_word_text" in item_tags if item_tags else False
 
+            # 處理時間欄位的點擊
+            if column_name in ["Start", "End"] and region == "cell":
+                # 檢查是否有音頻
+                if self.audio_imported and hasattr(self, 'audio_player'):
+                    # 獲取當前項目的索引以獲取對應的音頻段落
+                    values = list(self.tree.item(item)["values"])
+                    index_pos = 1 if self.display_mode in [self.DISPLAY_MODE_ALL, self.DISPLAY_MODE_AUDIO_SRT] else 0
+                    if index_pos < len(values):
+                        item_index = int(values[index_pos])
+                        # 獲取對應的音頻段落
+                        audio_segment = None
+                        if item_index in self.audio_player.segment_manager.audio_segments:
+                            audio_segment = self.audio_player.segment_manager.audio_segments[item_index]
+
+                        # 設置音頻段落給滑桿控制器
+                        if hasattr(self, 'slider_controller'):
+                            self.slider_controller.set_audio_segment(audio_segment)
+                else:
+                    # 如果沒有音頻，設置為 None
+                    if hasattr(self, 'slider_controller'):
+                        self.slider_controller.set_audio_segment(None)
+
+                # 顯示時間調整滑桿
+                if hasattr(self, 'slider_controller'):
+                    self.slider_controller.show_slider(event, item, column, column_name)
+                return
+
             # 處理文本列點擊事件（SRT Text 或 Word Text）
-            if region == "cell" and is_selected and column_name in ["SRT Text", "Word Text"]:
+            elif region == "cell" and is_selected and column_name in ["SRT Text", "Word Text"]:
                 # 如果是 SRT Text 列且項目有藍色框，或者是 Word Text 列且點擊了與當前懸停文本不同的項目或列，則隱藏圖標
                 if (column_name == "SRT Text" and has_word_text) or (
                     hasattr(self, 'current_hovering_item') and
@@ -1656,26 +1687,7 @@ class AlignmentGUI(BaseWindow):
                 )
                 self.ui_manager.fix_floating_icon()
 
-            # 隱藏合併符號
-            if hasattr(self, 'merge_symbol'):
-                self.merge_symbol.place_forget()
-
-            # 隱藏時間滑桿（如果有）
-            if hasattr(self, 'slider_controller'):
-                self.slider_controller.hide_slider()
-
-            # 處理時間欄位的點擊
-            if column_name in ["Start", "End"] and region == "cell":
-                # 在點擊時間欄位時，也隱藏已定點的浮動圖標
-                if hasattr(self, 'ui_manager') and self.ui_manager.floating_icon_fixed:
-                    self.ui_manager.unfix_floating_icon()
-
-                # 顯示時間調整滑桿
-                if hasattr(self, 'slider_controller'):
-                    self.slider_controller.show_slider(event, item, column, column_name)
-                return
-
-            # 獲取值
+            # 獲取值 - 處理其他欄位的點擊事件
             values = list(self.tree.item(item)["values"])
             if not values:
                 return

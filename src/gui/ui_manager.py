@@ -54,6 +54,9 @@ class UIManager:
         self.correction_icon = None
         self.preload_correction_icon()
 
+        # 預載入合併圖標
+        self.combine_icon = None
+        self.preload_combine_icon()
     def preload_correction_icon(self):
         """預載入校正圖標，確保保留透明度"""
         try:
@@ -271,16 +274,29 @@ class UIManager:
     def create_merge_symbol(self):
         """創建用於合併操作的加號符號"""
         if not hasattr(self, 'merge_symbol') or self.merge_symbol is None:
-            self.merge_symbol = tk.Label(
-                self.tree,
-                text="+",
-                font=("Arial", 16, "bold"),
-                bg="#4CAF50",
-                fg="white",
-                width=2,
-                height=1,
-                relief="raised"
-            )
+            # 檢查是否有預載入的合併圖標
+            if hasattr(self, 'combine_icon') and self.combine_icon:
+                # 使用圖標創建標籤
+                self.merge_symbol = tk.Label(
+                    self.tree,
+                    image=self.combine_icon,
+                    bg="SystemButtonFace",
+                    bd=0,
+                    highlightthickness=0,
+                    cursor="hand2"
+                )
+            else:
+                # 沒有圖標時，使用文字作為備用
+                self.merge_symbol = tk.Label(
+                    self.tree,
+                    text="+",
+                    font=("Arial", 16, "bold"),
+                    bg="#4CAF50",
+                    fg="white",
+                    width=2,
+                    height=1,
+                    relief="raised"
+                )
 
         return self.merge_symbol
 
@@ -479,3 +495,45 @@ class UIManager:
 
             except Exception as e:
                 self.logger.error(f"處理窗口大小變化時出錯: {e}")
+
+    def preload_combine_icon(self):
+        """預載入合併圖標"""
+        try:
+            from PIL import Image, ImageTk
+
+            # 獲取當前模組所在目錄
+            current_dir = os.path.dirname(os.path.abspath(__file__))
+            gui_dir = os.path.dirname(current_dir) if "components" in current_dir else current_dir
+            src_dir = os.path.dirname(gui_dir)
+            project_root = os.path.dirname(src_dir)
+
+            # 可能的圖標路徑列表
+            possible_paths = [
+                os.path.join(project_root, "assets", "icons", "combine_icon.png"),
+                os.path.join(src_dir, "assets", "icons", "combine_icon.png"),
+                os.path.join(gui_dir, "assets", "icons", "combine_icon.png"),
+                os.path.join(current_dir, "assets", "icons", "combine_icon.png")
+            ]
+
+            # 尋找圖標文件
+            icon_path = None
+            for path in possible_paths:
+                if os.path.exists(path):
+                    icon_path = path
+                    self.logger.debug(f"找到合併圖標: {path}")
+                    break
+
+            if icon_path:
+                # 載入圖標
+                img = Image.open(icon_path)
+                if img.mode != 'RGBA':
+                    img = img.convert('RGBA')
+                img = img.resize((24,24), Image.LANCZOS)  # 調整大小
+                self.combine_icon = ImageTk.PhotoImage(img)
+                self.logger.debug("成功預載入合併圖標")
+            else:
+                self.logger.warning("找不到合併圖標文件 combine_icon.png")
+                self.combine_icon = None
+        except Exception as e:
+            self.logger.error(f"預載入合併圖標時出錯: {e}")
+            self.combine_icon = None
