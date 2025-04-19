@@ -1971,6 +1971,30 @@ class AlignmentGUI(BaseWindow):
                         except:
                             pass
 
+                # 添加：如果有活動的滑桿，更新對應的音頻可視化
+                if hasattr(self, 'slider_controller') and self.slider_controller.slider_active:
+                    try:
+                        # 獲取當前選中的項目索引
+                        item = self.slider_controller.slider_target["item"]
+                        values = list(self.tree.item(item, "values"))
+                        index_pos = 1 if self.display_mode in [self.DISPLAY_MODE_ALL, self.DISPLAY_MODE_AUDIO_SRT] else 0
+                        if len(values) > index_pos:
+                            item_index = int(values[index_pos])
+
+                            # 從音頻段落管理器獲取更新後的音頻段落
+                            if hasattr(self.audio_player, 'segment_manager'):
+                                audio_segment = self.audio_player.segment_manager.get_segment(item_index)
+
+                                # 更新滑桿控制器中的音頻段落
+                                if audio_segment and hasattr(self.slider_controller, 'set_audio_segment'):
+                                    self.slider_controller.set_audio_segment(audio_segment)
+
+                                    # 立即刷新滑桿上的音頻可視化
+                                    if hasattr(self.slider_controller, 'audio_visualizer') and self.slider_controller.audio_visualizer:
+                                        self.slider_controller.audio_visualizer.create_waveform(audio_segment)
+                    except Exception as e:
+                        self.logger.error(f"更新滑桿音頻可視化時出錯: {e}")
+
             # 保存操作狀態
             if hasattr(self, 'state_manager'):
                 current_state = self.get_current_state()
@@ -1983,6 +2007,9 @@ class AlignmentGUI(BaseWindow):
                     },
                     correction_state
                 )
+
+            # 強制更新界面，確保視圖立即刷新
+            self.master.update_idletasks()
 
             self.logger.debug("時間軸已更新完成")
         except Exception as e:
@@ -2335,6 +2362,16 @@ class AlignmentGUI(BaseWindow):
 
             # 添加鼠標離開事件
             self.tree.bind('<Leave>', self.on_mouse_leave_tree)
+
+            # 添加音頻段落更新事件綁定
+            self.master.bind("<<AudioSegmentUpdated>>", self.on_audio_segment_updated)
+
+    def on_audio_segment_updated(self, event=None):
+        """處理音頻段落更新事件"""
+        # 更新樹視圖或其他相關視圖
+        self.update_status("音頻段落已更新")
+        # 強制立即刷新界面
+        self.master.update_idletasks()
 
     def initialize_audio_player(self) -> None:
         """初始化音頻服務和播放器"""

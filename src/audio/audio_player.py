@@ -211,7 +211,14 @@ class AudioPlayer(ttk.Frame):
 
         # 直接傳遞當前加載的音頻和 SRT 數據
         self.segment_manager.segment_audio(self.audio, srt_data)
+
+        # 添加以下代碼確保視圖即時更新
+        if hasattr(self, 'master') and self.master:
+            # 使用 after 方法確保界面更新
+            self.master.after(50, lambda: self.master.event_generate("<<AudioSegmentUpdated>>"))
+
         return True
+
     def segment_single_audio(self, original_start_time, original_end_time, new_start_times, new_end_times, original_index):
         """
         根據新的時間軸切分音頻段落
