@@ -48,6 +48,11 @@ class AudioVisualizer:
             # 獲取音頻數據
             samples = np.array(audio_segment.get_array_of_samples())
 
+            # 如果是立體聲，轉換為單聲道
+            if audio_segment.channels == 2:
+                samples = samples.reshape((-1, 2))
+                samples = samples.mean(axis=1)
+
             # 降采樣以適應顯示寬度
             points_per_pixel = max(1, len(samples) // self.width)
             downsampled = samples[::points_per_pixel]
@@ -66,12 +71,27 @@ class AudioVisualizer:
             center_y = self.height // 2
             draw.line([(0, center_y), (self.width, center_y)], fill=(70, 70, 70, 255))
 
-            # 繪製波形本身
-            for x, sample in enumerate(normalized[:self.width]):
+            # 繪製波形本身 - 使用更平滑的方式
+            for x in range(min(len(normalized), self.width)):
+                sample = normalized[x]
                 y_offset = int(sample * (self.height // 2 - 5))  # 留出一些邊距
                 y1 = center_y - y_offset
                 y2 = center_y + y_offset
-                draw.line([(x, y1), (x, y2)], fill=(79, 195, 247, 255))  # 使用藍色波形
+
+                # 使用漸變效果
+                if y_offset > 0:
+                    # 上半部分使用漸變藍色
+                    for y in range(center_y, y1, -1):
+                        alpha = int(255 * (center_y - y) / y_offset)
+                        draw.point((x, y), fill=(79, 195, 247, alpha))
+
+                    # 下半部分使用漸變藍色
+                    for y in range(center_y, y2):
+                        alpha = int(255 * (y - center_y) / y_offset)
+                        draw.point((x, y), fill=(79, 195, 247, alpha))
+                else:
+                    # 如果沒有波形，畫一條垂直線
+                    draw.line([(x, center_y - 1), (x, center_y + 1)], fill=(79, 195, 247, 128))
 
             # 保存為 PhotoImage
             self.waveform_image = img
@@ -116,8 +136,25 @@ class AudioVisualizer:
             # 重繪波形和選擇區域
             self._redraw_with_selection()
 
+            # 如果選擇區域很小，顯示放大效果
+            if abs(end_x - start_x) < 20:  # 如果選擇區域小於20像素
+                self._show_zoomed_view(start_ms, end_ms)
+
         except Exception as e:
             self.logger.error(f"更新選擇區域時出錯: {e}")
+
+    def _show_zoomed_view(self, start_ms: int, end_ms: int) -> None:
+        """
+        顯示選擇區域的放大視圖
+        :param start_ms: 開始時間（毫秒）
+        :param end_ms: 結束時間（毫秒）
+        """
+        try:
+            # 在選擇區域上方顯示一個放大的視圖框
+            # 這裡只是示意，實際實現需要根據需求細化
+            pass
+        except Exception as e:
+            self.logger.error(f"顯示放大視圖時出錯: {e}")
 
     def _redraw_with_selection(self) -> None:
         """重繪波形並突出顯示選擇區域"""

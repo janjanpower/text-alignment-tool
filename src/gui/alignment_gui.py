@@ -1597,16 +1597,11 @@ class AlignmentGUI(BaseWindow):
             column = self.tree.identify_column(event.x)
             item = self.tree.identify_row(event.y)
 
-            # 先隱藏時間滑桿（如果有），無論點擊哪裡
-            if hasattr(self, 'slider_controller'):
-                self.slider_controller.hide_slider()
-
-            # 無論點擊哪裡，首先檢查是否有已定點的浮動圖標，如果有則隱藏
-            if hasattr(self, 'ui_manager') and hasattr(self.ui_manager, 'floating_icon_fixed') and self.ui_manager.floating_icon_fixed:
-                self.ui_manager.unfix_floating_icon()
-
             # 如果沒有點擊有效區域，直接返回
             if not (region and column and item):
+                # 如果點擊空白區域，隱藏滑桿
+                if hasattr(self, 'slider_controller'):
+                    self.slider_controller.hide_slider()
                 return
 
             # 檢查是否是選中的項目
@@ -1620,12 +1615,12 @@ class AlignmentGUI(BaseWindow):
             column_name = self.tree["columns"][column_idx]
             self.logger.debug(f"點擊的列名: {column_name}")
 
-            # 檢查該項目是否有 use_word_text 標籤 (藍色框)
-            item_tags = self.tree.item(item, "tags")
-            has_word_text = "use_word_text" in item_tags if item_tags else False
-
             # 處理時間欄位的點擊
             if column_name in ["Start", "End"] and region == "cell":
+                # 先隱藏當前滑桿
+                if hasattr(self, 'slider_controller'):
+                    self.slider_controller.hide_slider()
+
                 # 檢查是否有音頻
                 if self.audio_imported and hasattr(self, 'audio_player'):
                     # 獲取當前項目的索引以獲取對應的音頻段落
@@ -1648,8 +1643,10 @@ class AlignmentGUI(BaseWindow):
 
                 # 顯示時間調整滑桿
                 if hasattr(self, 'slider_controller'):
-                    self.slider_controller.show_slider(event, item, column, column_name)
+                    # 使用 after 方法確保滑桿在點擊事件處理完成後顯示
+                    self.master.after(100, lambda: self.slider_controller.show_slider(event, item, column, column_name))
                 return
+
 
             # 處理文本列點擊事件（SRT Text 或 Word Text）
             elif region == "cell" and is_selected and column_name in ["SRT Text", "Word Text"]:

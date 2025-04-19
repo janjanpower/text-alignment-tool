@@ -357,7 +357,7 @@ class TimeSliderController:
             column_name = self.slider_target["column"]
             values = list(self.tree.item(item, "values"))
 
-            # 更新音頻可視化的選擇區域
+            # 實時更新音頻可視化的選擇區域
             if self.audio_visualizer:
                 if column_name == "Start":
                     end_time_str = values[self.slider_target["end_pos"]]
@@ -398,9 +398,13 @@ class TimeSliderController:
 
             # 更新當前項目的值
             self.tree.item(item, values=tuple(values))
+
+            # 實時更新音頻段落同步（可選，根據性能要求決定是否啟用）
+            # 如果性能允許，可以在這裡調用更新音頻段落的方法
+            # self.callbacks.on_time_change()
+
         except Exception as e:
             self.logger.error(f"滑桿值變化處理時出錯: {e}")
-
 
     def check_slider_focus(self, event):
         """
@@ -410,6 +414,20 @@ class TimeSliderController:
         try:
             if not self.slider_active or not self.slider_frame:
                 return
+
+            # 獲取點擊位置相對於樹狀視圖的區域
+            region = self.tree.identify_region(event.x, event.y)
+            column = self.tree.identify_column(event.x)
+            item = self.tree.identify_row(event.y)
+
+            # 如果點擊在時間欄位（Start 或 End），允許切換滑桿，不隱藏
+            if region == "cell" and column:
+                column_idx = int(column[1:]) - 1
+                if column_idx < len(self.tree["columns"]):
+                    column_name = self.tree["columns"][column_idx]
+                    if column_name in ["Start", "End"]:
+                        # 不隱藏滑桿，讓 on_tree_click 處理新滑桿的顯示
+                        return
 
             # 獲取滑桿框架的位置
             slider_x = self.slider_frame.winfo_rootx()
