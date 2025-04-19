@@ -1,7 +1,7 @@
-import os
+"""音頻可視化類的改進實現"""
+
 import logging
 import tkinter as tk
-from tkinter import ttk
 from typing import Optional, Tuple
 import numpy as np
 from PIL import Image, ImageTk, ImageDraw
@@ -9,8 +9,7 @@ from pydub import AudioSegment
 
 
 class AudioVisualizer:
-    """音頻可視化類別"""
-
+    """音頻可視化類別，負責顯示音頻波形和選擇區域"""
 
     def __init__(self, parent: tk.Widget, width: int = 100, height: int = 50):
         """初始化音頻可視化器"""
@@ -39,34 +38,52 @@ class AudioVisualizer:
         self.current_selection_range = (0, 0)
         self.samples_cache = None  # 緩存音頻樣本數據
 
+        # 初始狀態設置為空白波形
+        self._create_empty_waveform("等待音頻...")
+
     def _preprocess_audio(self, audio_segment):
         """預處理音頻數據，只處理一次"""
-        samples = np.array(audio_segment.get_array_of_samples(), dtype=np.float32)
+        try:
+            samples = np.array(audio_segment.get_array_of_samples(), dtype=np.float32)
 
-        # 處理立體聲
-        if audio_segment.channels == 2:
-            samples = samples.reshape((-1, 2)).mean(axis=1)
+            # 處理立體聲
+            if audio_segment.channels == 2:
+                samples = samples.reshape((-1, 2)).mean(axis=1)
 
-        # 正規化
-        max_abs = np.max(np.abs(samples))
-        if max_abs > 0:
-            samples = samples / max_abs
-        else:
-            samples = np.zeros_like(samples)
+            # 正規化
+            max_abs = np.max(np.abs(samples))
+            if max_abs > 0:
+                samples = samples / max_abs
+            else:
+                samples = np.zeros_like(samples)
 
-        return samples
+            self.logger.debug(f"音頻預處理完成: 樣本數={len(samples)}, 最大振幅={max_abs}")
+            return samples
+        except Exception as e:
+            self.logger.error(f"音頻預處理失敗: {e}")
+            return np.zeros(1000)  # 返回空數組作為後備
 
     def set_audio_segment(self, audio_segment: AudioSegment) -> None:
         """設置音頻段落並預處理"""
-        if audio_segment is None or len(audio_segment) == 0:
-            self._create_empty_waveform("無效的音頻段落")
-            return
+        try:
+            if audio_segment is None or len(audio_segment) == 0:
+                self._create_empty_waveform("無效的音頻段落")
+                return
 
-        self.original_audio = audio_segment
-        self.audio_duration = len(audio_segment)
-        # 預處理並緩存音頻數據
-        self.samples_cache = self._preprocess_audio(audio_segment)
-        self.logger.debug(f"音頻預處理完成，樣本數: {len(self.samples_cache)}")
+            self.original_audio = audio_segment
+            self.audio_duration = len(audio_segment)
+            # 預處理並緩存音頻數據
+            self.samples_cache = self._preprocess_audio(audio_segment)
+            self.logger.debug(f"音頻段落設置完成，總時長: {self.audio_duration}ms, 樣本數: {len(self.samples_cache)}")
+
+            # 初始化視圖為整個音頻段落
+            self.current_view_range = (0, self.audio_duration)
+
+            # 重要：設置音頻後立即創建完整波形視圖
+            self.create_waveform_with_selection((0, self.audio_duration), (0, self.audio_duration))
+        except Exception as e:
+            self.logger.error(f"設置音頻段落時出錯: {e}")
+            self._create_empty_waveform(f"錯誤: {str(e)}")
 
     def update_waveform_and_selection(self, view_range: Tuple[int, int], selection_range: Tuple[int, int]) -> None:
         """即時更新波形和選擇區域"""
@@ -90,16 +107,26 @@ class AudioVisualizer:
                 self._create_empty_waveform("無效的視圖範圍")
                 return
 
+            # 記錄當前的視圖和選擇範圍
+            self.current_view_range = (view_start, view_end)
+            self.current_selection_range = (sel_start, sel_end)
+
             # 計算樣本範圍
+            if len(self.samples_cache) == 0:
+                self._create_empty_waveform("沒有音頻樣本數據")
+                return
+
             start_sample = int(view_start * len(self.samples_cache) / self.audio_duration)
             end_sample = int(view_end * len(self.samples_cache) / self.audio_duration)
 
+            # 確保範圍有效
+            start_sample = max(0, start_sample)
+            end_sample = min(len(self.samples_cache), end_sample)
+            if start_sample >= end_sample:
+                end_sample = min(start_sample + 1, len(self.samples_cache))
+
             # 獲取顯示區域的樣本
             display_samples = self.samples_cache[start_sample:end_sample]
-
-            if len(display_samples) == 0:
-                self._create_empty_waveform("沒有可顯示的數據")
-                return
 
             # 降採樣
             samples_per_pixel = max(1, len(display_samples) // self.width)
@@ -134,12 +161,12 @@ class AudioVisualizer:
                     y2 = center_y + wave_height
                     draw.line([(x, y1), (x, y2)], fill=(100, 210, 255, 255), width=2)
 
-            # 計算選擇區域在視圖中的位置 - 修正這部分以確保高亮區域正確
+            # 計算選擇區域在視圖中的位置
             view_duration = view_end - view_start
             if view_duration > 0:
                 # 確保選擇區與視圖範圍有交集
                 if sel_end >= view_start and sel_start <= view_end:
-                    # 計算相對位置 - 關鍵修正：確保選擇區域正確映射到視圖範圍
+                    # 計算相對位置 - 確保選擇區域正確映射到視圖範圍
                     # 如果選擇區域超出視圖範圍，則將其裁剪到視圖範圍內
                     display_sel_start = max(sel_start, view_start)
                     display_sel_end = min(sel_end, view_end)
@@ -171,7 +198,7 @@ class AudioVisualizer:
                         )
 
                         # 合併圖層
-                        img = Image.alpha_composite(img.convert('RGBA'), overlay)
+                        img = Image.alpha_composite(img, overlay)
                         draw = ImageDraw.Draw(img)
 
                         # 繪製邊界線 - 更明顯的邊界
@@ -183,10 +210,6 @@ class AudioVisualizer:
             self.waveform_photo = ImageTk.PhotoImage(img)
             self.canvas.delete("all")
             self.canvas.create_image(0, 0, anchor="nw", image=self.waveform_photo)
-
-            # 保存當前狀態
-            self.current_view_range = view_range
-            self.current_selection_range = selection_range
 
             # 強制立即更新顯示
             self.canvas.update()
@@ -223,16 +246,20 @@ class AudioVisualizer:
         :param audio_segment: 音頻段落
         :param initial_selection: 初始選擇範圍 (start_ms, end_ms)
         """
-        self.set_audio_segment(audio_segment)
+        try:
+            self.set_audio_segment(audio_segment)
 
-        if self.original_audio is None:
-            return
+            if self.original_audio is None:
+                return
 
-        if initial_selection is None:
-            initial_selection = (0, len(self.original_audio))
+            if initial_selection is None:
+                initial_selection = (0, len(self.original_audio))
 
-        # 創建默認視圖（完整音頻）
-        self.create_waveform_with_selection((0, len(self.original_audio)), initial_selection)
+            # 創建默認視圖（完整音頻）
+            self.create_waveform_with_selection((0, len(self.original_audio)), initial_selection)
+        except Exception as e:
+            self.logger.error(f"創建波形圖時出錯: {e}")
+            self._create_empty_waveform(f"錯誤: {str(e)}")
 
     def update_selection(self, start_ms: int, end_ms: int) -> None:
         """更新選擇區域（保持現有視圖範圍）"""
@@ -290,194 +317,16 @@ class AudioVisualizer:
 
     def create_waveform_with_selection(self, view_range: Tuple[int, int], selection_range: Tuple[int, int]) -> None:
         """
-        創建帶有選擇區域的波形圖
+        創建帶有選擇區域的波形圖 - 使用更高效的實現
         :param view_range: 視圖範圍 (start_ms, end_ms)
         :param selection_range: 選擇範圍 (start_ms, end_ms)
         """
         try:
-            if self.original_audio is None:
-                self._create_empty_waveform("未設置音頻")
-                return
-
-            # 確保視圖範圍有效
-            view_start, view_end = view_range
-            view_start = max(0, min(view_start, self.audio_duration))
-            view_end = max(view_start, min(view_end, self.audio_duration))
-
-            # 確保範圍不為零
-            if view_end <= view_start:
-                self._create_empty_waveform("無效的視圖範圍")
-                return
-
-            # 切割音頻段
-            display_audio = self.original_audio[view_start:view_end]
-
-            # 檢查音頻段是否為空
-            if len(display_audio) == 0:
-                self._create_empty_waveform("音頻段為空")
-                return
-
-            # 獲取音頻樣本
-            samples = np.array(display_audio.get_array_of_samples(), dtype=np.float32)
-
-            # 檢查樣本是否為空
-            if len(samples) == 0:
-                self._create_empty_waveform("音頻樣本為空")
-                return
-
-            # 處理立體聲
-            if display_audio.channels == 2:
-                samples = samples.reshape((-1, 2)).mean(axis=1)
-
-            # 正規化
-            max_abs = np.max(np.abs(samples))
-            if max_abs > 0:
-                samples = samples / max_abs
-            else:
-                samples = np.zeros_like(samples)
-
-            # 降採樣 - 修正部分
-            samples_per_pixel = max(1, len(samples) // self.width)
-            downsampled = []
-
-            for i in range(self.width):
-                start_idx = i * samples_per_pixel
-                end_idx = min(start_idx + samples_per_pixel, len(samples))
-
-                if start_idx < len(samples) and end_idx > start_idx:
-                    segment = samples[start_idx:end_idx]
-                    if len(segment) > 0:
-                        downsampled.append(np.max(np.abs(segment)))
-                    else:
-                        downsampled.append(0)
-                else:
-                    downsampled.append(0)
-
-            downsampled = np.array(downsampled)
-
-            # 確保降採樣數組不為空
-            if len(downsampled) == 0:
-                self._create_empty_waveform("降採樣失敗")
-                return
-
-            # 創建圖像
-            img = Image.new('RGBA', (self.width, self.height), (30, 30, 30, 255))
-            draw = ImageDraw.Draw(img)
-
-            # 繪製中心線
-            center_y = self.height // 2
-            draw.line([(0, center_y), (self.width, center_y)], fill=(70, 70, 70, 255), width=1)
-
-            # 繪製波形
-            for x in range(self.width):
-                if x < len(downsampled):
-                    amplitude = downsampled[x]
-                    wave_height = int(amplitude * (self.height // 2 - 4))
-                    y1 = center_y - wave_height
-                    y2 = center_y + wave_height
-                    draw.line([(x, y1), (x, y2)], fill=(100, 210, 255, 255), width=2)
-
-            # 計算選擇區域在視圖中的相對位置
-            sel_start, sel_end = selection_range
-            view_duration = view_end - view_start
-
-            if view_duration > 0 and sel_end > view_start and sel_start < view_end:
-                # 計算相對位置
-                relative_start = max(0, (sel_start - view_start) / view_duration)
-                relative_end = min(1, (sel_end - view_start) / view_duration)
-
-                # 轉換為像素位置
-                start_x = int(relative_start * self.width)
-                end_x = int(relative_end * self.width)
-
-                # 確保有一定寬度
-                if end_x - start_x < 2:
-                    end_x = min(start_x + 2, self.width)
-
-                # 創建高亮覆蓋層
-                overlay = Image.new('RGBA', img.size, (0, 0, 0, 0))
-                overlay_draw = ImageDraw.Draw(overlay)
-
-                # 繪製半透明藍色高亮區域
-                overlay_draw.rectangle(
-                    [(start_x, 0), (end_x, self.height)],
-                    fill=(79, 195, 247, 128)  # 50% 透明度
-                )
-
-                # 合併圖層
-                img = Image.alpha_composite(img.convert('RGBA'), overlay)
-                draw = ImageDraw.Draw(img)
-
-                # 繪製邊界線
-                draw.line([(start_x, 0), (start_x, self.height)], fill=(79, 195, 247, 255), width=2)
-                draw.line([(end_x, 0), (end_x, self.height)], fill=(79, 195, 247, 255), width=2)
-
-            # 更新顯示
-            self.waveform_image = img
-            self.waveform_photo = ImageTk.PhotoImage(img)
-            self.canvas.delete("all")
-            self.canvas.create_image(0, 0, anchor="nw", image=self.waveform_photo)
-
-            # 保存當前狀態
-            self.current_view_range = (view_start, view_end)
-            self.current_selection_range = selection_range
-
-            # 強制更新顯示
-            self.canvas.update_idletasks()
-
+            # 直接使用更高效的update_waveform_and_selection方法
+            self.update_waveform_and_selection(view_range, selection_range)
         except Exception as e:
             self.logger.error(f"創建波形圖時出錯: {e}")
-            import traceback
-            self.logger.error(traceback.format_exc())
             self._create_empty_waveform(f"錯誤: {str(e)}")
-
-    def _show_zoomed_view(self, start_ms: int, end_ms: int) -> None:
-        """
-        顯示選擇區域的放大視圖
-        :param start_ms: 開始時間（毫秒）
-        :param end_ms: 結束時間（毫秒）
-        """
-        try:
-            # 在選擇區域上方顯示一個放大的視圖框
-            # 這裡只是示意，實際實現需要根據需求細化
-            pass
-        except Exception as e:
-            self.logger.error(f"顯示放大視圖時出錯: {e}")
-
-    def _redraw_with_selection(self) -> None:
-        """重繪波形並突出顯示選擇區域"""
-        try:
-            if not self.waveform_image:
-                return
-
-            # 創建新圖像
-            img = self.waveform_image.copy()
-            draw = ImageDraw.Draw(img)
-
-            # 繪製選擇區域（使用半透明高亮）
-            if self.selection_start != self.selection_end:
-                overlay = Image.new('RGBA', img.size, (0, 0, 0, 0))
-                overlay_draw = ImageDraw.Draw(overlay)
-                overlay_draw.rectangle(
-                    [(self.selection_start, 0), (self.selection_end, self.height)],
-                    fill=(79, 195, 247, 100)  # 藍色半透明
-                )
-                img = Image.alpha_composite(img, overlay)
-
-                # 在選擇區域的邊緣繪製線
-                draw = ImageDraw.Draw(img)
-                draw.line([(self.selection_start, 0), (self.selection_start, self.height)],
-                         fill=(79, 195, 247, 255), width=2)
-                draw.line([(self.selection_end, 0), (self.selection_end, self.height)],
-                         fill=(79, 195, 247, 255), width=2)
-
-            # 更新顯示
-            self.waveform_photo = ImageTk.PhotoImage(img)
-            self.canvas.delete("all")
-            self.canvas.create_image(0, 0, anchor="nw", image=self.waveform_photo)
-
-        except Exception as e:
-            self.logger.error(f"重繪波形時出錯: {e}")
 
     def show(self) -> None:
         """顯示波形容器"""
@@ -501,6 +350,9 @@ class AudioVisualizer:
 
             self.waveform_image = None
             self.waveform_photo = None
+
+            # 創建空白波形，避免顯示空白
+            self._create_empty_waveform("等待音頻...")
 
         except tk.TclError:
             pass
