@@ -5,7 +5,7 @@ import time
 import tkinter as tk
 from tkinter import ttk
 
-from audio.audio_range_manager import WaveformVisualization
+from audio.audio_range_manager import AudioRangeManager
 from utils.time_utils import parse_time, milliseconds_to_time, time_to_milliseconds
 from audio.audio_visualizer import AudioVisualizer
 
@@ -566,10 +566,9 @@ class TimeSliderController:
             if self.range_manager:
                 view_start, view_end = self.range_manager.get_optimal_view_range((start_time, end_time))
             else:
-                # 後備計算方法
-                duration = end_time - start_time
+                # 回退到旧方法以防 range_manager 不可用
+                view_width = self._calculate_dynamic_view_width(duration)
                 center_time = (start_time + end_time) / 2
-                view_width = max(duration * 3, 2000)
                 view_start = max(0, center_time - view_width / 2)
                 view_end = min(len(self.audio_segment), view_start + view_width)
 
@@ -747,28 +746,23 @@ class TimeSliderController:
         return min_value, max_value
 
     def set_audio_segment(self, audio_segment):
-        """設置要可視化的音頻段落"""
-        try:
-            if audio_segment is not None and len(audio_segment) > 0:
-                self.audio_segment = audio_segment  # 設置實例屬性
-                self.state.audio_segment = audio_segment  # 同時更新狀態
+        """设置要可视化的音频段落"""
+        if audio_segment is not None and len(audio_segment) > 0:
+            self.audio_segment = audio_segment
+            self.state.audio_segment = audio_segment
 
-                # 使用新的統一範圍管理器
-                from audio.audio_range_manager import AudioRangeManager
+            # 使用新的 AudioRangeManager
+            if audio_segment:
                 self.range_manager = AudioRangeManager(len(audio_segment))
-                self.state.range_manager = self.range_manager  # 更新狀態中的範圍管理器
+                self.state.range_manager = self.range_manager
 
-                self.logger.debug(f"設置音頻段落，長度: {len(audio_segment)} ms")
-            else:
-                self.audio_segment = None
-                self.state.audio_segment = None
-                self.range_manager = None
-                self.state.range_manager = None
-                self.logger.warning("設置的音頻段落為空或無效")
-        except Exception as e:
-            self.logger.error(f"設置音頻段落時出錯: {e}")
+            self.logger.debug(f"設置音頻段落，長度: {len(audio_segment)} ms")
+        else:
             self.audio_segment = None
+            self.state.audio_segment = None
             self.range_manager = None
+            self.state.range_manager = None
+            self.logger.warning("設置的音頻段落為空或無效")
 
     def hide_slider(self):
         """隱藏時間調整滑桿"""

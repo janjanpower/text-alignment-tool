@@ -1,4 +1,4 @@
-"""示範如何在 AudioVisualizer 中整合簡化的 WaveformZoomManager"""
+"""音頻波形可視化模組 - 整合 WaveformVisualization 功能"""
 
 import logging
 import tkinter as tk
@@ -11,7 +11,7 @@ from audio.audio_range_manager import AudioRangeManager
 
 
 class AudioVisualizer:
-    """整合了統一範圍管理器的音頻可視化類別"""
+    """整合了 WaveformVisualization 功能的音頻可視化類別"""
 
     def __init__(self, parent: tk.Widget, width: int = 100, height: int = 50):
         """初始化音頻可視化器"""
@@ -20,12 +20,12 @@ class AudioVisualizer:
         self.width = width
         self.height = height
 
-        # 創建畫布
+        # 創建畫布 - 使用深藍色背景 (從 WaveformVisualization 保留)
         self.canvas = tk.Canvas(
             parent,
             width=width,
             height=height,
-            bg="#233A68",
+            bg="#233A68",  # 使用更好看的深藍背景
             highlightthickness=0
         )
 
@@ -40,8 +40,13 @@ class AudioVisualizer:
         self.current_selection_range = (0, 0)
         self.samples_cache = None  # 緩存音頻樣本數據
 
-        # 初始化範圍管理器為 None，將在設置音頻時創建
+        # 範圍管理器 - 新增整合
         self.range_manager = None
+
+        # 增強的視圖配置 (從 WaveformVisualization)
+        self.min_view_width = 500     # 最小視圖寬度（毫秒）
+        self.max_view_width = 10000   # 最大視圖寬度（毫秒）
+        self.min_selection_width = 100  # 最小選擇區域寬度（毫秒）
 
         # 初始狀態設置為空白波形
         self._create_empty_waveform("等待音頻...")
@@ -56,7 +61,7 @@ class AudioVisualizer:
             self.original_audio = audio_segment
             self.audio_duration = len(audio_segment)
 
-            # 初始化範圍管理器 - 使用統一的 AudioRangeManager
+            # 創建範圍管理器
             self.range_manager = AudioRangeManager(self.audio_duration)
 
             # 預處理並緩存音頻數據
@@ -73,49 +78,29 @@ class AudioVisualizer:
             self.logger.error(f"設置音頻段落時出錯: {e}")
             self._create_empty_waveform(f"錯誤: {str(e)}")
 
-    def _preprocess_audio(self, audio_segment):
-        """預處理音頻數據，只處理一次"""
-        try:
-            samples = np.array(audio_segment.get_array_of_samples(), dtype=np.float32)
+    def update_waveform_and_selection(self, view_range: Tuple[int, int], selection_range: Tuple[int, int], zoom_level: float = None) -> None:
+        """
+        即時更新波形和選擇區域，支持縮放級別 (整合 WaveformVisualization 的增強功能)
 
-            # 處理立體聲
-            if audio_segment.channels == 2:
-                samples = samples.reshape((-1, 2)).mean(axis=1)
-
-            # 正規化
-            max_abs = np.max(np.abs(samples))
-            if max_abs > 0:
-                samples = samples / max_abs
-            else:
-                samples = np.zeros_like(samples)
-
-            self.logger.debug(f"音頻預處理完成: 樣本數={len(samples)}, 最大振幅={max_abs}")
-            return samples
-        except Exception as e:
-            self.logger.error(f"音頻預處理失敗: {e}")
-            return np.zeros(1000)  # 返回空數組作為後備
-
-    def update_waveform_and_selection(self, view_range: Tuple[int, int], selection_range: Tuple[int, int]) -> None:
-        """即時更新波形和選擇區域，使用 AudioRangeManager 處理視圖範圍"""
+        Args:
+            view_range: 視圖範圍 (view_start, view_end)
+            selection_range: 選擇範圍 (sel_start, sel_end)
+            zoom_level: 縮放級別 (可選)，None表示使用默認計算
+        """
         try:
             if self.samples_cache is None or self.original_audio is None:
                 self._create_empty_waveform("未設置音頻數據")
                 return
 
-            # 確保已初始化範圍管理器
-            if self.range_manager is None:
-                self.range_manager = AudioRangeManager(self.audio_duration)
-
-            # 使用範圍管理器獲取最佳視圖範圍
-            # 如果提供的視圖範圍是明確的，則使用它；否則讓範圍管理器計算
-            if view_range == self.current_view_range:
+            # 使用範圍管理器獲取最佳視圖範圍 (如果需要)
+            if self.range_manager and view_range == self.current_view_range:
                 # 視圖範圍沒有變化，可能是只更新了選擇區域
                 view_start, view_end = self.range_manager.get_optimal_view_range(selection_range)
             else:
                 # 使用提供的視圖範圍，但仍進行驗證
                 view_start, view_end = view_range
                 # 確保視圖範圍有效
-                if view_start >= view_end:
+                if view_start >= view_end and self.range_manager:
                     view_start, view_end = self.range_manager.get_optimal_view_range(selection_range)
 
             # 獲取選擇區域
@@ -125,8 +110,8 @@ class AudioVisualizer:
             self.current_view_range = (view_start, view_end)
             self.current_selection_range = (sel_start, sel_end)
 
-            # 使用核心邏輯繪製波形
-            self._draw_waveform_core()
+            # 使用縮放級別繪製增強波形
+            self._draw_waveform_with_zoom(zoom_level)
 
         except Exception as e:
             self.logger.error(f"更新波形時出錯: {e}")
@@ -134,16 +119,31 @@ class AudioVisualizer:
             self.logger.error(traceback.format_exc())
             self._create_empty_waveform(f"錯誤: {str(e)}")
 
-    def _draw_waveform_core(self):
-        """核心波形繪製邏輯 - 更平滑細緻版本"""
+    def _draw_waveform_with_zoom(self, zoom_level=None):
+        """
+        根據縮放級別繪製波形 (從 WaveformVisualization 整合)
+        增強版本支持動態縮放和更美觀的視覺效果
+        """
         try:
             # 獲取當前視圖和選擇範圍
             view_start, view_end = self.current_view_range
             sel_start, sel_end = self.current_selection_range
 
-            # 計算視圖持續時間
+            # 計算視圖持續時間和選擇持續時間
             view_duration = view_end - view_start
             selection_duration = sel_end - sel_start
+
+            # 如果未提供縮放級別，根據視圖和選擇範圍計算默認縮放級別
+            if zoom_level is None:
+                # 根據選擇範圍大小計算縮放級別
+                if selection_duration < 100:  # 非常短的區間
+                    zoom_level = 3.0
+                elif selection_duration < 500:  # 較短的區間
+                    zoom_level = 2.0
+                elif selection_duration < 2000:  # 中等區間
+                    zoom_level = 1.5
+                else:  # 較長區間
+                    zoom_level = 1.0
 
             # 計算顯示的樣本起始和結束索引
             sample_rate = len(self.samples_cache) / self.audio_duration if self.audio_duration > 0 else 44100
@@ -165,35 +165,18 @@ class AudioVisualizer:
             # 初始化降採樣列表
             downsampled = []
 
-            # 定義 zoom_factor (添加這行)
-            zoom_factor = 1  # 或設置為適當的默認值
+            # 根據縮放級別調整採樣策略
+            # 縮放級別越高，採樣越精細，波形越詳細
+            samples_per_pixel = max(1, int(len(display_samples) / (self.width * zoom_level)))
 
-            # 計算縮放比例 - 考慮傳入的縮放因子
-            base_zoom_ratio = view_duration / max(1, selection_duration)
-            effective_zoom_ratio = base_zoom_ratio * zoom_factor
-
-            # 根據有效縮放比例和視圖寬度選擇降採樣策略
-            if selection_duration < 100 or effective_zoom_ratio > 50:  # 非常短的選擇區域或高縮放
-                # 使用最高精度的採樣策略
-                samples_per_pixel = max(1, int(len(display_samples) / (self.width * 3)))
-            elif selection_duration < 500 or effective_zoom_ratio > 20:  # 較短的選擇區域或中高縮放
-                # 使用較高精度的採樣
-                samples_per_pixel = max(1, int(len(display_samples) / (self.width * 2)))
-            elif effective_zoom_ratio > 10:  # 中等縮放
-                # 使用中等精度的採樣
-                samples_per_pixel = max(1, int(len(display_samples) / (self.width * 1.5)))
-            else:  # 低縮放
-                # 標準採樣
-                samples_per_pixel = max(1, len(display_samples) // self.width)
-
-            # 使用更平滑的降採樣方法
+            # 使用平滑的降採樣方法
             if len(display_samples) > 0:
                 # 計算每個像素的峰值和RMS值
                 for i in range(self.width):
-                    start_idx = i * samples_per_pixel
-                    end_idx = min(start_idx + samples_per_pixel, len(display_samples))
+                    start_idx = min(len(display_samples)-1, i * samples_per_pixel)
+                    end_idx = min(len(display_samples), start_idx + samples_per_pixel)
 
-                    if start_idx < len(display_samples) and end_idx > start_idx:
+                    if start_idx < end_idx:
                         segment = display_samples[start_idx:end_idx]
 
                         # 計算段落的峰值和RMS值
@@ -201,9 +184,9 @@ class AudioVisualizer:
                             peak = np.max(np.abs(segment))
                             rms = np.sqrt(np.mean(np.square(segment)))
 
-                            # 使用加權混合值 - 根據縮放因子調整權重
-                            # 縮放越大，越偏向使用峰值以顯示更細節的變化
-                            peak_weight = min(0.9, 0.6 + (zoom_factor - 1.0) * 0.2)
+                            # 使用加權混合值 - 根據縮放級別調整權重
+                            # 縮放級別越高，越偏向使用峰值以顯示更細節的變化
+                            peak_weight = min(0.9, 0.6 + (zoom_level - 1.0) * 0.1)
                             rms_weight = 1.0 - peak_weight
 
                             value = peak * peak_weight + rms * rms_weight
@@ -218,14 +201,14 @@ class AudioVisualizer:
                 max_value = max(max(downsampled), 0.01)  # 避免除以零
                 downsampled = [d / max_value for d in downsampled]
 
-            # 創建圖像 - 根據縮放因子調整顯示效果
-            bg_color = (35, 58, 104, 255)  # 默認背景色
+            # 創建圖像 - 使用深色背景
+            bg_color = (35, 58, 104, 255)  # 深色背景
             img = Image.new('RGBA', (self.width, self.height), bg_color)
             draw = ImageDraw.Draw(img)
 
             # 繪製中心線
             center_y = self.height // 2
-            draw.line([(0, center_y), (self.width, center_y)], fill=(70, 70, 70, 255), width=1)
+            draw.line([(0, center_y), (self.width, center_y)], fill=(70, 70, 70, 255), width=0)
 
             # 使用反鋸齒技術繪製平滑波形
             if len(downsampled) > 0:
@@ -241,27 +224,41 @@ class AudioVisualizer:
                 for x in range(len(downsampled)):
                     amplitude = downsampled[x]
 
-                    # 根據縮放因子調整波形高度 - 縮放越大，波形越高
-                    height_factor = 1.0 + (zoom_factor - 1.0) * 0.3  # 縮放因子影響波形高度
-                    wave_height = int(amplitude * (self.height // 2 - 4) * height_factor)
-                    wave_height = min(wave_height, self.height // 2 - 4)  # 確保不超出界限
+                    # 根據縮放級別和選擇區域持續時間計算波形高度
+                    # 選擇區域越短或縮放級別越高，波形顯示越大
+                    selection_duration = sel_end - sel_start
+                    if selection_duration < 100:  # 非常短的區間 (<100ms)
+                        # 極度放大波形
+                        height_factor = max(2.0, zoom_level * 1.2)
+                    elif selection_duration < 500:  # 較短的區間 (<500ms)
+                        # 顯著放大波形
+                        height_factor = max(1.8, zoom_level * 1.0)
+                    elif selection_duration < 2000:  # 中等區間 (<2s)
+                        # 適度放大波形
+                        height_factor = max(1.5, zoom_level * 0.8)
+                    else:  # 較長區間 (>=2s)
+                        # 標準放大
+                        height_factor = max(1.0, zoom_level * 0.5)
+
+                    # 計算最終波形高度，確保在視圖範圍內
+                    max_height = self.height // 2 - 2  # 最大允許高度
+                    wave_height = int(amplitude * max_height * height_factor)
+                    wave_height = min(wave_height, max_height)  # 確保不超出界限
 
                     y1 = center_y - wave_height
                     y2 = center_y + wave_height
 
-                    # 根據位置和縮放因子選擇不同的顏色和線寬
+                    # 根據位置和縮放級別選擇不同的顏色和線寬
                     if sel_start_pixel <= x <= sel_end_pixel:
-                        # 選擇區域內顏色 - 根據縮放因子調整亮度
-                        intensity = int(180 + min(75, (zoom_factor - 1.0) * 50))  # 更高的縮放 = 更亮的顏色
-                        line_color = (intensity, 230, 255, 255)
-                        line_width = min(3, 1 + int(zoom_factor / 2))  # 縮放越大，線條越粗
+                        # 選擇區域內用亮藍色
+                        blue = min(255, int(150 + zoom_level * 25))  # 縮放越大藍色越亮
+                        line_color = (120, 230, blue, 255)
+                        line_width = min(3, int(1 + zoom_level / 2))  # 縮放越大線條越粗
                     else:
-                        # 選擇區域外顏色
-                        intensity = int(100 + min(50, (zoom_factor - 1.0) * 30))
-                        line_color = (intensity, 200, 255, 255)
+                        # 選擇區域外用標準藍色
+                        line_color = (100, 200, 255, 255)
                         line_width = 1  # 標準線條
 
-                    # 繪製波形
                     draw.line([(x, y1), (x, y2)], fill=line_color, width=line_width)
 
             # 繪製選擇區域高亮
@@ -288,16 +285,17 @@ class AudioVisualizer:
                     end_x = min(self.width, end_x)
 
                     if start_x < end_x:  # 確保有效的選擇區域
-                        # 繪製高亮區域 - 使用漸變效果增強視覺效果
+                        # 繪製高亮區域 - 使用半透明覆蓋
                         overlay = Image.new('RGBA', img.size, (0, 0, 0, 0))
                         overlay_draw = ImageDraw.Draw(overlay)
 
-                        # 使用漸變填充
+                        # 繪製漸變填充
+                        alpha_base = min(160, int(120 + zoom_level * 15))  # 縮放越大越透明
                         for x in range(start_x, end_x):
-                            # 計算距離邊緣的相對位置
+                            # 距離邊緣的相對位置
                             rel_pos = min(x - start_x, end_x - x) / max(1, (end_x - start_x) / 2)
-                            # 計算透明度，邊緣較透明
-                            alpha = int(128 * min(1.0, rel_pos + 0.3))
+                            # 計算透明度
+                            alpha = int(alpha_base * min(1.0, rel_pos + 0.3))
                             overlay_draw.line([(x, 0), (x, self.height)], fill=(79, 195, 247, alpha), width=1)
 
                         # 合併圖層
@@ -305,8 +303,9 @@ class AudioVisualizer:
                         draw = ImageDraw.Draw(img)
 
                         # 繪製邊界線
-                        draw.line([(start_x, 0), (start_x, self.height)], fill=(79, 195, 247, 255), width=2)
-                        draw.line([(end_x, 0), (end_x, self.height)], fill=(79, 195, 247, 255), width=2)
+                        edge_width = max(1, min(3, int(zoom_level)))  # 縮放越大邊界線越粗
+                        draw.line([(start_x, 0), (start_x, self.height)], fill=(79, 195, 247, 255), width=edge_width)
+                        draw.line([(end_x, 0), (end_x, self.height)], fill=(79, 195, 247, 255), width=edge_width)
 
             # 更新顯示
             self.waveform_image = img
@@ -318,9 +317,31 @@ class AudioVisualizer:
             self.canvas.update_idletasks()
 
         except Exception as e:
-            self.logger.error(f"繪製波形核心邏輯出錯: {e}")
+            self.logger.error(f"根據縮放級別繪製波形時出錯: {e}")
             import traceback
             self.logger.error(traceback.format_exc())
+
+    def _preprocess_audio(self, audio_segment):
+        """預處理音頻數據，只處理一次"""
+        try:
+            samples = np.array(audio_segment.get_array_of_samples(), dtype=np.float32)
+
+            # 處理立體聲
+            if audio_segment.channels == 2:
+                samples = samples.reshape((-1, 2)).mean(axis=1)
+
+            # 正規化
+            max_abs = np.max(np.abs(samples))
+            if max_abs > 0:
+                samples = samples / max_abs
+            else:
+                samples = np.zeros_like(samples)
+
+            self.logger.debug(f"音頻預處理完成: 樣本數={len(samples)}, 最大振幅={max_abs}")
+            return samples
+        except Exception as e:
+            self.logger.error(f"音頻預處理失敗: {e}")
+            return np.zeros(1000)  # 返回空數組作為後備
 
     def _create_empty_waveform(self, message="等待音頻..."):
         """創建空白波形圖"""

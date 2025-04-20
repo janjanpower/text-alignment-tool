@@ -1592,313 +1592,387 @@ class AlignmentGUI(BaseWindow):
     def on_tree_click(self, event: tk.Event) -> None:
         """處理樹狀圖的點擊事件"""
         try:
-            # 獲取點擊區域、欄位和項目信息
-            region = self.tree.identify("region", event.x, event.y)
-            column = self.tree.identify_column(event.x)
-            item = self.tree.identify_row(event.y)
-
-            # 如果沒有點擊有效區域，直接返回
-            if not (region and column and item):
-                # 如果點擊空白區域，隱藏滑桿
-                if hasattr(self, 'slider_controller'):
-                    self.slider_controller.hide_slider()
+            # 獲取基本點擊信息
+            click_info = self._get_click_info(event)
+            if not click_info:
                 return
 
-            # 檢查是否是選中的項目
-            is_selected = item in self.tree_manager.get_selected_items()
-
-            # 獲取列名
-            column_idx = int(column[1:]) - 1
-            if column_idx >= len(self.tree["columns"]):
-                return
-
-            column_name = self.tree["columns"][column_idx]
-            self.logger.debug(f"點擊的列名: {column_name}")
+            region, column, item, column_name, column_idx, is_selected = click_info
 
             # 處理時間欄位的點擊
             if column_name in ["Start", "End"] and region == "cell":
-                # 先隱藏當前滑桿
-                if hasattr(self, 'slider_controller'):
-                    self.slider_controller.hide_slider()
-
-                # 檢查是否有音頻
-                if self.audio_imported and hasattr(self, 'audio_player'):
-                    # 獲取當前項目的索引以獲取對應的音頻段落
-                    values = list(self.tree.item(item)["values"])
-                    index_pos = 1 if self.display_mode in [self.DISPLAY_MODE_ALL, self.DISPLAY_MODE_AUDIO_SRT] else 0
-                    if index_pos < len(values):
-                        item_index = int(values[index_pos])
-                        # 獲取對應的音頻段落
-                        audio_segment = None
-                        if item_index in self.audio_player.segment_manager.audio_segments:
-                            audio_segment = self.audio_player.segment_manager.audio_segments[item_index]
-
-                        # 設置音頻段落給滑桿控制器
-                        if hasattr(self, 'slider_controller'):
-                            self.slider_controller.set_audio_segment(audio_segment)
-                else:
-                    # 如果沒有音頻，設置為 None
-                    if hasattr(self, 'slider_controller'):
-                        self.slider_controller.set_audio_segment(None)
-
-                # 顯示時間調整滑桿
-                if hasattr(self, 'slider_controller'):
-                    # 使用 after 方法確保滑桿在點擊事件處理完成後顯示
-                    self.master.after(100, lambda: self.slider_controller.show_slider(event, item, column, column_name))
+                self._handle_time_column_click(event, item, column, column_name)
                 return
 
-
-            # 處理文本列點擊事件（SRT Text 或 Word Text）
+            # 處理文本欄位的點擊
             elif region == "cell" and is_selected and column_name in ["SRT Text", "Word Text"]:
-                # 如果是 SRT Text 列且項目有藍色框，或者是 Word Text 列且點擊了與當前懸停文本不同的項目或列，則隱藏圖標
-                if (column_name == "SRT Text" and "has_word_text_tag") or (
-                    hasattr(self, 'current_hovering_item') and
-                    hasattr(self, 'current_hovering_column') and
-                    self.ui_manager.floating_icon_fixed and
-                    (self.current_hovering_item != item or
-                    self.current_hovering_column != column_name)):
-                    # 取消固定並隱藏浮動圖標
-                    self.ui_manager.unfix_floating_icon()
-                    if column_name == "SRT Text" and "has_word_text_tag":
-                        return
+                self._handle_text_column_click(event, item, column_name, column_idx)
 
-                # 獲取值
-                values = list(self.tree.item(item)["values"])
-                if not values or len(values) <= column_idx:
-                    return
-
-                selected_text = values[column_idx]
-                if not selected_text:
-                    return
-
-                # 更新當前懸停信息
-                self.current_hovering_text = selected_text
-                self.current_hovering_item = item
-                self.current_hovering_column = column_name
-
-                # 固定圖標並顯示在點擊位置
-                self.ui_manager.show_floating_icon(
-                    event.x + 10,
-                    event.y - 10,
-                    lambda e: self.on_icon_click(e)
-                )
-                self.ui_manager.fix_floating_icon()
-
-            # 獲取值 - 處理其他欄位的點擊事件
-            values = list(self.tree.item(item)["values"])
+            # 處理校正圖標欄位的點擊
+            values = self._get_item_values(item)
             if not values:
                 return
 
-            # 處理 V/X 列點擊
             if column_name == "V/X":
-                # 在點擊校正圖標時，也隱藏已定點的浮動圖標
-                if hasattr(self, 'ui_manager') and self.ui_manager.floating_icon_fixed:
-                    self.ui_manager.unfix_floating_icon()
-
-                # 獲取當前項目的索引
-                if self.display_mode == self.DISPLAY_MODE_ALL:
-                    display_index = str(values[1])
-                    text_index = 4
-                elif self.display_mode == self.DISPLAY_MODE_AUDIO_SRT:
-                    display_index = str(values[1])
-                    text_index = 4
-                elif self.display_mode == self.DISPLAY_MODE_SRT_WORD:
-                    display_index = str(values[0])
-                    text_index = 3
-                else:  # SRT 模式
-                    display_index = str(values[0])
-                    text_index = 3
-
-                # 獲取當前文本
-                current_text = values[text_index] if text_index < len(values) else ""
-
-                # 先檢查最後一列的值（校正圖標）
-                correction_mark = values[-1] if len(values) > 0 else ""
-
-                # 如果沒有校正圖標，說明這行文本與錯誤字不符，直接返回
-                if correction_mark == "":
-                    return
-
-                # 檢查是否有校正狀態，這裡簡化判斷：有圖標就表示有校正需求
-                if display_index in self.correction_service.correction_states:
-                    current_state = self.correction_service.correction_states[display_index]
-                    original_text = self.correction_service.original_texts.get(display_index, "")
-                    corrected_text = self.correction_service.corrected_texts.get(display_index, "")
-
-                    # 如果原始文本或校正文本記錄為空，嘗試從當前文本重新檢查
-                    if not original_text or not corrected_text:
-                        _, corrected_text, original_text, _ = self.correction_service.check_text_for_correction(current_text)
-                        # 更新校正記錄
-                        self.correction_service.original_texts[display_index] = original_text
-                        self.correction_service.corrected_texts[display_index] = corrected_text
-
-                    # 根據當前狀態切換
-                    if current_state == 'correct':
-                        # 從已校正切換到未校正
-                        self.correction_service.correction_states[display_index] = 'error'
-                        values[text_index] = original_text
-                        values[-1] = '❌'
-                    else:
-                        # 從未校正切換到已校正
-                        self.correction_service.correction_states[display_index] = 'correct'
-                        values[text_index] = corrected_text
-                        values[-1] = '✅'
-
-                    # 更新樹狀圖顯示
-                    self.tree_manager.update_item(item, values=tuple(values))
-
-                    # 保存當前狀態
-                    if hasattr(self, 'state_manager'):
-                        current_state = self.get_current_state()
-                        correction_state = self.correction_service.serialize_state()
-                        self.save_operation_state('toggle_correction', '切換校正狀態', {'index': display_index})
-
-                    # 更新 SRT 數據
-                    self.update_srt_data_from_treeview()
-                else:
-                    # 如果沒有校正狀態記錄，但有圖標，可能是初始狀態
-                    # 直接檢查文本並設置校正狀態
-                    needs_correction, corrected_text, original_text, _ = self.correction_service.check_text_for_correction(current_text)
-
-                    if needs_correction:
-                        # 決定當前顯示的是原始文本還是校正後文本
-                        is_showing_corrected = (current_text == corrected_text)
-
-                        if is_showing_corrected:
-                            # 當前顯示的是校正後文本，切換到原始文本
-                            self.correction_service.set_correction_state(
-                                display_index,
-                                original_text,
-                                corrected_text,
-                                'error'  # 未校正狀態
-                            )
-                            values[text_index] = original_text
-                            values[-1] = '❌'
-                        else:
-                            # 當前顯示的是原始文本，切換到校正後文本
-                            self.correction_service.set_correction_state(
-                                display_index,
-                                original_text,
-                                corrected_text,
-                                'correct'  # 已校正狀態
-                            )
-                            values[text_index] = corrected_text
-                            values[-1] = '✅'
-
-                        # 更新樹狀圖顯示
-                        self.tree_manager.update_item(item, values=tuple(values))
-
-                        # 保存當前狀態
-                        if hasattr(self, 'state_manager'):
-                            current_state = self.get_current_state()
-                            correction_state = self.correction_service.serialize_state()
-                            self.save_operation_state('init_correction', '初始化校正狀態', {'index': display_index})
-
-                        # 更新 SRT 數據
-                        self.update_srt_data_from_treeview()
+                self._handle_correction_icon_click(item, values, column_name)
 
             # 處理 Word Text 列點擊 - 切換使用 Word 文本
-            if column_name == "Word Text" and self.display_mode in [self.DISPLAY_MODE_SRT_WORD, self.DISPLAY_MODE_ALL]:
-                # 檢查項目是否依然存在
-                if not self.tree.exists(item):
-                    return
-
-                # 隱藏任何已定點的浮動圖標
-                if hasattr(self, 'ui_manager') and self.ui_manager.floating_icon_fixed:
-                    self.ui_manager.unfix_floating_icon()
-
-                # 保存當前標籤和校正狀態，避免丟失
-                current_tags = list(self.tree.item(item, "tags") or tuple())
-
-                # 識別校正狀態相關的標籤
-                correction_tags = [tag for tag in current_tags if tag.startswith("correction_")]
-
-                # 檢查當前是否已經使用 Word 文本
-                using_word_text = "use_word_text" in current_tags
-
-                # 切換狀態
-                if using_word_text:
-                    # 如果已使用 Word 文本，則取消
-                    self.use_word_text[item] = False
-                    if "use_word_text" in current_tags:
-                        current_tags.remove("use_word_text")
-
-                    # 如果文本不匹配，添加 mismatch 標籤
-                    # 獲取 SRT 文本和 Word 文本
-                    if self.display_mode == self.DISPLAY_MODE_ALL:
-                        srt_text_idx = 4  # SRT Text 在 ALL 模式下的索引
-                        word_text_idx = 5  # Word Text 在 ALL 模式下的索引
-                    else:  # SRT_WORD 模式
-                        srt_text_idx = 3  # SRT Text
-                        word_text_idx = 4  # Word Text
-
-                    # 只有當兩個文本不同時才添加 mismatch 標籤
-                    if srt_text_idx < len(values) and word_text_idx < len(values):
-                        srt_text = values[srt_text_idx]
-                        word_text = values[word_text_idx]
-                        if srt_text != word_text and "mismatch" not in current_tags:
-                            current_tags.append("mismatch")
-                else:
-                    # 如果未使用 Word 文本，則開始使用
-                    self.use_word_text[item] = True
-                    if "use_word_text" not in current_tags:
-                        current_tags.append("use_word_text")
-
-                    # 移除 mismatch 標籤
-                    if "mismatch" in current_tags:
-                        current_tags.remove("mismatch")
-
-                # 確保校正標籤被保留
-                for tag in correction_tags:
-                    if tag not in current_tags:
-                        current_tags.append(tag)
-
-                # 更新標籤
-                self.tree.item(item, tags=tuple(current_tags))
-
-                # 確保標籤樣式已設置
-                self.tree.tag_configure('use_word_text', background='#00BFFF')  # 淺藍色背景
-                self.tree.tag_configure('mismatch', background='#FFDDDD')  # 淺紅色背景
-
-                # 保存當前狀態
-                if hasattr(self, 'state_manager'):
-                    current_state = self.get_current_state()
-                    correction_state = self.correction_service.serialize_state()
-                    self.save_operation_state('toggle_word_text', '切換使用Word文本',
-                                            {'item': item, 'use_word': self.use_word_text.get(item, False)})
-                return
+            elif column_name == "Word Text" and self.display_mode in [self.DISPLAY_MODE_SRT_WORD, self.DISPLAY_MODE_ALL]:
+                self._handle_word_text_column_click(item, values)
 
             # 處理音頻播放列的點擊
             elif column_name == 'V.O':
-                # 在點擊音頻播放列時，也隱藏已定點的浮動圖標
-                if hasattr(self, 'ui_manager') and self.ui_manager.floating_icon_fixed:
-                    self.ui_manager.unfix_floating_icon()
-
-                # 先檢查音頻是否已匯入
-                if not self.audio_imported:
-                    show_warning("警告", "未匯入音頻，請先匯入音頻檔案", self.master)
-                    return
-
-                # 檢查音頻播放器是否已初始化
-                if not hasattr(self, 'audio_player') or not self.audio_player.audio:
-                    show_warning("警告", "音頻播放器未初始化或音頻未載入", self.master)
-                    return
-
-                try:
-                    if self.display_mode == self.DISPLAY_MODE_ALL:
-                        index = int(values[1])
-                    elif self.display_mode == self.DISPLAY_MODE_AUDIO_SRT:
-                        index = int(values[1])
-                    else:
-                        index = int(values[0])
-
-                    self.play_audio_segment(index)
-                except (ValueError, IndexError) as e:
-                    self.logger.error(f"處理音頻播放時出錯: {e}")
-                    show_warning("警告", "無法播放音頻段落", self.master)
+                self._handle_audio_column_click(values)
 
         except Exception as e:
             self.logger.error(f"處理樹狀圖點擊事件時出錯: {e}", exc_info=True)
+
+    def _get_click_info(self, event):
+        """獲取點擊的基本信息"""
+        region = self.tree.identify("region", event.x, event.y)
+        column = self.tree.identify_column(event.x)
+        item = self.tree.identify_row(event.y)
+
+        # 如果沒有點擊有效區域，直接返回
+        if not (region and column and item):
+            # 如果點擊空白區域，隱藏滑桿和浮動圖標
+            if hasattr(self, 'slider_controller'):
+                self.slider_controller.hide_slider()
+
+            if hasattr(self, 'ui_manager') and hasattr(self.ui_manager, 'floating_icon_fixed'):
+                if not self.ui_manager.floating_icon_fixed:
+                    self.ui_manager.hide_floating_icon()
+            return None
+
+        # 檢查是否是選中的項目
+        is_selected = item in self.tree_manager.get_selected_items()
+
+        # 獲取列名
+        column_idx = int(column[1:]) - 1
+        if column_idx >= len(self.tree["columns"]):
+            return None
+
+        column_name = self.tree["columns"][column_idx]
+        self.logger.debug(f"點擊的列名: {column_name}")
+
+        return region, column, item, column_name, column_idx, is_selected
+
+    def _get_item_values(self, item):
+        """獲取項目的值"""
+        if not self.tree.exists(item):
+            return None
+        return list(self.tree.item(item)["values"])
+
+    def _handle_time_column_click(self, event, item, column, column_name):
+        """處理時間欄位的點擊"""
+        # 先隱藏當前滑桿
+        if hasattr(self, 'slider_controller'):
+            self.slider_controller.hide_slider()
+
+        # 隱藏浮動圖標（如果有且未固定）
+        if hasattr(self, 'ui_manager') and hasattr(self.ui_manager, 'floating_icon_fixed'):
+            if not self.ui_manager.floating_icon_fixed:
+                self.ui_manager.hide_floating_icon()
+
+        # 檢查是否有音頻並設置音頻段落
+        self._setup_audio_segment_for_slider(item)
+
+        # 顯示時間調整滑桿
+        if hasattr(self, 'slider_controller'):
+            # 使用 after 方法確保滑桿在點擊事件處理完成後顯示
+            self.master.after(100, lambda: self.slider_controller.show_slider(event, item, column, column_name))
+
+    def _setup_audio_segment_for_slider(self, item):
+        """為滑桿設置音頻段落"""
+        if self.audio_imported and hasattr(self, 'audio_player'):
+            # 獲取當前項目的索引以獲取對應的音頻段落
+            values = list(self.tree.item(item)["values"])
+            index_pos = 1 if self.display_mode in [self.DISPLAY_MODE_ALL, self.DISPLAY_MODE_AUDIO_SRT] else 0
+            if index_pos < len(values):
+                item_index = int(values[index_pos])
+                # 獲取對應的音頻段落
+                audio_segment = None
+                if item_index in self.audio_player.segment_manager.audio_segments:
+                    audio_segment = self.audio_player.segment_manager.audio_segments[item_index]
+
+                # 設置音頻段落給滑桿控制器
+                if hasattr(self, 'slider_controller'):
+                    self.slider_controller.set_audio_segment(audio_segment)
+            else:
+                # 如果沒有音頻，設置為 None
+                if hasattr(self, 'slider_controller'):
+                    self.slider_controller.set_audio_segment(None)
+
+    def _handle_text_column_click(self, event, item, column_name, column_idx):
+        """處理文本欄位的點擊"""
+        # 檢查是否為帶有 use_word_text 標籤的 SRT Text 列
+        has_word_text_tag = False
+        if column_name == "SRT Text":
+            item_tags = self.tree.item(item, "tags")
+            has_word_text_tag = "use_word_text" in item_tags if item_tags else False
+
+        # 檢查用戶是否點擊了與當前顯示校正圖標不同的文本
+        is_different_text = False
+        if hasattr(self, 'current_hovering_item') and hasattr(self, 'current_hovering_column'):
+            is_different_text = (self.current_hovering_item != item or self.current_hovering_column != column_name)
+
+        # 如果是標記為使用Word文本的SRT Text列，或點擊了不同的文本但圖標已固定，則取消固定
+        if (column_name == "SRT Text" and has_word_text_tag) or (is_different_text and self.ui_manager.floating_icon_fixed):
+            # 取消固定並隱藏浮動圖標
+            self.ui_manager.unfix_floating_icon()
+            if column_name == "SRT Text" and has_word_text_tag:
+                return
+
+        # 獲取文本值
+        values = list(self.tree.item(item)["values"])
+        if not values or len(values) <= column_idx:
+            return
+
+        selected_text = values[column_idx]
+        if not selected_text:
+            return
+
+        # 更新當前懸停信息
+        self.current_hovering_text = selected_text
+        self.current_hovering_item = item
+        self.current_hovering_column = column_name
+
+        # 固定圖標並顯示在點擊位置
+        self.ui_manager.show_floating_icon(
+            event.x + 10,
+            event.y - 10,
+            lambda e: self.on_icon_click(e)
+        )
+        self.ui_manager.fix_floating_icon()
+
+    def _handle_correction_icon_click(self, item, values, column_name):
+        """處理校正圖標欄位的點擊"""
+        # 在點擊校正圖標時，隱藏已定點的浮動圖標
+        if hasattr(self, 'ui_manager') and self.ui_manager.floating_icon_fixed:
+            self.ui_manager.unfix_floating_icon()
+
+        # 獲取當前項目的索引和文本位置
+        index_and_text = self._get_index_and_text_position(values)
+        if not index_and_text:
+            return
+
+        display_index, text_index = index_and_text
+
+        # 獲取當前文本
+        current_text = values[text_index] if text_index < len(values) else ""
+
+        # 先檢查校正圖標
+        correction_mark = values[-1] if len(values) > 0 else ""
+        if correction_mark == "":
+            return  # 沒有校正圖標，直接返回
+
+        # 切換校正狀態
+        self._toggle_correction_state(item, display_index, text_index, current_text, values)
+
+    def _get_index_and_text_position(self, values):
+        """獲取項目的索引和文本位置"""
+        if self.display_mode == self.DISPLAY_MODE_ALL:
+            display_index = str(values[1]) if len(values) > 1 else ""
+            text_index = 4
+        elif self.display_mode == self.DISPLAY_MODE_AUDIO_SRT:
+            display_index = str(values[1]) if len(values) > 1 else ""
+            text_index = 4
+        elif self.display_mode == self.DISPLAY_MODE_SRT_WORD:
+            display_index = str(values[0]) if len(values) > 0 else ""
+            text_index = 3
+        else:  # SRT 模式
+            display_index = str(values[0]) if len(values) > 0 else ""
+            text_index = 3
+
+        return display_index, text_index
+
+    def _toggle_correction_state(self, item, display_index, text_index, current_text, values):
+        """切換校正狀態"""
+        # 檢查是否有校正狀態
+        if display_index in self.correction_service.correction_states:
+            current_state = self.correction_service.correction_states[display_index]
+            original_text = self.correction_service.original_texts.get(display_index, "")
+            corrected_text = self.correction_service.corrected_texts.get(display_index, "")
+
+            # 如果原始文本或校正文本記錄為空，重新檢查
+            if not original_text or not corrected_text:
+                _, corrected_text, original_text, _ = self.correction_service.check_text_for_correction(current_text)
+                # 更新校正記錄
+                self.correction_service.original_texts[display_index] = original_text
+                self.correction_service.corrected_texts[display_index] = corrected_text
+
+            # 根據當前狀態切換
+            if current_state == 'correct':
+                # 從已校正切換到未校正
+                self.correction_service.correction_states[display_index] = 'error'
+                values[text_index] = original_text
+                values[-1] = '❌'
+            else:
+                # 從未校正切換到已校正
+                self.correction_service.correction_states[display_index] = 'correct'
+                values[text_index] = corrected_text
+                values[-1] = '✅'
+
+            # 更新樹狀圖顯示
+            self.tree_manager.update_item(item, values=tuple(values))
+
+            # 保存當前狀態
+            if hasattr(self, 'state_manager'):
+                current_state = self.get_current_state()
+                correction_state = self.correction_service.serialize_state()
+                self.save_operation_state('toggle_correction', '切換校正狀態', {'index': display_index})
+
+            # 更新 SRT 數據
+            self.update_srt_data_from_treeview()
+        else:
+            # 初始化校正狀態
+            self._initialize_correction_state(item, display_index, text_index, current_text, values)
+
+    def _initialize_correction_state(self, item, display_index, text_index, current_text, values):
+        """初始化校正狀態"""
+        # 檢查文本是否需要校正
+        needs_correction, corrected_text, original_text, _ = self.correction_service.check_text_for_correction(current_text)
+
+        if needs_correction:
+            # 決定當前顯示的是原始文本還是校正後文本
+            is_showing_corrected = (current_text == corrected_text)
+
+            if is_showing_corrected:
+                # 當前顯示的是校正後文本，切換到原始文本
+                self.correction_service.set_correction_state(
+                    display_index,
+                    original_text,
+                    corrected_text,
+                    'error'  # 未校正狀態
+                )
+                values[text_index] = original_text
+                values[-1] = '❌'
+            else:
+                # 當前顯示的是原始文本，切換到校正後文本
+                self.correction_service.set_correction_state(
+                    display_index,
+                    original_text,
+                    corrected_text,
+                    'correct'  # 已校正狀態
+                )
+                values[text_index] = corrected_text
+                values[-1] = '✅'
+
+            # 更新樹狀圖顯示
+            self.tree_manager.update_item(item, values=tuple(values))
+
+            # 保存當前狀態
+            if hasattr(self, 'state_manager'):
+                current_state = self.get_current_state()
+                correction_state = self.correction_service.serialize_state()
+                self.save_operation_state('init_correction', '初始化校正狀態', {'index': display_index})
+
+            # 更新 SRT 數據
+            self.update_srt_data_from_treeview()
+
+    def _handle_word_text_column_click(self, item, values):
+        """處理 Word Text 列點擊 - 切換使用 Word 文本"""
+        # 檢查項目是否依然存在
+        if not self.tree.exists(item):
+            return
+
+        # 隱藏任何已定點的浮動圖標
+        if hasattr(self, 'ui_manager') and self.ui_manager.floating_icon_fixed:
+            self.ui_manager.unfix_floating_icon()
+
+        # 切換使用 Word 文本的狀態
+        self._toggle_use_word_text(item, values)
+
+    def _toggle_use_word_text(self, item, values):
+        """切換使用 Word 文本的狀態"""
+        # 保存當前標籤和校正狀態，避免丟失
+        current_tags = list(self.tree.item(item, "tags") or tuple())
+
+        # 識別校正狀態相關的標籤
+        correction_tags = [tag for tag in current_tags if tag.startswith("correction_")]
+
+        # 檢查當前是否已經使用 Word 文本
+        using_word_text = "use_word_text" in current_tags
+
+        # 切換狀態
+        if using_word_text:
+            # 如果已使用 Word 文本，則取消
+            self.use_word_text[item] = False
+            if "use_word_text" in current_tags:
+                current_tags.remove("use_word_text")
+
+            # 確定文本索引位置
+            text_indices = self._get_text_indices()
+
+            # 如果文本不匹配，添加 mismatch 標籤
+            if (text_indices['srt'] < len(values) and
+                text_indices['word'] < len(values) and
+                values[text_indices['srt']] != values[text_indices['word']] and
+                "mismatch" not in current_tags):
+                current_tags.append("mismatch")
+        else:
+            # 如果未使用 Word 文本，則開始使用
+            self.use_word_text[item] = True
+            if "use_word_text" not in current_tags:
+                current_tags.append("use_word_text")
+
+            # 移除 mismatch 標籤
+            if "mismatch" in current_tags:
+                current_tags.remove("mismatch")
+
+        # 確保校正標籤被保留
+        for tag in correction_tags:
+            if tag not in current_tags:
+                current_tags.append(tag)
+
+        # 更新標籤
+        self.tree.item(item, tags=tuple(current_tags))
+
+        # 確保標籤樣式已設置
+        self.tree.tag_configure('use_word_text', background='#00BFFF')  # 淺藍色背景
+        self.tree.tag_configure('mismatch', background='#FFDDDD')  # 淺紅色背景
+
+        # 保存當前狀態
+        if hasattr(self, 'state_manager'):
+            current_state = self.get_current_state()
+            correction_state = self.correction_service.serialize_state()
+            self.save_operation_state('toggle_word_text', '切換使用Word文本',
+                                    {'item': item, 'use_word': self.use_word_text.get(item, False)})
+
+    def _get_text_indices(self):
+        """獲取文本欄位的索引位置"""
+        if self.display_mode == self.DISPLAY_MODE_ALL:
+            return {'srt': 4, 'word': 5}
+        else:  # SRT_WORD 模式
+            return {'srt': 3, 'word': 4}
+
+    def _handle_audio_column_click(self, values):
+        """處理音頻播放列的點擊"""
+        # 在點擊音頻播放列時，也隱藏已定點的浮動圖標
+        if hasattr(self, 'ui_manager') and self.ui_manager.floating_icon_fixed:
+            self.ui_manager.unfix_floating_icon()
+
+        # 先檢查音頻是否已匯入
+        if not self.audio_imported:
+            show_warning("警告", "未匯入音頻，請先匯入音頻檔案", self.master)
+            return
+
+        # 檢查音頻播放器是否已初始化
+        if not hasattr(self, 'audio_player') or not self.audio_player.audio:
+            show_warning("警告", "音頻播放器未初始化或音頻未載入", self.master)
+            return
+
+        try:
+            # 獲取音頻索引
+            if self.display_mode == self.DISPLAY_MODE_ALL or self.display_mode == self.DISPLAY_MODE_AUDIO_SRT:
+                index = int(values[1])
+            else:
+                index = int(values[0])
+
+            self.play_audio_segment(index)
+        except (ValueError, IndexError) as e:
+            self.logger.error(f"處理音頻播放時出錯: {e}")
+            show_warning("警告", "無法播放音頻段落", self.master)
 
     def _create_slider_callbacks(self):
         """創建滑桿控制器所需的回調函數"""
@@ -2053,18 +2127,45 @@ class AlignmentGUI(BaseWindow):
     def on_icon_click(self, event):
         """當圖標被點擊時的處理，打開添加視窗"""
         try:
+            # 確保在點擊時圖標固定（防止提前移除）
+            if hasattr(self, 'ui_manager'):
+                self.ui_manager.floating_icon_fixed = True
+
             # 顯示添加校正對話框
             if hasattr(self, 'current_hovering_text') and self.current_hovering_text:
-                # 在顯示對話框前取消固定狀態，這樣對話框關閉後圖標不會殘留
+                # 記錄圖標位置（便於需要時恢復）
+                self._record_icon_position()
+
+                # 顯示對話框
+                self.show_add_correction_dialog(self.current_hovering_text)
+
+                # 對話框關閉後取消固定
+                if hasattr(self, 'ui_manager'):
+                    self.ui_manager.unfix_floating_icon()
+            else:
+                self.logger.warning("找不到當前懸停文本，無法打開校正對話框")
+                # 如果出錯也取消固定
                 if hasattr(self, 'ui_manager'):
                     self.ui_manager.unfix_floating_icon()
 
-                self.show_add_correction_dialog(self.current_hovering_text)
-            else:
-                self.logger.warning("找不到當前懸停文本，無法打開校正對話框")
-
         except Exception as e:
             self.logger.error(f"圖標點擊處理時出錯: {e}", exc_info=True)
+            # 確保即使出錯也取消固定
+            if hasattr(self, 'ui_manager'):
+                self.ui_manager.unfix_floating_icon()
+
+    def _record_icon_position(self):
+        """記錄圖標位置，便於需要時恢復"""
+        if hasattr(self, 'ui_manager') and hasattr(self.ui_manager, 'floating_icon'):
+            if self.ui_manager.floating_icon:
+                self.last_icon_x = self.ui_manager.floating_icon.winfo_x()
+                self.last_icon_y = self.ui_manager.floating_icon.winfo_y()
+
+    def on_mouse_leave_tree(self, event):
+        """當鼠標離開樹狀視圖時的處理"""
+        # 只隱藏未固定的浮動圖標
+        if hasattr(self, 'ui_manager') and not self.ui_manager.floating_icon_fixed:
+            self.ui_manager.hide_floating_icon()
 
     def reset_floating_icon_state(self):
         """重置浮動圖標的狀態"""
@@ -4924,67 +5025,87 @@ class AlignmentGUI(BaseWindow):
     def show_floating_correction_icon(self, event):
         """顯示跟隨游標的校正圖標，但只在選中的文本項目上"""
         try:
-            # 獲取游標所在位置的區域和欄位
-            region = self.tree.identify("region", event.x, event.y)
-            column = self.tree.identify_column(event.x)
-            item = self.tree.identify_row(event.y)
+            # 首先更新記錄滑鼠位置，無論是否顯示圖標
+            if hasattr(self, 'remember_mouse_position'):
+                self.remember_mouse_position(event)
 
-            # 如果圖標已固定，不再移動但繼續跟蹤鼠標位置
-            # 注意：這裡不提前返回，保持跟蹤當前位置
+            # 如果圖標已固定，不做任何處理，只記錄位置
+            if hasattr(self, 'ui_manager') and self.ui_manager.floating_icon_fixed:
+                return
 
-            # 檢查是否為選中的項目
-            is_selected = item in self.tree_manager.get_selected_items()
-
-            # 檢查該項目是否有 use_word_text 標籤 (藍色框)
-            item_tags = self.tree.item(item, "tags")
-            has_word_text_tag = "use_word_text" in item_tags if item_tags else False
-
-            # 只有在文本欄位上且是被選中的項目且不是藍色框標記的項目才顯示圖標
-            is_text_column = False
-            if region == "cell" and column and item and is_selected:
-                column_idx = int(column[1:]) - 1
-                if column_idx >= 0 and column_idx < len(self.tree["columns"]):
-                    column_name = self.tree["columns"][column_idx]
-                    # 只在SRT Text列上顯示，如果是SRT Text列有藍色框，則不顯示
-                    if column_name == "SRT Text" and not has_word_text_tag:
-                        is_text_column = True
-                    elif column_name == "Word Text":  # Word Text 列無論是否藍色框都可以顯示
-                        is_text_column = True
-
-            # 如果游標不在適合顯示的文本欄位上或不是被選中的項目，且圖標未固定，則隱藏圖標
-            if (not is_text_column or not is_selected) and not self.ui_manager.floating_icon_fixed:
+            # 檢查鼠標是否在適合顯示圖標的位置
+            icon_display_info = self._check_icon_display_position(event)
+            if not icon_display_info:
                 self.ui_manager.hide_floating_icon()
                 return
 
-            # 如果不在可顯示區域，直接返回
-            if not is_text_column or not is_selected:
-                return
-
-            # 獲取文本內容
-            values = self.tree.item(item, "values")
-            if not values or len(values) <= column_idx:
-                return
-
-            selected_text = values[column_idx]
-            if not selected_text:
-                return
+            # 解包信息
+            item, column_name, column_idx, selected_text = icon_display_info
 
             # 保存相關信息
             self.current_hovering_text = selected_text
             self.current_hovering_item = item
             self.current_hovering_column = column_name
 
-            # 只有在圖標未固定時才顯示浮動圖標
-            if not self.ui_manager.floating_icon_fixed:
-                # 使用 ui_manager 顯示浮動圖標
-                self.ui_manager.show_floating_icon(
-                    event.x + 10,
-                    event.y - 10,
-                    lambda e: self.on_icon_click(e)
-                )
+            # 顯示浮動圖標
+            self.ui_manager.show_floating_icon(
+                event.x + 10,
+                event.y - 10,
+                lambda e: self.on_icon_click(e)
+            )
 
         except Exception as e:
             self.logger.error(f"顯示浮動校正圖標時出錯: {e}", exc_info=True)
+
+    def _check_icon_display_position(self, event):
+        """檢查鼠標位置是否適合顯示校正圖標"""
+        # 獲取游標所在位置的區域和欄位
+        region = self.tree.identify("region", event.x, event.y)
+        column = self.tree.identify_column(event.x)
+        item = self.tree.identify_row(event.y)
+
+        # 檢查基本條件
+        if not (region == "cell" and column and item):
+            return None
+
+        # 檢查是否為選中的項目
+        is_selected = item in self.tree_manager.get_selected_items()
+        if not is_selected:
+            return None
+
+        # 檢查列索引是否有效
+        column_idx = int(column[1:]) - 1
+        if column_idx < 0 or column_idx >= len(self.tree["columns"]):
+            return None
+
+        # 獲取列名
+        column_name = self.tree["columns"][column_idx]
+
+        # 檢查該項目是否有 use_word_text 標籤 (藍色框)
+        item_tags = self.tree.item(item, "tags") if self.tree.exists(item) else ()
+        has_word_text_tag = "use_word_text" in item_tags if item_tags else False
+
+        # 判斷是否為可顯示圖標的列
+        is_text_column = False
+        if column_name == "SRT Text" and not has_word_text_tag:
+            is_text_column = True
+        elif column_name == "Word Text":  # Word Text 列無論是否藍色框都可以顯示
+            is_text_column = True
+
+        if not is_text_column:
+            return None
+
+        # 獲取文本內容
+        values = self.tree.item(item, "values")
+        if not values or len(values) <= column_idx:
+            return None
+
+        selected_text = values[column_idx]
+        if not selected_text:
+            return None
+
+        # 返回所有相關信息
+        return item, column_name, column_idx, selected_text
 
     def get_column_index(self, column_name):
         """獲取列名對應的索引"""

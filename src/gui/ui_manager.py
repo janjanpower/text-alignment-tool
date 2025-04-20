@@ -345,11 +345,11 @@ class UIManager:
 
             # 使用預載入的圖標
             if hasattr(self, 'correction_icon') and self.correction_icon:
-                # 創建帶圖標的標籤，使用樹狀視圖的背景顏色
+                # 創建帶圖標的標籤
                 self.floating_icon = tk.Label(
                     self.tree,
                     image=self.correction_icon,
-                    bg="SystemButtonFace",  # 使用系統按鈕默認顏色，在大多數系統上是透明的
+                    bg="SystemButtonFace",  # 使用系統按鈕默認顏色
                     bd=0,   # 無邊框
                     highlightthickness=0,  # 無高亮邊框
                     cursor="hand2"
@@ -359,13 +359,14 @@ class UIManager:
                 self.floating_icon = tk.Label(
                     self.tree,
                     text="✚",  # 使用十字形加號作為備用
-                    bg="SystemButtonFace",  # 使用系統按鈕默認顏色，在大多數系統上是透明的
-                    bd=0,   # 無邊框
-                    highlightthickness=0,  # 無高亮邊框
+                    bg="SystemButtonFace",
+                    bd=0,
+                    highlightthickness=0,
                     font=("Arial", 12),
                     cursor="hand2"
                 )
 
+            # 明確初始化為未固定狀態
             self.floating_icon_fixed = False
 
             # 如果提供了回調，綁定點擊事件
@@ -431,9 +432,16 @@ class UIManager:
             # 更新現有圖標的回調
             self.floating_icon.bind("<Button-1>", callback)
 
-        # 確保位置正確，尤其是透明圖標可能需要調整位置以對齊文本
-        # 通常圖標應該略微偏上以達到良好的視覺效果
-        self.floating_icon.place(x=x, y=y-10)  # y坐標稍微上移，使圖標與文本對齊
+        # 確保圖標位置在樹視圖的可見區域內
+        tree_width = self.tree.winfo_width()
+        tree_height = self.tree.winfo_height()
+
+        # 調整坐標，避免圖標超出可見區域
+        x = max(5, min(x, tree_width - 30))  # 避免超出左右邊界
+        y = max(5, min(y - 10, tree_height - 30))  # 稍微上移並避免超出上下邊界
+
+        # 顯示圖標
+        self.floating_icon.place(x=x, y=y)
 
     def hide_floating_icon(self):
         """隱藏浮動校正圖標，但只在未固定時"""
@@ -443,6 +451,7 @@ class UIManager:
     def fix_floating_icon(self):
         """固定浮動圖標，防止被自動隱藏"""
         self.floating_icon_fixed = True
+        self.logger.debug("浮動校正圖標已固定")
 
     def unfix_floating_icon(self):
         """取消固定浮動圖標並立即隱藏它"""
@@ -450,6 +459,7 @@ class UIManager:
         # 直接強制隱藏，不檢查固定狀態
         if hasattr(self, 'floating_icon') and self.floating_icon:
             self.floating_icon.place_forget()
+        self.logger.debug("浮動校正圖標已解除固定並隱藏")
 
     def update_file_info(self, info_text):
         """
