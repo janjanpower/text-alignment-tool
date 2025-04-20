@@ -33,8 +33,16 @@ class TimeSliderController:
         self._hide_in_progress = False
         self._last_update_time = 0
 
+        # 新增：音波更新回調
+        self.waveform_update_callback = None
+
         # 自定義樣式
         self._setup_slider_style()
+
+
+    def set_waveform_update_callback(self, callback):
+        """設置音波更新回調函數"""
+        self.waveform_update_callback = callback
 
     def show_slider(self, event, item, column, column_name):
         """顯示時間調整滑桿"""
@@ -62,6 +70,7 @@ class TimeSliderController:
         except Exception as e:
             self.logger.error(f"顯示滑桿時出錯: {e}")
             self.logger.exception(e)
+
 
     def _get_column_info(self, item, column, column_name):
         """獲取欄位相關信息"""
@@ -201,8 +210,8 @@ class TimeSliderController:
         # 創建框架
         frame = tk.Frame(
             self.tree,
-            bg="#1E1E1E",
-            bd=0,
+            bg="#404040",
+            bd=2,
             relief="flat"
         )
 
@@ -225,7 +234,7 @@ class TimeSliderController:
                 slider_params['item_end_time']
             ),
             font=("Noto Sans TC", 10),
-            bg="#1E1E1E",
+            bg="#404040",
             fg="#4FC3F7",
             height=1
         )
@@ -256,7 +265,7 @@ class TimeSliderController:
             slider_y += 45  # 音頻視圖下方
 
         # 創建滑桿容器
-        slider_container = tk.Frame(frame, bg="#1E1E1E", height=30)
+        slider_container = tk.Frame(frame, bg="#404040", height=30)
         # 使用相對寬度
         slider_container.place(x=5, y=slider_y, relwidth=0.97, height=30)
 
@@ -272,6 +281,19 @@ class TimeSliderController:
         )
         slider.pack(fill=tk.X, expand=True, pady=5)
 
+        # 重要改動：根據調整的欄位，設置滑桿的初始位置
+        if slider_params['column_name'] == "Start":
+            # 對於 START 欄位，設置滑桿初始位置在最左側
+            slider.set(min_value)
+            slider_params['current_value'] = min_value
+        else:  # End 欄位
+            # 對於 END 欄位，設置滑桿初始位置在最右側
+            slider.set(max_value)
+            slider_params['current_value'] = max_value
+
+        # 立即觸發一次滑桿更新，確保視圖和值同步
+        self.on_slider_change(slider.get())
+
         return slider
 
     def _setup_audio_visualization(self, slider_params):
@@ -282,7 +304,7 @@ class TimeSliderController:
 
         try:
             # 創建音頻可視化容器
-            visualizer_container = tk.Frame(self.slider_frame, bg="#1E1E1E")
+            visualizer_container = tk.Frame(self.slider_frame, bg="#404040")
             visualizer_container.place(x=5, y=30, relwidth=0.97, height=40)
 
             # 重要：先確保容器已經完成布局
@@ -359,12 +381,16 @@ class TimeSliderController:
                 self.logger.error(f"slider_target 不是字典: {type(self.slider_target)}")
                 return
 
-            if "column_name" not in self.slider_target:
-                self.logger.error("slider_target 缺少 column_name 鍵")
-                return
+            required_keys = ["column_name", "fixed_point", "item"]
+            for key in required_keys:
+                if key not in self.slider_target:
+                    self.logger.error(f"slider_target 缺少 {key} 鍵")
+                    return
 
-            if "fixed_point" not in self.slider_target:
-                self.logger.error("slider_target 缺少 fixed_point 鍵")
+            # 確保 item 存在且有效
+            target_item = self.slider_target["item"]
+            if not self.tree.exists(target_item):
+                self.logger.error(f"樹項目不存在: {target_item}")
                 return
 
             # 更新時間範圍
@@ -384,24 +410,13 @@ class TimeSliderController:
                 else:
                     end_time = self.slider_target["fixed_point"] + 100
 
-            # 檢查是否有有效的項目
-            if "item" not in self.slider_target or not self.slider_target["item"]:
-                self.logger.error("slider_target 缺少有效的 item")
-                return
-
-            # 檢查樹項目是否存在
-            item = self.slider_target["item"]
-            if not self.tree.exists(item):
-                self.logger.error(f"樹項目不存在: {item}")
-                return
+            # 獲取當前值
+            values = list(self.tree.item(target_item, 'values'))
 
             # 檢查 start_pos 和 end_pos 是否存在
             if "start_pos" not in self.slider_target or "end_pos" not in self.slider_target:
                 self.logger.error("slider_target 缺少 start_pos 或 end_pos 鍵")
                 return
-
-            # 獲取當前值
-            values = list(self.tree.item(item, 'values'))
 
             # 根據調整的是開始還是結束時間來更新相應的值
             new_time = milliseconds_to_time(new_value)
@@ -432,28 +447,28 @@ class TimeSliderController:
 
             # 限制更新頻率，避免閃爍（每50毫秒最多一次更新）
             if current_time - self._last_update_time > 0.05:
-
                 # 更新時間標籤
                 self._update_time_label((start_time, end_time))
 
                 # 更新音頻視圖
-                if self.audio_visualizer and self.audio_segment:
-                    self._update_audio_visualization((start_time, end_time))
+                if hasattr(self, 'audio_visualizer') and self.audio_visualizer and self.audio_segment:
+                    self._update_slider_audio_view(start_time, end_time)
 
                 # 更新時間戳
                 self._last_update_time = current_time
 
-            # 延遲更新樹視圖值
-            self.tree.item(item, values=tuple(values))
+            # 更新樹視圖值 - 使用 target_item 而不是 item
+            self.tree.item(target_item, values=tuple(values))
 
             # 更新相鄰項目
-            self._update_adjacent_items(item, new_value, new_time)
+            self._update_adjacent_items(target_item, new_value, new_time)
 
         except Exception as e:
             self.logger.error(f"滑桿值變化處理時出錯: {e}")
-            self.logger.exception(e)
+            import traceback
+            self.logger.error(traceback.format_exc())
 
-    def _update_adjacent_items(self, item, new_value, new_time):
+    def _update_adjacent_items(self, target_item, new_value, new_time):
         """更新相鄰項目 - 簡化版本"""
         if not self.slider_target:
             return
@@ -524,6 +539,103 @@ class TimeSliderController:
 
         except Exception as e:
             self.logger.error(f"更新音頻可視化時出錯: {e}")
+
+    def _update_slider_audio_view(self, start_ms, end_ms):
+        """更新滑桿音頻可視化視圖 - 增強版：更激進的縮放邏輯"""
+        try:
+            if not hasattr(self, 'audio_visualizer') or not self.audio_visualizer:
+                return
+
+            # 確保音頻段落有效
+            if not self.audio_segment or len(self.audio_segment) == 0:
+                return
+
+            # 計算時間範圍持續時間
+            duration = end_ms - start_ms
+
+            # 更激進的縮放級別計算，當秒數極短時提供更高的縮放
+            if duration < 50:  # 極短範圍 (<50ms)
+                zoom_level = 5.0     # 極度縮放
+            elif duration < 100:  # 非常短的範圍 (<100ms)
+                zoom_level = 4.0     # 非常高縮放
+            elif duration < 250:     # 較短範圍 (<250ms)
+                zoom_level = 3.0     # 高縮放
+            elif duration < 500:     # 短範圍 (<500ms)
+                zoom_level = 2.5     # 中高縮放
+            elif duration < 1000:    # 中短範圍 (<1s)
+                zoom_level = 2.0     # 中等縮放
+            elif duration < 2000:    # 中等範圍 (<2s)
+                zoom_level = 1.5     # 低縮放
+            else:                    # 長範圍 (>=2s)
+                zoom_level = 1.0     # 標準縮放
+
+            # 動態調整視圖範圍 - 更精細的控制
+            # 時間範圍越小，視圖範圍越集中
+
+            # 計算中心點
+            center_time = (start_ms + end_ms) / 2
+
+            # 根據縮放級別和持續時間調整視圖寬度
+            # 當持續時間極短時，視圖寬度要更窄，以顯示更多細節
+            if duration < 50:  # 極短範圍
+                view_width = max(200, duration * 10)  # 極窄視圖
+            elif duration < 100:  # 非常短範圍
+                view_width = max(300, duration * 8)   # 非常窄視圖
+            elif duration < 500:  # 短範圍
+                view_width = max(1000, duration * 5)  # 窄視圖
+            elif duration < 2000:  # 中等範圍
+                view_width = max(2000, duration * 3)  # 中等視圖
+            else:  # 長範圍
+                view_width = max(4000, duration * 2)  # 寬視圖
+
+            # 計算視圖範圍，確保選擇區域居中
+            view_start = max(0, center_time - view_width / 2)
+            view_end = min(len(self.audio_segment), view_start + view_width)
+
+            # 如果選擇區域接近邊界，調整視圖以保持視圖寬度
+            if view_end == len(self.audio_segment) and view_end - view_start < view_width:
+                view_start = max(0, view_end - view_width)
+
+            if view_start == 0 and view_end - view_start < view_width:
+                view_end = min(len(self.audio_segment), view_width)
+
+            # 確保選擇區域在視圖中可見且有足夠邊距
+            # 對於非常短的持續時間，提供更大的相對邊距
+            if duration < 200:
+                # 非常短的時間範圍需要更大的邊距以便清晰查看
+                padding = view_width * 0.2  # 視圖邊界留出20%的空間
+            else:
+                # 標準邊距
+                padding = view_width * 0.1  # 視圖邊界留出10%的空間
+
+            if start_ms < view_start + padding:
+                view_start = max(0, start_ms - padding)
+                view_end = min(len(self.audio_segment), view_start + view_width)
+
+            if end_ms > view_end - padding:
+                view_end = min(len(self.audio_segment), end_ms + padding)
+                view_start = max(0, view_end - view_width)
+
+            # 更新波形視圖 - 傳遞增強的縮放級別
+            try:
+                # 嘗試使用新的支持縮放的方法
+                self.audio_visualizer.update_waveform_and_selection(
+                    (view_start, view_end),
+                    (start_ms, end_ms),
+                    zoom_level=zoom_level
+                )
+            except TypeError as e:
+                # 如果發生類型錯誤（可能是舊版本不支持zoom_level參數），回退到標準方法
+                self.logger.debug(f"回退到標準波形更新方法: {e}")
+                self.audio_visualizer.update_waveform_and_selection(
+                    (view_start, view_end),
+                    (start_ms, end_ms)
+                )
+
+        except Exception as e:
+            self.logger.error(f"更新滑桿音頻視圖時出錯: {e}")
+            import traceback
+            self.logger.error(traceback.format_exc())
 
     def _calculate_slider_range(self, slider_params):
         """計算滑桿範圍"""
@@ -723,7 +835,7 @@ class TimeSliderController:
 
         # 設置更現代的配色和樣式
         style.configure("TimeSlider.Horizontal.TScale",
-                        background="#1E1E1E",  # 深色背景
+                        background="#404040",  # 深色背景
                         troughcolor="#333333",  # 軌道深灰色
                         thickness=15,          # 軌道厚度
                         sliderlength=20,       # 滑鈕長度
@@ -732,7 +844,7 @@ class TimeSliderController:
         # 如果平台支持，設置滑鈕顏色
         try:
             style.map("TimeSlider.Horizontal.TScale",
-                    background=[("active", "#1E1E1E")],
+                    background=[("active", "#404040")],
                     troughcolor=[("active", "#444444")],
                     sliderthickness=[("active", 15)],
                     foreground=[("active", "#4FC3F7")],

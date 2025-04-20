@@ -2,12 +2,12 @@
 
 import logging
 import tkinter as tk
-from typing import Optional, Tuple
+from typing import Tuple
+
 import numpy as np
 from PIL import Image, ImageTk, ImageDraw
 from pydub import AudioSegment
 
-from utils.time_utils import time_to_milliseconds
 
 class WaveformVisualization:
     """整合音頻波形可視化類別，結合了視圖範圍管理和音頻可視化功能"""
@@ -46,6 +46,99 @@ class WaveformVisualization:
 
         # 初始狀態設置為空白波形
         self._create_empty_waveform("等待音頻...")
+
+        # 添加用於動畫過渡的變數
+        self.animation_active = False
+        self.target_view_range = (0, 0)
+        self.target_selection_range = (0, 0)
+        self.animation_frames = 10
+        self.animation_duration = 0.2  # 秒
+        self.prev_waveform_image = None
+        self.prev_view_range = (0, 0)
+
+    def update_waveform_with_animation(self, new_view_range, new_selection_range):
+        """使用動畫效果平滑過渡到新的視圖範圍"""
+        if self.animation_active:
+            # 已有動畫正在進行，更新目標
+            self.target_view_range = new_view_range
+            self.target_selection_range = new_selection_range
+            return
+
+        # 保存當前視圖範圍和圖像用於過渡
+        if self.waveform_image:
+            self.prev_waveform_image = self.waveform_image.copy()
+            self.prev_view_range = self.current_view_range
+
+        # 設置新的目標
+        self.target_view_range = new_view_range
+        self.target_selection_range = new_selection_range
+
+        # 啟動動畫線程
+        self.animation_active = True
+        threading.Thread(target=self._animate_transition, daemon=True).start()
+
+    def _animate_transition(self):
+        """執行視圖過渡動畫"""
+        try:
+            if not self.prev_waveform_image:
+                # 沒有前一個圖像，直接更新到目標
+                self.update_waveform_and_selection(
+                    self.target_view_range,
+                    self.target_selection_range
+                )
+                self.animation_active = False
+                return
+
+            # 計算差值
+            start_view = self.prev_view_range
+            target_view = self.target_view_range
+
+            view_start_diff = target_view[0] - start_view[0]
+            view_end_diff = target_view[1] - start_view[1]
+
+            # 執行動畫帧
+            frame_delay = self.animation_duration / self.animation_frames
+
+            for i in range(1, self.animation_frames + 1):
+                if not self.animation_active:
+                    break  # 動畫被中斷
+
+                # 計算當前帧的視圖範圍
+                progress = i / self.animation_frames
+
+                # 使用緩動函數使過渡更平滑
+                eased_progress = self._ease_in_out(progress)
+
+                current_view_start = start_view[0] + view_start_diff * eased_progress
+                current_view_end = start_view[1] + view_end_diff * eased_progress
+
+                # 更新當前帧
+                self.update_waveform_and_selection(
+                    (current_view_start, current_view_end),
+                    self.target_selection_range
+                )
+
+                # 暫停一小段時間
+                time.sleep(frame_delay)
+
+            # 確保最後一帧是目標狀態
+            self.update_waveform_and_selection(
+                self.target_view_range,
+                self.target_selection_range
+            )
+
+        except Exception as e:
+            self.logger.error(f"音波視圖動畫過渡出錯: {e}")
+        finally:
+            self.animation_active = False
+
+    def _ease_in_out(self, t):
+        """緩動函數，使動畫更自然"""
+        # 二次緩動
+        if t < 0.5:
+            return 2 * t * t
+        else:
+            return -1 + (4 - 2 * t) * t
 
     def set_audio_segment(self, audio_segment: AudioSegment) -> None:
         """設置音頻段落並預處理"""
@@ -93,34 +186,30 @@ class WaveformVisualization:
             self.logger.error(f"音頻預處理失敗: {e}")
             return np.zeros(1000)  # 返回空數組作為後備
 
-    def update_waveform_and_selection(self, view_range: Tuple[int, int], selection_range: Tuple[int, int]) -> None:
-        """即時更新波形和選擇區域"""
+    def update_waveform_and_selection(self, view_range: Tuple[int, int], selection_range: Tuple[int, int], zoom_level: float = None) -> None:
+        """
+        即時更新波形和選擇區域，支持縮放級別
+
+        Args:
+            view_range: 視圖範圍 (view_start, view_end)
+            selection_range: 選擇範圍 (sel_start, sel_end)
+            zoom_level: 縮放級別 (可選)，None表示使用默認計算
+        """
         try:
             if self.samples_cache is None or self.original_audio is None:
                 self._create_empty_waveform("未設置音頻數據")
                 return
 
-            # 使用整合的方法獲取最佳視圖範圍
-            # 如果提供的視圖範圍是明確的，則使用它；否則計算最佳範圍
-            if view_range == self.current_view_range:
-                # 視圖範圍沒有變化，可能是只更新了選擇區域
-                view_start, view_end = self.get_optimal_view_range(selection_range)
-            else:
-                # 使用提供的視圖範圍，但仍進行驗證
-                view_start, view_end = view_range
-                # 確保視圖範圍有效
-                if view_start >= view_end:
-                    view_start, view_end = self.get_optimal_view_range(selection_range)
-
-            # 獲取選擇區域
+            # 使用核心邏輯繪製波形
+            view_start, view_end = view_range
             sel_start, sel_end = selection_range
 
             # 更新當前狀態
             self.current_view_range = (view_start, view_end)
             self.current_selection_range = (sel_start, sel_end)
 
-            # 使用核心邏輯繪製波形
-            self._draw_waveform_core()
+            # 使用縮放級別繪製波形
+            self._draw_waveform_with_zoom(zoom_level)
 
         except Exception as e:
             self.logger.error(f"更新波形時出錯: {e}")
@@ -128,16 +217,29 @@ class WaveformVisualization:
             self.logger.error(traceback.format_exc())
             self._create_empty_waveform(f"錯誤: {str(e)}")
 
-    def _draw_waveform_core(self):
-        """核心波形繪製邏輯 - 更平滑細緻版本"""
+
+    def _draw_waveform_with_zoom(self, zoom_level=None):
+        """根據縮放級別繪製波形"""
         try:
             # 獲取當前視圖和選擇範圍
             view_start, view_end = self.current_view_range
             sel_start, sel_end = self.current_selection_range
 
-            # 計算視圖持續時間
+            # 計算視圖持續時間和選擇持續時間
             view_duration = view_end - view_start
             selection_duration = sel_end - sel_start
+
+            # 如果未提供縮放級別，根據視圖和選擇範圍計算默認縮放級別
+            if zoom_level is None:
+                # 根據選擇範圍大小計算縮放級別
+                if selection_duration < 100:  # 非常短的區間
+                    zoom_level = 3.0
+                elif selection_duration < 500:  # 較短的區間
+                    zoom_level = 2.0
+                elif selection_duration < 2000:  # 中等區間
+                    zoom_level = 1.5
+                else:  # 較長區間
+                    zoom_level = 1.0
 
             # 計算顯示的樣本起始和結束索引
             sample_rate = len(self.samples_cache) / self.audio_duration if self.audio_duration > 0 else 44100
@@ -159,29 +261,18 @@ class WaveformVisualization:
             # 初始化降採樣列表
             downsampled = []
 
-            # 計算縮放比例 - 選擇區域相對於視圖的比例
-            zoom_ratio = view_duration / max(1, selection_duration)
+            # 根據縮放級別調整採樣策略
+            # 縮放級別越高，採樣越精細，波形越詳細
+            samples_per_pixel = max(1, int(len(display_samples) / (self.width * zoom_level)))
 
-            # 根據縮放比例和視圖寬度選擇降採樣策略
-            if selection_duration < 100:  # 非常短的選擇區域
-                # 使用更精細的採樣和RMS方法，而不是簡單的最大值
-                # 對於超短的音頻段落，需要更多細節
-                samples_per_pixel = max(1, int(len(display_samples) / (self.width * 2)))
-            elif zoom_ratio > 30:  # 視圖範圍遠大於選擇範圍
-                # 提供更高的細節
-                samples_per_pixel = max(1, int(len(display_samples) / (self.width * 1.5)))
-            else:
-                # 標準採樣
-                samples_per_pixel = max(1, len(display_samples) // self.width)
-
-            # 使用更平滑的降採樣方法
+            # 使用平滑的降採樣方法
             if len(display_samples) > 0:
                 # 計算每個像素的峰值和RMS值
                 for i in range(self.width):
-                    start_idx = i * samples_per_pixel
-                    end_idx = min(start_idx + samples_per_pixel, len(display_samples))
+                    start_idx = min(len(display_samples)-1, i * samples_per_pixel)
+                    end_idx = min(len(display_samples), start_idx + samples_per_pixel)
 
-                    if start_idx < len(display_samples) and end_idx > start_idx:
+                    if start_idx < end_idx:
                         segment = display_samples[start_idx:end_idx]
 
                         # 計算段落的峰值和RMS值
@@ -189,9 +280,12 @@ class WaveformVisualization:
                             peak = np.max(np.abs(segment))
                             rms = np.sqrt(np.mean(np.square(segment)))
 
-                            # 使用加權混合值 - 這會使波形更平滑而保留細節
-                            # 調整權重可以改變波形的"銳利度"
-                            value = peak * 0.7 + rms * 0.3
+                            # 使用加權混合值 - 根據縮放級別調整權重
+                            # 縮放級別越高，越偏向使用峰值以顯示更細節的變化
+                            peak_weight = min(0.9, 0.6 + (zoom_level - 1.0) * 0.1)
+                            rms_weight = 1.0 - peak_weight
+
+                            value = peak * peak_weight + rms * rms_weight
                             downsampled.append(value)
                         else:
                             downsampled.append(0)
@@ -204,7 +298,8 @@ class WaveformVisualization:
                 downsampled = [d / max_value for d in downsampled]
 
             # 創建圖像 - 使用深色背景
-            img = Image.new('RGBA', (self.width, self.height), (30, 30, 30, 255))
+            bg_color = (30, 30, 30, 255)  # 深色背景
+            img = Image.new('RGBA', (self.width, self.height), bg_color)
             draw = ImageDraw.Draw(img)
 
             # 繪製中心線
@@ -213,24 +308,6 @@ class WaveformVisualization:
 
             # 使用反鋸齒技術繪製平滑波形
             if len(downsampled) > 0:
-                # 計算波形點坐標
-                points_top = []
-                points_bottom = []
-
-                for x in range(self.width):
-                    if x < len(downsampled):
-                        amplitude = downsampled[x]
-                        wave_height = int(amplitude * (self.height // 2 - 4))
-
-                        # 確保振幅至少有1像素
-                        wave_height = max(1, wave_height)
-
-                        y_top = center_y - wave_height
-                        y_bottom = center_y + wave_height
-
-                        points_top.append((x, y_top))
-                        points_bottom.append((x, y_bottom))
-
                 # 選擇區域中使用更明亮的顏色
                 sel_start_pixel = int((sel_start - view_start) / view_duration * self.width) if view_duration > 0 else 0
                 sel_end_pixel = int((sel_end - view_start) / view_duration * self.width) if view_duration > 0 else self.width
@@ -242,15 +319,37 @@ class WaveformVisualization:
                 # 繪製平滑波形，使用線段代替單點
                 for x in range(len(downsampled)):
                     amplitude = downsampled[x]
-                    wave_height = int(amplitude * (self.height // 2 - 4))
+
+                    # 根據縮放級別和選擇區域持續時間計算波形高度
+                    # 選擇區域越短或縮放級別越高，波形顯示越大
+                    selection_duration = sel_end - sel_start
+                    if selection_duration < 100:  # 非常短的區間 (<100ms)
+                        # 極度放大波形
+                        height_factor = max(2.0, zoom_level * 1.2)
+                    elif selection_duration < 500:  # 較短的區間 (<500ms)
+                        # 顯著放大波形
+                        height_factor = max(1.8, zoom_level * 1.0)
+                    elif selection_duration < 2000:  # 中等區間 (<2s)
+                        # 適度放大波形
+                        height_factor = max(1.5, zoom_level * 0.8)
+                    else:  # 較長區間 (>=2s)
+                        # 標準放大
+                        height_factor = max(1.0, zoom_level * 0.5)
+
+                    # 計算最終波形高度，確保在視圖範圍內
+                    max_height = self.height // 2 - 2  # 最大允許高度
+                    wave_height = int(amplitude * max_height * height_factor)
+                    wave_height = min(wave_height, max_height)  # 確保不超出界限
+
                     y1 = center_y - wave_height
                     y2 = center_y + wave_height
 
-                    # 根據位置選擇不同的顏色
+                    # 根據位置和縮放級別選擇不同的顏色和線寬
                     if sel_start_pixel <= x <= sel_end_pixel:
                         # 選擇區域內用亮藍色
-                        line_color = (120, 230, 255, 255)
-                        line_width = 2  # 稍粗一些的線條
+                        blue = min(255, int(150 + zoom_level * 25))  # 縮放越大藍色越亮
+                        line_color = (120, 230, blue, 255)
+                        line_width = min(3, int(1 + zoom_level / 2))  # 縮放越大線條越粗
                     else:
                         # 選擇區域外用標準藍色
                         line_color = (100, 200, 255, 255)
@@ -282,16 +381,17 @@ class WaveformVisualization:
                     end_x = min(self.width, end_x)
 
                     if start_x < end_x:  # 確保有效的選擇區域
-                        # 繪製高亮區域 - 使用漸變效果增強視覺效果
+                        # 繪製高亮區域 - 使用半透明覆蓋
                         overlay = Image.new('RGBA', img.size, (0, 0, 0, 0))
                         overlay_draw = ImageDraw.Draw(overlay)
 
-                        # 使用漸變填充
+                        # 繪製漸變填充
+                        alpha_base = min(160, int(120 + zoom_level * 15))  # 縮放越大越透明
                         for x in range(start_x, end_x):
-                            # 計算距離邊緣的相對位置
+                            # 距離邊緣的相對位置
                             rel_pos = min(x - start_x, end_x - x) / max(1, (end_x - start_x) / 2)
-                            # 計算透明度，邊緣較透明
-                            alpha = int(128 * min(1.0, rel_pos + 0.3))
+                            # 計算透明度
+                            alpha = int(alpha_base * min(1.0, rel_pos + 0.3))
                             overlay_draw.line([(x, 0), (x, self.height)], fill=(79, 195, 247, alpha), width=1)
 
                         # 合併圖層
@@ -299,8 +399,9 @@ class WaveformVisualization:
                         draw = ImageDraw.Draw(img)
 
                         # 繪製邊界線
-                        draw.line([(start_x, 0), (start_x, self.height)], fill=(79, 195, 247, 255), width=2)
-                        draw.line([(end_x, 0), (end_x, self.height)], fill=(79, 195, 247, 255), width=2)
+                        edge_width = max(1, min(3, int(zoom_level)))  # 縮放越大邊界線越粗
+                        draw.line([(start_x, 0), (start_x, self.height)], fill=(79, 195, 247, 255), width=edge_width)
+                        draw.line([(end_x, 0), (end_x, self.height)], fill=(79, 195, 247, 255), width=edge_width)
 
             # 更新顯示
             self.waveform_image = img
@@ -312,7 +413,7 @@ class WaveformVisualization:
             self.canvas.update_idletasks()
 
         except Exception as e:
-            self.logger.error(f"繪製波形核心邏輯出錯: {e}")
+            self.logger.error(f"根據縮放級別繪製波形時出錯: {e}")
             import traceback
             self.logger.error(traceback.format_exc())
 

@@ -1651,7 +1651,7 @@ class AlignmentGUI(BaseWindow):
             # 處理文本列點擊事件（SRT Text 或 Word Text）
             elif region == "cell" and is_selected and column_name in ["SRT Text", "Word Text"]:
                 # 如果是 SRT Text 列且項目有藍色框，或者是 Word Text 列且點擊了與當前懸停文本不同的項目或列，則隱藏圖標
-                if (column_name == "SRT Text" and has_word_text) or (
+                if (column_name == "SRT Text" and "has_word_text_tag") or (
                     hasattr(self, 'current_hovering_item') and
                     hasattr(self, 'current_hovering_column') and
                     self.ui_manager.floating_icon_fixed and
@@ -1659,7 +1659,7 @@ class AlignmentGUI(BaseWindow):
                     self.current_hovering_column != column_name)):
                     # 取消固定並隱藏浮動圖標
                     self.ui_manager.unfix_floating_icon()
-                    if column_name == "SRT Text" and has_word_text:
+                    if column_name == "SRT Text" and "has_word_text_tag":
                         return
 
                 # 獲取值
@@ -2458,6 +2458,29 @@ class AlignmentGUI(BaseWindow):
             callback_manager = self._create_slider_callbacks()
             self.slider_controller = TimeSliderController(self.master, self.tree, callback_manager)
             self.logger.info("已初始化時間滑桿控制器")
+
+        # 設置回調
+        if hasattr(self, 'slider_controller'):
+            self.slider_controller.set_waveform_update_callback(self.update_waveform)
+
+    def update_waveform(self, start_time, end_time):
+        """更新音波視圖的回調函數"""
+        if hasattr(self, 'slider_controller') and hasattr(self.slider_controller, 'audio_visualizer'):
+            self.slider_controller.audio_visualizer.update_waveform_and_selection(
+                self._calculate_view_range(start_time, end_time),
+                (start_time, end_time)
+            )
+
+    def _calculate_view_range(self, start_time, end_time):
+        """計算合適的視圖範圍"""
+        duration = end_time - start_time
+        center = (start_time + end_time) / 2
+        view_width = max(duration * 3, 2000)  # 至少顯示2秒
+
+        view_start = max(0, center - view_width / 2)
+        view_end = min(self.audio_player.audio.duration_seconds * 1000, center + view_width / 2)
+
+        return (view_start, view_end)
 
     def update_display_mode_without_rebuild(self) -> None:
         """更新顯示模式但不重建樹狀視圖"""
@@ -4919,7 +4942,7 @@ class AlignmentGUI(BaseWindow):
 
             # 檢查該項目是否有 use_word_text 標籤 (藍色框)
             item_tags = self.tree.item(item, "tags")
-            has_word_text = "use_word_text" in item_tags if item_tags else False
+            has_word_text_tag = "use_word_text" in item_tags if item_tags else False
 
             # 只有在文本欄位上且是被選中的項目且不是藍色框標記的項目才顯示圖標
             is_text_column = False
@@ -4928,7 +4951,7 @@ class AlignmentGUI(BaseWindow):
                 if column_idx >= 0 and column_idx < len(self.tree["columns"]):
                     column_name = self.tree["columns"][column_idx]
                     # 只在SRT Text列上顯示，如果是SRT Text列有藍色框，則不顯示
-                    if column_name == "SRT Text" and not has_word_text:
+                    if column_name == "SRT Text" and not has_word_text_tag:
                         is_text_column = True
                     elif column_name == "Word Text":  # Word Text 列無論是否藍色框都可以顯示
                         is_text_column = True
