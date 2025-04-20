@@ -9,6 +9,7 @@ import sys
 
 # 直接從 utils 導入時間工具，不再自己實現
 from utils.time_utils import parse_time, time_to_milliseconds, milliseconds_to_time
+from audio.audio_range_manager import AudioRangeManager
 
 class AudioSegmentManager:
     """音頻段落管理類 - 優化版本"""
@@ -107,6 +108,8 @@ class AudioSegmentManager:
         except Exception as e:
             self.logger.error(f"分割音頻時出錯: {e}")
             return False
+
+
 
     def rebuild_segments(self, srt_data):
         """

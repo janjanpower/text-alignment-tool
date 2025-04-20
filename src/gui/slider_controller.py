@@ -5,9 +5,33 @@ import time
 import tkinter as tk
 from tkinter import ttk
 
-from audio.waveform_zoom_manager import WaveformVisualization
+from audio.audio_range_manager import WaveformVisualization
 from utils.time_utils import parse_time, milliseconds_to_time, time_to_milliseconds
+from audio.audio_visualizer import AudioVisualizer
 
+class TimeSliderState:
+    """滑桿狀態管理類"""
+
+    def __init__(self):
+        self.active = False
+        self.target = None
+        self.frame = None
+        self.slider = None
+        self.visualizer = None
+        self.range_manager = None
+        self.audio_segment = None
+        self.hide_in_progress = False  # 初始化為 False
+
+    def clear(self):
+        """清除狀態"""
+        self.active = False
+        self.target = None
+        self.frame = None
+        self.slider = None
+        self.visualizer = None
+        self.range_manager = None
+        self.audio_segment = None
+        self.hide_in_progress = False  # 重置為 False
 class TimeSliderController:
     """時間軸滑桿控制器類別，處理時間調整滑桿的顯示和控制"""
 
@@ -23,22 +47,25 @@ class TimeSliderController:
         self.callbacks = callback_manager
         self.logger = logging.getLogger(self.__class__.__name__)
 
-        # 狀態變數 - 使用單一變數集
+        # 初始化狀態物件
+        self.state = TimeSliderState()
+
+        # 保持與原來程式碼的兼容性
         self.slider_active = False
         self.slider_target = None
         self.slider_frame = None
         self.time_slider = None
         self.audio_visualizer = None
         self.audio_segment = None
-        self._hide_in_progress = False
-        self._last_update_time = 0
 
-        # 新增：音波更新回調
-        self.waveform_update_callback = None
+        # 這裡確保有這個屬性
+        self._hide_time_slider_in_progress = False
+
+        # 使用新的統一範圍管理器，將在設置音頻段落時初始化
+        self.range_manager = None
 
         # 自定義樣式
         self._setup_slider_style()
-
 
     def set_waveform_update_callback(self, callback):
         """設置音波更新回調函數"""
@@ -304,7 +331,7 @@ class TimeSliderController:
 
         try:
             # 創建音頻可視化容器
-            visualizer_container = tk.Frame(self.slider_frame, bg="#404040")
+            visualizer_container = tk.Frame(self.slider_frame, bg="#233A68")
             visualizer_container.place(x=5, y=30, relwidth=0.97, height=40)
 
             # 重要：先確保容器已經完成布局
@@ -316,7 +343,7 @@ class TimeSliderController:
             visual_width = max(100, container_width - 10)
 
             # 創建可視化器，使用計算的實際寬度
-            self.audio_visualizer = WaveformVisualization(
+            self.audio_visualizer = AudioVisualizer(
                 visualizer_container,
                 width=visual_width,
                 height=30
@@ -329,12 +356,19 @@ class TimeSliderController:
             # 等待一小段時間確保資源準備完成
             self.slider_frame.update_idletasks()
 
-            # 計算初始視圖範圍
+            # 計算初始視圖範圍 - 使用新的範圍管理器
             start_time = slider_params['item_start_time']
             end_time = slider_params['item_end_time']
 
-            # 獲取適當的視圖範圍
-            view_start, view_end = self.audio_visualizer.get_optimal_view_range((start_time, end_time))
+            if self.range_manager:
+                view_start, view_end = self.range_manager.get_optimal_view_range((start_time, end_time))
+            else:
+                # 使用傳統計算方式作為備選
+                duration = end_time - start_time
+                center_time = (start_time + end_time) / 2
+                view_width = max(duration * 3, 2000)
+                view_start = max(0, center_time - view_width / 2)
+                view_end = min(len(self.audio_segment), center_time + view_width / 2)
 
             # 確保視圖範圍包含選擇區域
             if start_time < view_start:
@@ -342,7 +376,7 @@ class TimeSliderController:
             if end_time > view_end:
                 view_end = min(len(self.audio_segment), end_time + 200)
 
-            # 創建初始波形
+            # 創建初始波形 - 使用更新後的方法
             self.audio_visualizer.update_waveform_and_selection(
                 (view_start, view_end),
                 (start_time, end_time)
@@ -528,8 +562,16 @@ class TimeSliderController:
                     start_time = self.slider_target["fixed_point"]
                     end_time = max(end_time, self.slider_target["fixed_point"] + 100)
 
-            # 獲取最佳視圖範圍
-            view_start, view_end = self.audio_visualizer.get_optimal_view_range((start_time, end_time))
+            # 使用範圍管理器計算視圖範圍（如果可用）
+            if self.range_manager:
+                view_start, view_end = self.range_manager.get_optimal_view_range((start_time, end_time))
+            else:
+                # 後備計算方法
+                duration = end_time - start_time
+                center_time = (start_time + end_time) / 2
+                view_width = max(duration * 3, 2000)
+                view_start = max(0, center_time - view_width / 2)
+                view_end = min(len(self.audio_segment), view_start + view_width)
 
             # 更新波形視圖 - 一次性更新，不使用動畫
             self.audio_visualizer.update_waveform_and_selection(
@@ -706,23 +748,45 @@ class TimeSliderController:
 
     def set_audio_segment(self, audio_segment):
         """設置要可視化的音頻段落"""
-        self.audio_segment = audio_segment
-        self.logger.debug(f"設置音頻段落: {'有效' if audio_segment else '無效'}")
+        try:
+            if audio_segment is not None and len(audio_segment) > 0:
+                self.audio_segment = audio_segment  # 設置實例屬性
+                self.state.audio_segment = audio_segment  # 同時更新狀態
+
+                # 使用新的統一範圍管理器
+                from audio.audio_range_manager import AudioRangeManager
+                self.range_manager = AudioRangeManager(len(audio_segment))
+                self.state.range_manager = self.range_manager  # 更新狀態中的範圍管理器
+
+                self.logger.debug(f"設置音頻段落，長度: {len(audio_segment)} ms")
+            else:
+                self.audio_segment = None
+                self.state.audio_segment = None
+                self.range_manager = None
+                self.state.range_manager = None
+                self.logger.warning("設置的音頻段落為空或無效")
+        except Exception as e:
+            self.logger.error(f"設置音頻段落時出錯: {e}")
+            self.audio_segment = None
+            self.range_manager = None
 
     def hide_slider(self):
         """隱藏時間調整滑桿"""
-        if self._hide_in_progress:
+        # 使用統一的變數名稱進行檢查
+        if hasattr(self, '_hide_time_slider_in_progress') and self._hide_time_slider_in_progress:
             return
 
         try:
-            self._hide_in_progress = True
+            # 設置兩個標誌，確保它們同步
+            self._hide_time_slider_in_progress = True
+            self.state.hide_in_progress = True
 
             # 檢查主視窗是否仍然有效
             try:
-                if hasattr(self, 'parent') and self.parent and not self.parent.winfo_exists():
-                    return  # 主視窗已經不存在
+                if hasattr(self, 'master') and self.master and not self.master.winfo_exists():
+                    return  # 主視窗已經不存在，直接返回
             except tk.TclError:
-                return  # 應用已被銷毀
+                return  # 應用已被銷毀，直接返回
 
             # 應用時間變更
             if self.slider_active and self.time_slider:
@@ -734,11 +798,12 @@ class TimeSliderController:
             # 清理音頻可視化
             if self.audio_visualizer:
                 try:
-                    self.audio_visualizer.clear_waveform()
-                    self.audio_visualizer.hide()
-                except Exception:
+                    if hasattr(self.audio_visualizer, 'canvas') and self.audio_visualizer.canvas and hasattr(self.audio_visualizer.canvas, 'winfo_exists') and self.audio_visualizer.canvas.winfo_exists():
+                        self.audio_visualizer.clear_waveform()
+                except (tk.TclError, AttributeError):
                     pass
                 self.audio_visualizer = None
+                self.state.visualizer = None  # 清除狀態中的視覺化器
 
             # 清理滑桿界面
             if self.slider_frame:
@@ -749,11 +814,15 @@ class TimeSliderController:
                 except tk.TclError:
                     pass
                 self.slider_frame = None
+                self.state.frame = None  # 清除狀態中的框架
 
-            # 清理狀態
-            self.time_slider = None
+            if self.time_slider:
+                self.time_slider = None
+                self.state.slider = None  # 清除狀態中的滑桿
+
             self.slider_active = False
             self.slider_target = None
+            self.state.target = None  # 清除狀態中的目標
 
             # 解除綁定
             try:
@@ -765,7 +834,9 @@ class TimeSliderController:
         except Exception as e:
             self.logger.error(f"隱藏滑桿時出錯: {e}")
         finally:
-            self._hide_in_progress = False
+            # 重置隱藏標誌，確保兩者同步
+            self._hide_time_slider_in_progress = False
+            self.state.hide_in_progress = False
 
     def check_slider_focus(self, event):
         """檢查點擊是否在滑桿外部"""

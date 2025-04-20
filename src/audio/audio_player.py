@@ -24,6 +24,8 @@ from gui.custom_messagebox import (
     show_error,
     ask_question
 )
+
+from audio.audio_range_manager import AudioRangeManager
 class AudioPlayer(ttk.Frame):
     """音頻播放器類別"""
 
@@ -49,6 +51,20 @@ class AudioPlayer(ttk.Frame):
 
         # 初始化音頻段落管理器
         self.segment_manager = AudioSegmentManager(self.sample_rate)
+
+        # 初始化範圍管理器為 None，將在設置音頻時創建
+        self.range_manager = None
+
+    def set_range_manager(self, audio_duration=None):
+        """設置或更新範圍管理器"""
+        if audio_duration is None and self.audio:
+            audio_duration = len(self.audio)
+
+        if audio_duration and audio_duration > 0:
+            self.range_manager = AudioRangeManager(audio_duration)
+            self.logger.debug(f"音頻範圍管理器已設置，音頻長度：{audio_duration}ms")
+        else:
+            self.range_manager = None
 
     def initialize_variables(self) -> None:
         """初始化變數"""
@@ -160,9 +176,13 @@ class AudioPlayer(ttk.Frame):
                 # 加載音頻
                 self.audio = self.segment_manager.load_audio(file_path)
 
+                # 檢查音頻是否成功加載
                 if self.audio is None:
                     self.logger.error(f"音頻加載返回空值: {file_path}")
                     return None
+
+                # 音頻加載成功，設置範圍管理器
+                self.set_range_manager(len(self.audio))
 
                 self.total_duration = len(self.audio) / 1000.0
                 self.logger.info(f"音頻載入成功，總時長: {self.total_duration} 秒")

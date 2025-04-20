@@ -8,9 +8,8 @@ import pysrt
 from pydub import AudioSegment
 
 from audio.audio_player import AudioPlayer
-from audio.audio_segment_manager import AudioSegmentManager
-from audio.audio_resource_cleaner import AudioResourceCleaner
-from utils.time_utils import parse_time, time_to_milliseconds
+from audio.audio_range_manager import AudioRangeManager
+
 
 
 class AudioService:
@@ -27,16 +26,15 @@ class AudioService:
 
     def initialize_player(self, master):
         """初始化音頻播放器"""
-        try:
-            self.audio_player = AudioPlayer(master)
-            # 可以添加音頻載入事件的回調
-            if hasattr(master, 'bind'):
-                master.bind("<<AudioLoaded>>", self.handle_audio_loaded)
-            return self.audio_player
-        except Exception as e:
-            self.logger.error(f"初始化音頻播放器時出錯: {e}")
-            return None
+        self.audio_player = AudioPlayer(master)
+        # 可以添加音頻載入事件的回調
+        if hasattr(master, 'bind'):
+            master.bind("<<AudioLoaded>>", self.handle_audio_loaded)
 
+        # 初始化範圍管理器（如果需要）
+        self.range_manager = None
+
+        return self.audio_player
     def load_audio(self, file_path):
         """載入音頻檔案"""
         try:
@@ -60,9 +58,13 @@ class AudioService:
             # 載入音頻
             result = self.audio_player.load_audio(file_path)
 
+            # 如果載入成功，初始化範圍管理器
             if result:
-                self.audio_imported = True
-                self.audio_file_path = file_path
+                # 如果有音頻長度，初始化範圍管理器
+                if hasattr(self.audio_player, 'audio') and self.audio_player.audio:
+                    audio_length = len(self.audio_player.audio)
+                    self.range_manager = AudioRangeManager(audio_length)
+                    self.logger.debug(f"已初始化音頻範圍管理器，音頻長度：{audio_length}ms")
 
                 # 確保音頻已預加載到所有段落
                 if hasattr(self, 'srt_data') and self.srt_data and len(self.srt_data) > 0:

@@ -2417,15 +2417,15 @@ class AlignmentGUI(BaseWindow):
             return
 
         from audio.audio_service import AudioService
+        from audio.audio_range_manager import AudioRangeManager  # 添加導入
 
-        # 使用優化版本的 AudioService
         self.audio_service = AudioService(self)  # 傳入 self 作為 gui_reference
         self.audio_player = self.audio_service.initialize_player(self.main_frame)
 
         # 設置音頻載入回調
         def on_audio_loaded_callback(file_path):
-            # 避免重複處理相同文件
-            if hasattr(self, 'audio_file_path') and self.audio_file_path == file_path and self.audio_imported:
+            # 檢查是否重複處理相同文件
+            if self.audio_file_path == file_path and self.audio_imported:
                 self.logger.debug(f"跳過重複處理相同音頻文件: {file_path}")
                 return
 
@@ -2435,8 +2435,8 @@ class AlignmentGUI(BaseWindow):
             # 更新顯示模式前先保存當前狀態
             old_mode = self.display_mode
 
-            # 更新顯示模式 - 使用不重建樹狀視圖的方法
-            self.update_display_mode_without_rebuild()
+            # 更新顯示模式
+            self.update_display_mode()
 
             # 如果顯示模式變化，記錄日誌
             if old_mode != self.display_mode:
@@ -2452,16 +2452,11 @@ class AlignmentGUI(BaseWindow):
 
         self.on_audio_loaded_callback = on_audio_loaded_callback
 
-        # 初始化滑桿控制器
-        # 注意：現在滑桿控制器應該使用優化後的 WaveformVisualization
+        # 如果尚未初始化滑桿控制器，現在初始化
         if not hasattr(self, 'slider_controller'):
             callback_manager = self._create_slider_callbacks()
             self.slider_controller = TimeSliderController(self.master, self.tree, callback_manager)
             self.logger.info("已初始化時間滑桿控制器")
-
-        # 設置回調
-        if hasattr(self, 'slider_controller'):
-            self.slider_controller.set_waveform_update_callback(self.update_waveform)
 
     def update_waveform(self, start_time, end_time):
         """更新音波視圖的回調函數"""

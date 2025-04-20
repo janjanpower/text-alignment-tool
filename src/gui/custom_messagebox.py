@@ -206,7 +206,7 @@ class CustomMessageBox(tk.Toplevel):
                     'command': self.ok,
                     'tooltip': '確認',
                     'side': tk.LEFT,
-                    'padx': 5
+                    'padx': (50,0)
                 },
                 {
                     'id': 'cancel',
@@ -215,7 +215,7 @@ class CustomMessageBox(tk.Toplevel):
                     'command': self.cancel,
                     'tooltip': '取消',
                     'side': tk.RIGHT,
-                    'padx': 5
+                    'padx': (0,50)
                 }
             ]
 
@@ -233,7 +233,7 @@ class CustomMessageBox(tk.Toplevel):
                     'hover_icon': 'ok_hover.png',
                     'command': self.ok,
                     'tooltip': '確認',
-                    'side': tk.RIGHT,
+                    'side': tk.BOTTOM,
                     'padx': 5
                 }
             ]

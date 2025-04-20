@@ -314,8 +314,8 @@ class ProjectManager(BaseWindow):
                 'hover_icon': 'ok_hover.png',
                 'command': self.confirm,
                 'tooltip': '確認選擇專案',
-                'side': tk.RIGHT,
-                'padx': 5
+                'side': tk.BOTTOM,
+                'padx': 0
             }
         ]
 

@@ -1,3 +1,222 @@
+"""音頻範圍管理器：整合視圖範圍計算、時間範圍處理和波形縮放功能"""
+
+import logging
+from typing import Tuple, Optional
+
+
+class AudioRangeManager:
+    """
+    統一的音頻範圍管理器，提供：
+    - 視圖範圍計算 (原 WaveformZoomManager)
+    - 時間範圍驗證 (原 TimeRangeHandler)
+    - 視覺化範圍管理 (原 VisualizationRangeManager)
+    """
+
+    def __init__(self, audio_duration: int):
+        """
+        初始化音頻範圍管理器
+
+        Args:
+            audio_duration: 音頻總長度（毫秒）
+        """
+        self.logger = logging.getLogger(self.__class__.__name__)
+        self.audio_duration = max(1, audio_duration)  # 確保最小為 1ms
+
+        # 視圖參數配置
+        self.min_view_width = 500    # 最小視圖寬度（毫秒）
+        self.max_view_width = 10000  # 最大視圖寬度（毫秒）
+        self.min_range_width = 100   # 最小選擇區域寬度（毫秒）
+
+        # 統計數據
+        self.last_selection_duration = 0
+        self.last_view_range = (0, self.audio_duration)
+
+    def validate_range(self, time_range: Tuple[float, float],
+                      min_duration: float = 100.0) -> Tuple[float, float]:
+        """
+        驗證並修正時間範圍，確保範圍有效
+
+        Args:
+            time_range: 輸入的時間範圍 (start, end)
+            min_duration: 最小持續時間
+
+        Returns:
+            修正後的有效時間範圍 (start, end)
+        """
+        start, end = time_range
+
+        # 確保開始時間不大於結束時間
+        if start > end:
+            self.logger.warning(f"時間範圍顛倒: {start} - {end}，自動交換")
+            start, end = end, start
+
+        # 確保時間在有效範圍內
+        start = max(0, min(start, self.audio_duration))
+        end = max(start + min_duration, min(end, self.audio_duration))
+
+        return start, end
+
+    def get_optimal_view_range(self, selection: Tuple[float, float]) -> Tuple[float, float]:
+        """
+        根據選擇區域計算最佳視圖範圍
+
+        Args:
+            selection: 當前選擇的時間範圍 (start_ms, end_ms)
+
+        Returns:
+            最佳視圖範圍 (view_start_ms, view_end_ms)
+        """
+        try:
+            # 驗證並修正選擇範圍
+            start_ms, end_ms = self.validate_range(selection, self.min_range_width)
+
+            # 計算選擇區域中心點和持續時間
+            duration = end_ms - start_ms
+            center_time = (start_ms + end_ms) / 2
+
+            # 動態計算視圖寬度
+            view_width = self._calculate_view_width(duration)
+
+            # 計算視圖範圍
+            view_start = max(0, center_time - view_width / 2)
+            view_end = min(self.audio_duration, view_start + view_width)
+
+            # 確保視圖包含完整的選擇區域
+            if start_ms < view_start:
+                view_start = max(0, start_ms - view_width * 0.1)
+                view_end = min(self.audio_duration, view_start + view_width)
+
+            if end_ms > view_end:
+                view_end = min(self.audio_duration, end_ms + view_width * 0.1)
+                view_start = max(0, view_end - view_width)
+
+            # 更新狀態
+            self.last_selection_duration = duration
+            self.last_view_range = (view_start, view_end)
+
+            return view_start, view_end
+
+        except Exception as e:
+            self.logger.error(f"計算視圖範圍時出錯: {e}")
+            # 返回默認範圍
+            return 0, min(self.audio_duration, 5000)
+
+    def calculate_view_range_on_slide(self,
+                                    new_time: int,
+                                    fixed_time: int,
+                                    is_start_adjustment: bool) -> Tuple[int, int]:
+        """
+        根據滑桿移動計算新的視圖範圍
+
+        Args:
+            new_time: 滑桿新位置對應的時間
+            fixed_time: 固定點時間
+            is_start_adjustment: 是否正在調整開始時間
+
+        Returns:
+            (新視圖開始時間, 新視圖結束點時間)
+        """
+        # 確保時間值有效
+        new_time = max(0, min(new_time, self.audio_duration))
+        fixed_time = max(0, min(fixed_time, self.audio_duration))
+
+        if is_start_adjustment:
+            start_time = min(new_time, fixed_time - self.min_range_width)
+            end_time = fixed_time
+        else:
+            start_time = fixed_time
+            end_time = max(new_time, fixed_time + self.min_range_width)
+
+        # 計算持續時間變化比例
+        current_duration = end_time - start_time
+        prev_duration = max(self.last_selection_duration, 1)
+        duration_change_ratio = current_duration / prev_duration
+
+        # 根據時間變化調整視圖範圍
+        view_start, view_end = self.last_view_range
+        current_view_width = max(1, view_end - view_start)
+
+        if duration_change_ratio < 0.8:  # 時間顯著縮短，放大視圖
+            new_view_width = max(1000, current_view_width * 0.8)
+        elif duration_change_ratio > 1.5:  # 時間顯著延長，縮小視圖
+            new_view_width = min(self.audio_duration, current_view_width * 1.2)
+        else:
+            new_view_width = current_view_width
+
+        # 計算新的視圖範圍
+        if is_start_adjustment:
+            # 保持固定點（結束時間）在視圖右側
+            view_end = min(self.audio_duration, fixed_time + new_view_width * 0.2)
+            view_start = max(0, view_end - new_view_width)
+        else:
+            # 保持固定點（開始時間）在視圖左側
+            view_start = max(0, fixed_time - new_view_width * 0.2)
+            view_end = min(self.audio_duration, view_start + new_view_width)
+
+        # 確保滑動部分在視圖中可見
+        if start_time < view_start:
+            view_start = max(0, start_time - new_view_width * 0.1)
+            view_end = min(self.audio_duration, view_start + new_view_width)
+
+        if end_time > view_end:
+            view_end = min(self.audio_duration, end_time + new_view_width * 0.1)
+            view_start = max(0, view_end - new_view_width)
+
+        # 更新狀態
+        self.last_selection_duration = current_duration
+        self.last_view_range = (view_start, view_end)
+
+        return view_start, view_end
+
+    def _calculate_view_width(self, duration: int) -> int:
+        """
+        根據選擇區域持續時間計算合適的視圖寬度
+
+        Args:
+            duration: 選擇區域的持續時間（毫秒）
+
+        Returns:
+            合適的視圖寬度（毫秒）
+        """
+        # 確保持續時間有效
+        duration = max(1, duration)
+
+        # 非常短的時間範圍 - 提供更精細的縮放等級
+        if duration < 10:         # 極短時間（小於10毫秒）
+            return max(1000, duration * 100)  # 極度放大
+        elif duration < 30:       # 非常短時間（10-30毫秒）
+            return max(1500, duration * 80)   # 非常高縮放
+        elif duration < 50:       # 短時間（30-50毫秒）
+            return max(2000, duration * 60)   # 很高縮放
+        elif duration < 100:      # 較短時間（50-100毫秒）
+            return max(3000, duration * 40)   # 高縮放
+        elif duration < 200:      # 短時間（100-200毫秒）
+            return max(4000, duration * 30)   # 中高縮放
+        elif duration < 500:      # 中短時間（200-500毫秒）
+            return max(6000, duration * 20)   # 中等縮放
+        elif duration < 1000:     # 中等時間（0.5-1秒）
+            return max(10000, duration * 15)  # 適中縮放
+        elif duration < 2000:     # 中長時間（1-2秒）
+            return duration * 10  # 標準縮放
+        elif duration < 5000:     # 長時間（2-5秒）
+            return duration * 6   # 低縮放
+        else:                     # 很長時間（>5秒）
+            return duration * 4   # 最低縮放
+
+    # 兼容舊版接口
+    def calculate_optimal_zoom(self, start_time: int, end_time: int) -> Tuple[int, int]:
+        """
+        計算最佳縮放級別 (兼容舊版接口)
+
+        Args:
+            start_time: 開始時間（毫秒）
+            end_time: 結束時間（毫秒）
+
+        Returns:
+            (view_start, view_end): 視圖範圍（毫秒）
+        """
+        return self.get_optimal_view_range((start_time, end_time))
+
 """整合的音頻波形可視化模組"""
 
 import logging
@@ -24,7 +243,7 @@ class WaveformVisualization:
             parent,
             width=width,
             height=height,
-            bg="#1E1E1E",
+            bg="#233A68",
             highlightthickness=0
         )
 
@@ -563,3 +782,285 @@ class WaveformVisualization:
             pass
         except Exception as e:
             self.logger.error(f"清除波形圖時出錯: {e}")
+
+            """音頻可視化範圍管理器"""
+
+import logging
+from typing import Tuple, Optional
+
+
+class VisualizationRangeManager:
+    """管理音頻可視化的視圖範圍和選擇範圍"""
+
+    def __init__(self, audio_duration: int):
+        self.logger = logging.getLogger(self.__class__.__name__)
+        self.audio_duration = max(1, audio_duration)  # 確保最小為 1ms
+        self.last_selection_duration = 0
+        self.last_view_range = (0, self.audio_duration)
+
+    def validate_range(self, time_range: Tuple[float, float],
+                     min_duration: float = 100.0) -> Tuple[float, float]:
+        """
+        驗證並修正時間範圍，確保範圍有效
+
+        Args:
+            time_range: 輸入的時間範圍 (start, end)
+            min_duration: 最小持續時間
+
+        Returns:
+            修正後的有效時間範圍 (start, end)
+        """
+        start, end = time_range
+
+        # 確保開始時間不大於結束時間
+        if start > end:
+            self.logger.warning(f"時間範圍顛倒: {start} - {end}，自動交換")
+            start, end = end, start
+
+        # 確保時間在有效範圍內
+        start = max(0, min(start, self.audio_duration))
+        end = max(start + min_duration, min(end, self.audio_duration))
+
+        return start, end
+
+    def calculate_initial_view_range(self, start_time: int, end_time: int) -> Tuple[int, int]:
+        """
+        計算初始視圖範圍，確保完整顯示文本時間段
+
+        Args:
+            start_time: 文本開始時間
+            end_time: 文本結束時間
+
+        Returns:
+            (視圖開始時間, 視圖結束時間)
+        """
+        # 先確保範圍有效
+        start_time, end_time = self.validate_range((start_time, end_time))
+
+        duration = end_time - start_time
+        center_time = (start_time + end_time) / 2
+
+        # 計算視圖寬度，基於文本持續時間
+        view_width = self._calculate_view_width(duration)
+
+        # 計算視圖範圍
+        view_start = max(0, center_time - view_width / 2)
+        view_end = min(self.audio_duration, view_start + view_width)
+
+        # 如果視圖未能完全包含選擇範圍，進行調整
+        if start_time < view_start:
+            view_start = max(0, start_time - view_width * 0.1)
+            view_end = min(self.audio_duration, view_start + view_width)
+
+        if end_time > view_end:
+            view_end = min(self.audio_duration, end_time + view_width * 0.1)
+            view_start = max(0, view_end - view_width)
+
+        return view_start, view_end
+
+    def calculate_view_range_on_slide(self,
+                                    new_time: int,
+                                    fixed_time: int,
+                                    is_start_adjustment: bool,
+                                    current_view_range: Tuple[int, int]) -> Tuple[int, int]:
+        """
+        根據滑桿移動計算新的視圖範圍
+
+        Args:
+            new_time: 滑桿新位置對應的時間
+            fixed_time: 固定點時間
+            is_start_adjustment: 是否正在調整開始時間
+            current_view_range: 當前視圖範圍
+
+        Returns:
+            (新視圖開始時間, 新視圖結束點時間)
+        """
+        # 確保時間值有效
+        new_time = max(0, min(new_time, self.audio_duration))
+        fixed_time = max(0, min(fixed_time, self.audio_duration))
+
+        if is_start_adjustment:
+            start_time = min(new_time, fixed_time - 100)  # 確保開始時間小於結束時間
+            end_time = fixed_time
+        else:
+            start_time = fixed_time
+            end_time = max(new_time, fixed_time + 100)  # 確保結束時間大於開始時間
+
+        # 計算持續時間變化比例
+        current_duration = end_time - start_time
+        prev_duration = max(self.last_selection_duration, 1)
+        duration_change_ratio = current_duration / prev_duration
+
+        # 根據時間變化調整視圖範圍
+        view_start, view_end = current_view_range
+        current_view_width = max(1, view_end - view_start)
+
+        if duration_change_ratio < 0.8:  # 時間顯著縮短，放大視圖
+            new_view_width = max(1000, current_view_width * 0.8)
+        elif duration_change_ratio > 1.5:  # 時間顯著延長，縮小視圖
+            new_view_width = min(self.audio_duration, current_view_width * 1.2)
+        else:
+            new_view_width = current_view_width
+
+        # 計算新的視圖範圍
+        if is_start_adjustment:
+            # 保持固定點（結束時間）在視圖右側
+            view_end = min(self.audio_duration, fixed_time + new_view_width * 0.2)
+            view_start = max(0, view_end - new_view_width)
+        else:
+            # 保持固定點（開始時間）在視圖左側
+            view_start = max(0, fixed_time - new_view_width * 0.2)
+            view_end = min(self.audio_duration, view_start + new_view_width)
+
+        # 確保滑動部分在視圖中可見
+        if start_time < view_start:
+            view_start = max(0, start_time - new_view_width * 0.1)
+            view_end = min(self.audio_duration, view_start + new_view_width)
+
+        if end_time > view_end:
+            view_end = min(self.audio_duration, end_time + new_view_width * 0.1)
+            view_start = max(0, view_end - new_view_width)
+
+        # 更新狀態
+        self.last_selection_duration = current_duration
+        self.last_view_range = (view_start, view_end)
+
+        return view_start, view_end
+
+    def _calculate_view_width(self, duration: int) -> int:
+        """
+        根據文本持續時間計算合適的視圖寬度
+
+        Args:
+            duration: 文本持續時間
+
+        Returns:
+            視圖寬度
+        """
+        # 確保持續時間有效
+        duration = max(1, duration)
+
+        # 基本規則：視圖寬度為時間範圍的3倍，但不小於2秒
+        if duration < 1000:  # 小於1秒
+            return max(2000, duration * 4)
+        elif duration < 5000:  # 1-5秒
+            return duration * 3
+        else:  # 大於5秒
+            return duration * 2
+
+        """時間範圍處理工具類別，用於音頻可視化的時間範圍管理和驗證"""
+
+import logging
+from typing import Tuple, Optional
+
+
+class TimeRangeHandler:
+    """時間範圍處理工具，提供各種時間範圍的驗證、修復和調整功能"""
+
+    def __init__(self):
+        """初始化時間範圍處理器"""
+        self.logger = logging.getLogger(self.__class__.__name__)
+
+    def validate_range(self, time_range: Tuple[float, float],
+                       max_duration: float,
+                       min_range: float = 100.0) -> Tuple[float, float]:
+        """
+        驗證並修正時間範圍
+
+        Args:
+            time_range: 輸入的時間範圍 (start, end)
+            max_duration: 最大合法時間值
+            min_range: 最小範圍持續時間
+
+        Returns:
+            修正後的有效時間範圍 (start, end)
+        """
+        if not isinstance(time_range, tuple) or len(time_range) != 2:
+            self.logger.warning(f"無效的時間範圍格式: {time_range}，使用默認範圍(0, {min_range})")
+            return (0.0, min_range)
+
+        start, end = time_range
+
+        # 轉換為浮點數以確保一致性
+        try:
+            start = float(start)
+            end = float(end)
+        except (ValueError, TypeError):
+            self.logger.warning(f"無法轉換時間範圍為數值: {time_range}，使用默認範圍(0, {min_range})")
+            return (0.0, min_range)
+
+        # 檢查並交換順序顛倒的時間
+        if start > end:
+            self.logger.warning(f"時間範圍順序顛倒: ({start}, {end})，自動交換")
+            start, end = end, start
+
+        # 確保時間在合法範圍內
+        start = max(0.0, min(start, max_duration))
+        end = max(start, min(end, max_duration))
+
+        # 確保範圍至少有最小持續時間
+        if end - start < min_range:
+            # 嘗試擴展結束時間
+            if end + min_range <= max_duration:
+                end = start + min_range
+            # 若無法擴展結束時間，則嘗試縮小開始時間
+            elif start - min_range >= 0:
+                start = end - min_range
+            # 若兩者都不可行，則重置到有效範圍
+            else:
+                start = 0.0
+                end = min(min_range, max_duration)
+
+        return (start, end)
+
+    def create_view_range(self, selection_range: Tuple[float, float],
+                          max_duration: float,
+                          context_factor: float = 3.0,
+                          min_view_width: float = 2000.0) -> Tuple[float, float]:
+        """
+        根據選擇範圍創建合適的視圖範圍
+
+        Args:
+            selection_range: 選擇範圍 (start, end)
+            max_duration: 最大合法時間值
+            context_factor: 視圖範圍相對於選擇範圍的倍數
+            min_view_width: 最小視圖寬度
+
+        Returns:
+            合適的視圖範圍 (view_start, view_end)
+        """
+        # 先確保選擇範圍有效
+        sel_start, sel_end = self.validate_range(selection_range, max_duration)
+
+        # 計算選擇中心點和持續時間
+        duration = sel_end - sel_start
+        center = (sel_start + sel_end) / 2
+
+        # 計算適當的視圖寬度
+        view_width = max(duration * context_factor, min_view_width)
+
+        # 根據中心點和視圖寬度計算視圖範圍
+        view_start = max(0.0, center - view_width / 2)
+        view_end = min(max_duration, view_start + view_width)
+
+        # 確保視圖寬度得到保持，若超出上限則調整起點
+        if view_end == max_duration and view_end - view_start < view_width:
+            view_start = max(0.0, max_duration - view_width)
+
+        # 確保選擇範圍在視圖範圍內
+        if sel_start < view_start:
+            # 如果選擇開始點在視圖開始點之前，擴展視圖
+            delta = view_start - sel_start
+            view_start = sel_start
+            # 嘗試同等擴展結束點，除非超出最大時間
+            view_end = min(max_duration, view_end + delta)
+
+        if sel_end > view_end:
+            # 如果選擇結束點在視圖結束點之後，擴展視圖
+            delta = sel_end - view_end
+            view_end = sel_end
+            # 嘗試同等擴展開始點，除非低於0
+            view_start = max(0.0, view_start - delta)
+
+        # 最終驗證確保範圍有效
+        return self.validate_range((view_start, view_end), max_duration, min_view_width / 10)

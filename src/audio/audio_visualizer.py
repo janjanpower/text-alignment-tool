@@ -7,13 +7,13 @@ import numpy as np
 from PIL import Image, ImageTk, ImageDraw
 from pydub import AudioSegment
 
-from audio.waveform_zoom_manager import WaveformZoomManager
+from audio.audio_range_manager import AudioRangeManager
 
 
 class AudioVisualizer:
-    """整合了簡化版 WaveformZoomManager 的音頻可視化類別"""
+    """整合了統一範圍管理器的音頻可視化類別"""
 
-    def __init__(self, parent: tk.Widget, width: int = 100, height: int = 100):
+    def __init__(self, parent: tk.Widget, width: int = 100, height: int = 50):
         """初始化音頻可視化器"""
         self.logger = logging.getLogger(self.__class__.__name__)
         self.parent = parent
@@ -25,7 +25,7 @@ class AudioVisualizer:
             parent,
             width=width,
             height=height,
-            bg="#1E1E1E",
+            bg="#233A68",
             highlightthickness=0
         )
 
@@ -40,8 +40,8 @@ class AudioVisualizer:
         self.current_selection_range = (0, 0)
         self.samples_cache = None  # 緩存音頻樣本數據
 
-        # 初始化縮放管理器為 None，將在設置音頻時創建
-        self.zoom_manager = None
+        # 初始化範圍管理器為 None，將在設置音頻時創建
+        self.range_manager = None
 
         # 初始狀態設置為空白波形
         self._create_empty_waveform("等待音頻...")
@@ -56,8 +56,8 @@ class AudioVisualizer:
             self.original_audio = audio_segment
             self.audio_duration = len(audio_segment)
 
-            # 初始化縮放管理器
-            self.zoom_manager = WaveformZoomManager(self.audio_duration)
+            # 初始化範圍管理器 - 使用統一的 AudioRangeManager
+            self.range_manager = AudioRangeManager(self.audio_duration)
 
             # 預處理並緩存音頻數據
             self.samples_cache = self._preprocess_audio(audio_segment)
@@ -95,30 +95,38 @@ class AudioVisualizer:
             self.logger.error(f"音頻預處理失敗: {e}")
             return np.zeros(1000)  # 返回空數組作為後備
 
-    def update_waveform_and_selection(self, view_range: Tuple[int, int], selection_range: Tuple[int, int], zoom_factor: float = 1.0) -> None:
-        """
-        即時更新波形和選擇區域
-
-        Args:
-            view_range: 視圖範圍 (view_start, view_end)
-            selection_range: 選擇範圍 (sel_start, sel_end)
-            zoom_factor: 縮放因子，控制波形細節程度 (>1.0 顯示更多細節)
-        """
+    def update_waveform_and_selection(self, view_range: Tuple[int, int], selection_range: Tuple[int, int]) -> None:
+        """即時更新波形和選擇區域，使用 AudioRangeManager 處理視圖範圍"""
         try:
             if self.samples_cache is None or self.original_audio is None:
                 self._create_empty_waveform("未設置音頻數據")
                 return
 
-            # 使用核心邏輯繪製波形，傳遞縮放因子
-            view_start, view_end = view_range
+            # 確保已初始化範圍管理器
+            if self.range_manager is None:
+                self.range_manager = AudioRangeManager(self.audio_duration)
+
+            # 使用範圍管理器獲取最佳視圖範圍
+            # 如果提供的視圖範圍是明確的，則使用它；否則讓範圍管理器計算
+            if view_range == self.current_view_range:
+                # 視圖範圍沒有變化，可能是只更新了選擇區域
+                view_start, view_end = self.range_manager.get_optimal_view_range(selection_range)
+            else:
+                # 使用提供的視圖範圍，但仍進行驗證
+                view_start, view_end = view_range
+                # 確保視圖範圍有效
+                if view_start >= view_end:
+                    view_start, view_end = self.range_manager.get_optimal_view_range(selection_range)
+
+            # 獲取選擇區域
             sel_start, sel_end = selection_range
 
             # 更新當前狀態
             self.current_view_range = (view_start, view_end)
             self.current_selection_range = (sel_start, sel_end)
 
-            # 使用縮放因子繪製波形
-            self._draw_waveform_core(zoom_factor)
+            # 使用核心邏輯繪製波形
+            self._draw_waveform_core()
 
         except Exception as e:
             self.logger.error(f"更新波形時出錯: {e}")
@@ -126,8 +134,8 @@ class AudioVisualizer:
             self.logger.error(traceback.format_exc())
             self._create_empty_waveform(f"錯誤: {str(e)}")
 
-    def _draw_waveform_core(self, zoom_factor=1.0):
-        """核心波形繪製邏輯 - 支持動態縮放"""
+    def _draw_waveform_core(self):
+        """核心波形繪製邏輯 - 更平滑細緻版本"""
         try:
             # 獲取當前視圖和選擇範圍
             view_start, view_end = self.current_view_range
@@ -156,6 +164,9 @@ class AudioVisualizer:
 
             # 初始化降採樣列表
             downsampled = []
+
+            # 定義 zoom_factor (添加這行)
+            zoom_factor = 1  # 或設置為適當的默認值
 
             # 計算縮放比例 - 考慮傳入的縮放因子
             base_zoom_ratio = view_duration / max(1, selection_duration)
@@ -208,7 +219,7 @@ class AudioVisualizer:
                 downsampled = [d / max_value for d in downsampled]
 
             # 創建圖像 - 根據縮放因子調整顯示效果
-            bg_color = (30, 30, 30, 255)  # 默認背景色
+            bg_color = (35, 58, 104, 255)  # 默認背景色
             img = Image.new('RGBA', (self.width, self.height), bg_color)
             draw = ImageDraw.Draw(img)
 
