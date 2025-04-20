@@ -1,16 +1,17 @@
-"""音頻範圍管理器：整合視圖範圍計算、時間範圍處理和波形縮放功能"""
+"""音頻範圍管理器：統一視圖範圍計算、時間範圍處理和波形縮放功能"""
 
 import logging
-from typing import Tuple
-import tkinter as tk
+from typing import Tuple, Optional, Dict, Any
+import numpy as np
 
 
 class AudioRangeManager:
     """
     統一的音頻範圍管理器，提供：
-    - 視圖範圍計算 (原 WaveformZoomManager)
-    - 時間範圍驗證 (原 TimeRangeHandler)
-    - 視覺化範圍管理 (原 VisualizationRangeManager)
+    - 視圖範圍計算
+    - 時間範圍驗證
+    - 視覺化範圍管理
+    - 適應性縮放計算
     """
 
     def __init__(self, audio_duration: int):
@@ -26,11 +27,23 @@ class AudioRangeManager:
         # 視圖範圍配置
         self.min_view_width = 500     # 最小視圖寬度（毫秒）
         self.max_view_width = 30000   # 最大視圖寬度（毫秒）
-        self.min_selection_width = 50 # 最小選擇寬度（毫秒）  # 確保這行正確
+        self.min_selection_width = 50 # 最小選擇寬度（毫秒）
 
         # 緩存最後一次計算的範圍
         self.last_selection = (0, min(5000, self.audio_duration))
         self.last_view_range = (0, min(10000, self.audio_duration))
+
+        # 歷史記錄
+        self.history = []
+        self.max_history = 10
+
+        # 當前段落的音頻特性
+        self.audio_features = {
+            'mean_amplitude': 0.0,
+            'peak_amplitude': 0.0,
+            'has_speech': False,
+            'speech_segments': []
+        }
 
     def get_optimal_view_range(self, selection: Tuple[float, float]) -> Tuple[float, float]:
         """
@@ -79,8 +92,19 @@ class AudioRangeManager:
                 # 嘗試同等擴展開始點，除非低於0
                 view_start = max(0, view_start - delta)
 
+            # 添加額外的邊距，確保顯示更多上下文
+            margin = min(500, view_width * 0.1)  # 最大500ms或10%的視圖寬度
+            view_start = max(0, view_start - margin)
+            view_end = min(self.audio_duration, view_end + margin)
+
             # 緩存結果
             self.last_view_range = (view_start, view_end)
+
+            # 記錄到歷史
+            self._add_to_history({
+                'selection': (start_ms, end_ms),
+                'view': (view_start, view_end)
+            })
 
             return view_start, view_end
 
@@ -110,12 +134,10 @@ class AudioRangeManager:
 
         # 根據調整類型設置選擇範圍
         if is_start_adjustment:
-            # 這裡使用正確的屬性
             start_time = min(new_time, fixed_time - self.min_selection_width)
             end_time = fixed_time
         else:
             start_time = fixed_time
-            # 這裡也使用正確的屬性
             end_time = max(new_time, fixed_time + self.min_selection_width)
 
         # 更新選擇區域
@@ -126,7 +148,7 @@ class AudioRangeManager:
 
     def _validate_time_range(self, time_range: Tuple[float, float]) -> Tuple[float, float]:
         """
-        驗證並修正時間範圍
+        驗證並修正時間範圍，確保時間有效且範圍合理
         """
         start, end = time_range
 
@@ -137,8 +159,6 @@ class AudioRangeManager:
 
         # 確保時間在有效範圍內
         start = max(0, min(start, self.audio_duration))
-
-        # 使用 self.min_selection_width 而不是局部變數
         end = max(start + self.min_selection_width, min(end, self.audio_duration))
 
         return start, end
@@ -170,133 +190,114 @@ class AudioRangeManager:
         else:                   # 長時間（>10秒）
             return max(self.min_view_width, duration * 2)
 
-    # 兼容舊版接口
-    def calculate_optimal_zoom(self, start_time: int, end_time: int) -> Tuple[int, int]:
+    def calculate_zoom_level(self, selection: Tuple[float, float]) -> float:
         """
-        計算最佳縮放級別 (兼容舊版接口)
+        根據選擇區域計算適當的縮放級別
 
         Args:
-            start_time: 開始時間（毫秒）
-            end_time: 結束時間（毫秒）
+            selection: 選擇區域範圍 (start_ms, end_ms)
 
         Returns:
-            (view_start, view_end): 視圖範圍（毫秒）
+            縮放級別（1.0為標準縮放）
         """
-        return self.get_optimal_view_range((start_time, end_time))
+        start_ms, end_ms = self._validate_time_range(selection)
+        duration = end_ms - start_ms
 
+        # 根據持續時間計算縮放級別
+        if duration < 50:          # 極短範圍 (<50ms)
+            return 5.0             # 極度放大
+        elif duration < 100:       # 非常短時間 (<100ms)
+            return 4.0             # 非常高縮放
+        elif duration < 250:       # 較短範圍 (<250ms)
+            return 3.0             # 高縮放
+        elif duration < 500:       # 短範圍 (<500ms)
+            return 2.5             # 中高縮放
+        elif duration < 1000:      # 中短範圍 (<1s)
+            return 2.0             # 中等縮放
+        elif duration < 2000:      # 中等範圍 (<2s)
+            return 1.5             # 低縮放
+        else:                      # 長範圍 (>=2s)
+            return 1.0             # 標準縮放
 
-
-class WaveformVisualization:
-    """整合音頻波形可視化類別，結合了視圖範圍管理和音頻可視化功能"""
-
-    def __init__(self, parent: tk.Widget, width: int = 100, height: int = 50):
-        """初始化音頻可視化器"""
-        self.logger = logging.getLogger(self.__class__.__name__)
-        self.parent = parent
-        self.width = width
-        self.height = height
-
-        # 創建畫布
-        self.canvas = tk.Canvas(
-            parent,
-            width=width,
-            height=height,
-            bg="#233A68",
-            highlightthickness=0
-        )
-
-        # 波形相關變數
-        self.waveform_image = None
-        self.waveform_photo = None
-        self.audio_duration = 0
-
-        # 保存原始音頻數據用於動態縮放
-        self.original_audio = None
-        self.current_view_range = (0, 0)
-        self.current_selection_range = (0, 0)
-        self.samples_cache = None  # 緩存音頻樣本數據
-
-        # 視圖配置
-        self.min_view_width = 500    # 最小視圖寬度（毫秒）
-        self.max_view_width = 10000  # 最大視圖寬度（毫秒）
-        self.min_selection_width = 100  # 最小選擇區域寬度（毫秒）
-
-        # 初始狀態設置為空白波形
-        self._create_empty_waveform("等待音頻...")
-
-        # 添加用於動畫過渡的變數
-        self.animation_active = False
-        self.target_view_range = (0, 0)
-        self.target_selection_range = (0, 0)
-        self.animation_frames = 10
-        self.animation_duration = 0.2  # 秒
-        self.prev_waveform_image = None
-        self.prev_view_range = (0, 0)
-
-    def get_optimal_view_range(self, selection: Tuple[int, int]) -> Tuple[int, int]:
+    def zoom_to_fit(self, selection: Tuple[float, float]) -> Tuple[float, float]:
         """
-        整合的方法：根據選擇區域計算最佳視圖範圍
+        計算最佳視圖範圍，使選擇區域居中並有適當的邊距
 
         Args:
-            selection: 當前選擇的時間範圍 (start_ms, end_ms)
+            selection: 選擇區域 (start_ms, end_ms)
 
         Returns:
-            最佳視圖範圍 (view_start_ms, view_end_ms)
+            適合的視圖範圍 (view_start_ms, view_end_ms)
         """
-        try:
-            # 驗證並修正選擇範圍
-            start_ms, end_ms = self._validate_time_range(selection)
+        # 驗證選擇範圍
+        start_ms, end_ms = self._validate_time_range(selection)
 
-            # 計算選擇區域中心點和持續時間
-            duration = max(end_ms - start_ms, self.min_selection_width)
-            center_time = (start_ms + end_ms) / 2
+        # 計算選擇持續時間
+        duration = end_ms - start_ms
 
-            # 動態計算視圖寬度
-            view_width = self._calculate_view_width(duration)
+        # 初始視圖寬度 - 選擇區域的3-5倍，取決於持續時間
+        if duration < 200:
+            view_width = duration * 5  # 對於非常短的選擇，視圖寬度為5倍
+        elif duration < 1000:
+            view_width = duration * 4  # 較短的選擇
+        elif duration < 5000:
+            view_width = duration * 3  # 中等長度
+        else:
+            view_width = duration * 2  # 長選擇
 
-            # 計算視圖範圍
-            view_start = max(0, center_time - view_width / 2)
-            view_end = min(self.audio_duration, view_start + view_width)
+        # 限制視圖寬度在最小和最大範圍內
+        view_width = max(self.min_view_width, min(self.max_view_width, view_width))
 
-            # 確保視圖包含完整的選擇區域
-            if start_ms < view_start:
-                view_start = max(0, start_ms - view_width * 0.1)
-                view_end = min(self.audio_duration, view_start + view_width)
+        # 計算選擇區域的中心點
+        center = (start_ms + end_ms) / 2
 
-            if end_ms > view_end:
-                view_end = min(self.audio_duration, end_ms + view_width * 0.1)
-                view_start = max(0, view_end - view_width)
+        # 計算視圖範圍，使選擇區域居中
+        view_start = max(0, center - view_width / 2)
+        view_end = min(self.audio_duration, view_start + view_width)
 
-            return view_start, view_end
+        # 如果視圖已到達音頻結尾，調整起始點
+        if view_end == self.audio_duration and view_end - view_start < view_width:
+            view_start = max(0, view_end - view_width)
 
-        except Exception as e:
-            self.logger.error(f"計算視圖範圍時出錯: {e}")
-            # 返回默認範圍
-            return 0, min(self.audio_duration, 5000)
+        return view_start, view_end
 
-    def _calculate_view_width(self, selection_duration: int) -> int:
+    def set_audio_features(self, features: Dict[str, Any]) -> None:
         """
-        根據選擇區域持續時間計算合適的視圖寬度
+        設置當前音頻段落的特性，用於更智能的範圍計算
 
         Args:
-            selection_duration: 選擇區域的持續時間（毫秒）
+            features: 音頻特性詞典
+        """
+        self.audio_features = features
+
+    def _add_to_history(self, entry: Dict[str, Any]) -> None:
+        """
+        添加範圍到歷史記錄
+
+        Args:
+            entry: 範圍記錄
+        """
+        # 添加新記錄
+        self.history.append(entry)
+
+        # 限制歷史長度
+        if len(self.history) > self.max_history:
+            self.history.pop(0)
+
+    def get_last_view_range(self) -> Tuple[float, float]:
+        """
+        獲取最後計算的視圖範圍
 
         Returns:
-            合適的視圖寬度（毫秒）
+            (view_start, view_end)
         """
-        # 根據選擇時間長度使用不同的縮放因子
-        if selection_duration < 100:     # 極短時間（小於100毫秒）
-            zoom_factor = 10.0
-        elif selection_duration < 500:   # 非常短時間（100-500毫秒）
-            zoom_factor = 6.0
-        elif selection_duration < 2000:  # 短時間（0.5-2秒）
-            zoom_factor = 4.0
-        elif selection_duration < 5000:  # 中等時間（2-5秒）
-            zoom_factor = 3.0
-        else:                          # 長時間（>5秒）
-            zoom_factor = 2.0
+        return self.last_view_range
 
-        # 計算並限制視圖寬度
-        view_width = max(self.min_view_width, min(self.max_view_width, selection_duration * zoom_factor))
+    def get_last_selection(self) -> Tuple[float, float]:
+        """
+        獲取最後的選擇範圍
 
-        return view_width
+        Returns:
+            (selection_start, selection_end)
+        """
+        return self.last_selection

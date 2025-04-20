@@ -1594,6 +1594,23 @@ class AlignmentGUI(BaseWindow):
         try:
             # 獲取基本點擊信息
             click_info = self._get_click_info(event)
+
+            # 關鍵修改：無論點擊何處，只要不是正在懸停的同一文本元素，就隱藏已固定的圖標
+            if hasattr(self, 'ui_manager') and self.ui_manager.floating_icon_fixed:
+                # 檢查是否點擊了不同的項目或不同的列
+                if click_info:
+                    region, column, item, column_name, column_idx, is_selected = click_info
+                    # 檢查是否點擊了與當前懸停項目不同的文本
+                    if (not hasattr(self, 'current_hovering_item') or
+                        self.current_hovering_item != item or
+                        self.current_hovering_column != column_name):
+                        # 如果點擊了不同的文本，取消固定並隱藏圖標
+                        self.ui_manager.unfix_floating_icon()
+                else:
+                    # 如果點擊了非有效區域，也隱藏圖標
+                    self.ui_manager.unfix_floating_icon()
+
+            # 如果沒有獲取到點擊信息，則退出
             if not click_info:
                 return
 
@@ -1711,17 +1728,9 @@ class AlignmentGUI(BaseWindow):
             item_tags = self.tree.item(item, "tags")
             has_word_text_tag = "use_word_text" in item_tags if item_tags else False
 
-        # 檢查用戶是否點擊了與當前顯示校正圖標不同的文本
-        is_different_text = False
-        if hasattr(self, 'current_hovering_item') and hasattr(self, 'current_hovering_column'):
-            is_different_text = (self.current_hovering_item != item or self.current_hovering_column != column_name)
-
-        # 如果是標記為使用Word文本的SRT Text列，或點擊了不同的文本但圖標已固定，則取消固定
-        if (column_name == "SRT Text" and has_word_text_tag) or (is_different_text and self.ui_manager.floating_icon_fixed):
-            # 取消固定並隱藏浮動圖標
-            self.ui_manager.unfix_floating_icon()
-            if column_name == "SRT Text" and has_word_text_tag:
-                return
+        # 如果是標記為使用Word文本的SRT Text列，則不顯示校正圖標
+        if column_name == "SRT Text" and has_word_text_tag:
+            return
 
         # 獲取文本值
         values = list(self.tree.item(item)["values"])

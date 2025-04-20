@@ -64,8 +64,20 @@ class TimeSliderController:
         # 使用新的統一範圍管理器，將在設置音頻段落時初始化
         self.range_manager = None
 
+        # 視圖範圍記錄
+        self.last_view_range = None
+        self.last_selection_range = None
+
         # 自定義樣式
         self._setup_slider_style()
+
+        # 初始化必要的屬性 - 新增加
+        self.dark_mode = True              # 默認使用深色模式
+        self.throttle_updates = True       # 默認限流更新
+        self.high_quality_mode = True      # 默認高品質
+        self.enable_animations = True      # 默認啟用動畫
+        self.show_audio_visualizer = True  # 默認顯示音頻可視化
+        self.update_throttle_ms = 50       # 更新間隔毫秒
 
     def set_waveform_update_callback(self, callback):
         """設置音波更新回調函數"""
@@ -324,7 +336,7 @@ class TimeSliderController:
         return slider
 
     def _setup_audio_visualization(self, slider_params):
-        """設置音頻可視化"""
+        """設置音頻可視化 - 修正版本"""
         if not self.audio_segment:
             self.logger.warning("無音頻數據可供顯示")
             return
@@ -334,7 +346,7 @@ class TimeSliderController:
             visualizer_container = tk.Frame(self.slider_frame, bg="#233A68")
             visualizer_container.place(x=5, y=30, relwidth=0.97, height=40)
 
-            # 重要：先確保容器已經完成布局
+            # 確保容器已經完成布局
             self.slider_frame.update_idletasks()
 
             # 計算實際可用寬度
@@ -342,44 +354,48 @@ class TimeSliderController:
             # 確保寬度至少為 100 像素
             visual_width = max(100, container_width - 10)
 
-            # 創建可視化器，使用計算的實際寬度
+            # 使用新的 AudioVisualizer 類創建可視化器
             self.audio_visualizer = AudioVisualizer(
                 visualizer_container,
                 width=visual_width,
                 height=30
             )
+
+            # 設置主題和品質 - 添加屬性檢查
+            if hasattr(self, 'dark_mode'):
+                self.audio_visualizer.set_theme(dark_mode=self.dark_mode)
+
+            if hasattr(self, 'high_quality_mode') and hasattr(self, 'enable_animations'):
+                self.audio_visualizer.set_quality(
+                    high_quality=self.high_quality_mode,
+                    enable_animation=self.enable_animations
+                )
+
             self.audio_visualizer.show()
 
-            # 關鍵：確保音頻段落正確設置
+            # 設置音頻段落
             self.audio_visualizer.set_audio_segment(self.audio_segment)
 
-            # 等待一小段時間確保資源準備完成
+            # 等待確保資源準備完成
             self.slider_frame.update_idletasks()
 
-            # 計算初始視圖範圍 - 使用新的範圍管理器
+            # 計算初始視圖範圍
             start_time = slider_params['item_start_time']
             end_time = slider_params['item_end_time']
 
+            # 使用範圍管理器計算最佳範圍
             if self.range_manager:
                 view_start, view_end = self.range_manager.get_optimal_view_range((start_time, end_time))
             else:
-                # 使用傳統計算方式作為備選
-                duration = end_time - start_time
-                center_time = (start_time + end_time) / 2
-                view_width = max(duration * 3, 2000)
-                view_start = max(0, center_time - view_width / 2)
-                view_end = min(len(self.audio_segment), center_time + view_width / 2)
+                # 創建臨時範圍管理器
+                temp_manager = AudioRangeManager(len(self.audio_segment))
+                view_start, view_end = temp_manager.get_optimal_view_range((start_time, end_time))
 
-            # 確保視圖範圍包含選擇區域
-            if start_time < view_start:
-                view_start = max(0, start_time - 200)
-            if end_time > view_end:
-                view_end = min(len(self.audio_segment), end_time + 200)
-
-            # 創建初始波形 - 使用更新後的方法
+            # 更新波形
             self.audio_visualizer.update_waveform_and_selection(
                 (view_start, view_end),
-                (start_time, end_time)
+                (start_time, end_time),
+                animate=False  # 初始顯示不使用動畫
             )
 
             # 更新滑桿目標
@@ -395,7 +411,7 @@ class TimeSliderController:
             self.logger.error(traceback.format_exc())
 
     def on_slider_change(self, value):
-        """滑桿值變化時的處理 - 即時更新視圖"""
+        """滑桿值變化時的處理 - 優化版本"""
         try:
             if not self.slider_active or not self.slider_target:
                 return
@@ -410,7 +426,7 @@ class TimeSliderController:
             # 獲取新時間值
             new_value = float(value)
 
-            # 安全檢查 - 確保 slider_target 包含所有必要的鍵
+            # 安全檢查
             if not isinstance(self.slider_target, dict):
                 self.logger.error(f"slider_target 不是字典: {type(self.slider_target)}")
                 return
@@ -491,7 +507,7 @@ class TimeSliderController:
                 # 更新時間戳
                 self._last_update_time = current_time
 
-            # 更新樹視圖值 - 使用 target_item 而不是 item
+            # 更新樹視圖值
             self.tree.item(target_item, values=tuple(values))
 
             # 更新相鄰項目
@@ -582,7 +598,7 @@ class TimeSliderController:
             self.logger.error(f"更新音頻可視化時出錯: {e}")
 
     def _update_slider_audio_view(self, start_ms, end_ms):
-        """更新滑桿音頻可視化視圖 - 增強版：更激進的縮放邏輯"""
+        """更新滑桿音頻可視化視圖 - 修正版本"""
         try:
             if not hasattr(self, 'audio_visualizer') or not self.audio_visualizer:
                 return
@@ -591,87 +607,61 @@ class TimeSliderController:
             if not self.audio_segment or len(self.audio_segment) == 0:
                 return
 
-            # 計算時間範圍持續時間
-            duration = end_ms - start_ms
+            # 節流更新頻率，避免過度渲染 - 添加屬性檢查
+            if hasattr(self, 'throttle_updates') and self.throttle_updates:
+                current_time = time.time() * 1000  # 轉換為毫秒
+                if hasattr(self.state, 'last_update_time') and current_time - self.state.last_update_time < self.update_throttle_ms:
+                    return
+                self.state.last_update_time = current_time
 
-            # 更激進的縮放級別計算，當秒數極短時提供更高的縮放
-            if duration < 50:  # 極短範圍 (<50ms)
-                zoom_level = 5.0     # 極度縮放
-            elif duration < 100:  # 非常短的範圍 (<100ms)
-                zoom_level = 4.0     # 非常高縮放
-            elif duration < 250:     # 較短範圍 (<250ms)
-                zoom_level = 3.0     # 高縮放
-            elif duration < 500:     # 短範圍 (<500ms)
-                zoom_level = 2.5     # 中高縮放
-            elif duration < 1000:    # 中短範圍 (<1s)
-                zoom_level = 2.0     # 中等縮放
-            elif duration < 2000:    # 中等範圍 (<2s)
-                zoom_level = 1.5     # 低縮放
-            else:                    # 長範圍 (>=2s)
-                zoom_level = 1.0     # 標準縮放
-
-            # 動態調整視圖範圍 - 更精細的控制
-            # 時間範圍越小，視圖範圍越集中
-
-            # 計算中心點
-            center_time = (start_ms + end_ms) / 2
-
-            # 根據縮放級別和持續時間調整視圖寬度
-            # 當持續時間極短時，視圖寬度要更窄，以顯示更多細節
-            if duration < 50:  # 極短範圍
-                view_width = max(200, duration * 10)  # 極窄視圖
-            elif duration < 100:  # 非常短範圍
-                view_width = max(300, duration * 8)   # 非常窄視圖
-            elif duration < 500:  # 短範圍
-                view_width = max(1000, duration * 5)  # 窄視圖
-            elif duration < 2000:  # 中等範圍
-                view_width = max(2000, duration * 3)  # 中等視圖
-            else:  # 長範圍
-                view_width = max(4000, duration * 2)  # 寬視圖
-
-            # 計算視圖範圍，確保選擇區域居中
-            view_start = max(0, center_time - view_width / 2)
-            view_end = min(len(self.audio_segment), view_start + view_width)
-
-            # 如果選擇區域接近邊界，調整視圖以保持視圖寬度
-            if view_end == len(self.audio_segment) and view_end - view_start < view_width:
-                view_start = max(0, view_end - view_width)
-
-            if view_start == 0 and view_end - view_start < view_width:
-                view_end = min(len(self.audio_segment), view_width)
-
-            # 確保選擇區域在視圖中可見且有足夠邊距
-            # 對於非常短的持續時間，提供更大的相對邊距
-            if duration < 200:
-                # 非常短的時間範圍需要更大的邊距以便清晰查看
-                padding = view_width * 0.2  # 視圖邊界留出20%的空間
+            # 計算視圖範圍
+            if self.range_manager:
+                view_start, view_end = self.range_manager.get_optimal_view_range((start_ms, end_ms))
+                # 計算縮放級別
+                zoom_level = self.range_manager.calculate_zoom_level((start_ms, end_ms))
             else:
-                # 標準邊距
-                padding = view_width * 0.1  # 視圖邊界留出10%的空間
+                # 使用簡單的計算方法作為後備
+                duration = end_ms - start_ms
+                center_time = (start_ms + end_ms) / 2
 
-            if start_ms < view_start + padding:
-                view_start = max(0, start_ms - padding)
+                # 根據持續時間動態調整視圖寬度
+                if duration < 50:  # 極短範圍
+                    view_width = duration * 10
+                    zoom_level = 5.0
+                elif duration < 200:  # 短範圍
+                    view_width = duration * 8
+                    zoom_level = 3.0
+                elif duration < 1000:  # 中等範圍
+                    view_width = duration * 5
+                    zoom_level = 2.0
+                else:  # 長範圍
+                    view_width = duration * 3
+                    zoom_level = 1.0
+
+                view_width = max(1000, min(10000, view_width))
+                view_start = max(0, center_time - view_width / 2)
                 view_end = min(len(self.audio_segment), view_start + view_width)
 
-            if end_ms > view_end - padding:
-                view_end = min(len(self.audio_segment), end_ms + padding)
-                view_start = max(0, view_end - view_width)
+            # 僅在實際範圍變化時更新波形視圖，減少冗餘渲染
+            if (not hasattr(self, 'last_view_range') or
+                not hasattr(self, 'last_selection_range') or
+                self.last_view_range != (view_start, view_end) or
+                self.last_selection_range != (start_ms, end_ms)):
 
-            # 更新波形視圖 - 傳遞增強的縮放級別
-            try:
-                # 嘗試使用新的支持縮放的方法
+                # 檢查動畫設置是否存在
+                animate = hasattr(self, 'enable_animations') and self.enable_animations
+
+                # 更新波形視圖，使用計算的縮放級別
                 self.audio_visualizer.update_waveform_and_selection(
                     (view_start, view_end),
                     (start_ms, end_ms),
-                    zoom_level=zoom_level
+                    zoom_level=zoom_level,
+                    animate=animate
                 )
-            except TypeError as e:
-                # 如果發生類型錯誤（可能是舊版本不支持zoom_level參數），回退到標準方法
-                self.logger.debug(f"回退到標準波形更新方法: {e}")
-                self.audio_visualizer.update_waveform_and_selection(
-                    (view_start, view_end),
-                    (start_ms, end_ms)
-                )
+
+                # 記錄最後的範圍
+                self.last_view_range = (view_start, view_end)
+                self.last_selection_range = (start_ms, end_ms)
 
         except Exception as e:
             self.logger.error(f"更新滑桿音頻視圖時出錯: {e}")
@@ -746,12 +736,12 @@ class TimeSliderController:
         return min_value, max_value
 
     def set_audio_segment(self, audio_segment):
-        """设置要可视化的音频段落"""
+        """設置要可視化的音頻段落，同時初始化範圍管理器"""
         if audio_segment is not None and len(audio_segment) > 0:
             self.audio_segment = audio_segment
             self.state.audio_segment = audio_segment
 
-            # 使用新的 AudioRangeManager
+            # 使用新的 AudioRangeManager 初始化範圍管理器
             if audio_segment:
                 self.range_manager = AudioRangeManager(len(audio_segment))
                 self.state.range_manager = self.range_manager
@@ -763,6 +753,21 @@ class TimeSliderController:
             self.range_manager = None
             self.state.range_manager = None
             self.logger.warning("設置的音頻段落為空或無效")
+
+    def set_visualization_options(self, high_quality=True, enable_animations=True, dark_mode=True, show_visualizer=True):
+        """設置音頻可視化選項"""
+        self.high_quality_mode = high_quality
+        self.enable_animations = enable_animations
+        self.dark_mode = dark_mode
+        self.show_audio_visualizer = show_visualizer
+
+        # 如果已經有可視化器，更新其設置
+        if hasattr(self, 'audio_visualizer') and self.audio_visualizer:
+            self.audio_visualizer.set_theme(dark_mode=dark_mode)
+            self.audio_visualizer.set_quality(
+                high_quality=high_quality,
+                enable_animation=enable_animations
+            )
 
     def hide_slider(self):
         """隱藏時間調整滑桿"""
