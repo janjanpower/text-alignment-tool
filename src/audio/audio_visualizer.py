@@ -98,12 +98,12 @@ class AudioVisualizer:
             self._create_empty_waveform(f"錯誤: {str(e)}")
 
     def update_waveform_and_selection(self,
-                                     view_range: Tuple[int, int],
-                                     selection_range: Tuple[int, int],
-                                     zoom_level: float = None,
-                                     animate: bool = True) -> None:
+                                 view_range: Tuple[int, int],
+                                 selection_range: Tuple[int, int],
+                                 zoom_level: float = None,
+                                 animate: bool = True) -> None:
         """
-        更新波形和選擇區域，支持平滑過渡動畫
+        更新波形和選擇區域，支持平滑過渡動畫 - 高度優化版本
 
         Args:
             view_range: 視圖範圍 (view_start, view_end)
@@ -116,13 +116,26 @@ class AudioVisualizer:
                 self._create_empty_waveform("未設置音頻數據")
                 return
 
-            # 驗證並調整範圍
+            # 驗證並調整範圍 - 添加更多保護
             view_start, view_end = self._validate_range(view_range, min_width=self.min_view_width)
             sel_start, sel_end = self._validate_range(selection_range, min_width=self.min_selection_width)
 
             # 確保選擇區域在視圖範圍內
-            sel_start = max(sel_start, view_start)
-            sel_end = min(sel_end, view_end)
+            if sel_start < view_start:
+                # 如果選擇開始在視圖之前，擴展視圖
+                view_start = max(0, sel_start - 200)  # 添加200ms邊距
+
+            if sel_end > view_end:
+                # 如果選擇結束在視圖之後，擴展視圖
+                view_end = min(self.audio_duration, sel_end + 200)  # 添加200ms邊距
+
+            # 確保視圖範圍足夠大
+            view_min_width = max(self.min_view_width, (sel_end - sel_start) * 2)
+            if view_end - view_start < view_min_width:
+                # 保持中心點不變，擴展視圖
+                center = (view_start + view_end) / 2
+                view_start = max(0, center - view_min_width / 2)
+                view_end = min(self.audio_duration, center + view_min_width / 2)
 
             # 保存目標範圍，用於動畫
             self.target_view_range = (view_start, view_end)
@@ -132,8 +145,23 @@ class AudioVisualizer:
             if zoom_level is None:
                 zoom_level = self._calculate_adaptive_zoom_level(sel_start, sel_end)
 
+            # 檢查是否有大幅度變化
+            significant_change = False
+            if hasattr(self, 'current_view_range') and hasattr(self, 'current_selection_range'):
+                view_change_ratio = abs((view_end - view_start) - (self.current_view_range[1] - self.current_view_range[0])) / max(1, self.current_view_range[1] - self.current_view_range[0])
+                selection_change_ratio = abs((sel_end - sel_start) - (self.current_selection_range[1] - self.current_selection_range[0])) / max(1, self.current_selection_range[1] - self.current_selection_range[0])
+
+                significant_change = view_change_ratio > 0.3 or selection_change_ratio > 0.3
+
             # 動畫過渡或直接更新
-            if animate and self.enable_animation and not self.animation_active:
+            should_animate = animate and self.enable_animation and not self.animation_active
+
+            # 針對不同情況優化動畫行為
+            if should_animate and significant_change:
+                # 大幅度變化使用加強版動畫
+                self._animate_enhanced_transition(view_start, view_end, sel_start, sel_end, zoom_level)
+            elif should_animate:
+                # 小幅度變化使用標準動畫
                 self._animate_transition(view_start, view_end, sel_start, sel_end, zoom_level)
             else:
                 # 直接繪製最終波形
@@ -144,6 +172,60 @@ class AudioVisualizer:
             import traceback
             self.logger.error(traceback.format_exc())
             self._create_empty_waveform(f"錯誤: {str(e)}")
+
+    def _animate_enhanced_transition(self, view_start, view_end, sel_start, sel_end, zoom_level):
+        """實現加強版的漸變過渡動畫，適用於較大幅度的變化"""
+        self.animation_active = True
+
+        # 保存源範圍
+        source_view_start, source_view_end = self.current_view_range
+        source_sel_start, source_sel_end = self.current_selection_range
+
+        # 緩存當前圖像
+        self.prev_waveform_image = self.waveform_image
+
+        # 計算更多的動畫步數，使過渡更流暢
+        animation_steps = 12 if abs(source_view_start - view_start) > 1000 else 8
+
+        # 定義遞歸的動畫幀函數
+        def animate_frame(step=0):
+            if step >= animation_steps:
+                # 最後一幀，直接顯示目標波形
+                self._draw_waveform(view_start, view_end, sel_start, sel_end, zoom_level)
+                self.animation_active = False
+                return
+
+            # 計算當前幀的插值位置 (使用緩入緩出的效果)
+            progress = self._ease_in_out(step / animation_steps)
+
+            # 對於大幅度變化，使用更平滑的插值
+            view_progress = self._smooth_transition(progress)
+            sel_progress = self._smooth_transition(progress)
+
+            # 計算當前幀的範圍
+            current_view_start = source_view_start + (view_start - source_view_start) * view_progress
+            current_view_end = source_view_end + (view_end - source_view_end) * view_progress
+            current_sel_start = source_sel_start + (sel_start - source_sel_start) * sel_progress
+            current_sel_end = source_sel_end + (sel_end - source_sel_end) * sel_progress
+
+            # 繪製當前幀
+            self._draw_waveform(
+                current_view_start, current_view_end,
+                current_sel_start, current_sel_end,
+                zoom_level, is_animation_frame=True
+            )
+
+            # 安排下一幀，使用非線性時間間隔
+            delay = 20 if step < animation_steps * 0.7 else 30  # 結束時稍微減速
+            self.parent.after(int(delay), lambda: animate_frame(step + 1))
+
+        # 開始動畫
+        animate_frame()
+
+    def _smooth_transition(self, t):
+        """產生更平滑的過渡曲線，減輕大範圍變化的視覺衝擊"""
+        # 使用更高級的緩入緩出函數
+        return 0.5 - 0.5 * np.cos(np.pi * (0.1 + 0.9 * t))
 
     def _animate_transition(self, view_start, view_end, sel_start, sel_end, zoom_level):
         """實現平滑的動畫過渡效果"""
@@ -233,33 +315,26 @@ class AudioVisualizer:
         return start, end
 
     def _calculate_adaptive_zoom_level(self, sel_start, sel_end):
-        """根據選擇範圍大小計算自適應縮放級別 - 穩定版本"""
+        """根據選擇範圍大小計算自適應縮放級別 - 平滑版本"""
         duration = sel_end - sel_start
 
-        # 使用分段函數計算縮放，避免抖動
-        if duration < 50:          # 極短範圍 (<50ms)
-            zoom_level = 5.0
-        elif duration < 100:       # 非常短時間 (<100ms)
-            zoom_level = 4.0
-        elif duration < 250:       # 較短範圍 (<250ms)
-            zoom_level = 3.0
-        elif duration < 500:       # 短範圍 (<500ms)
-            zoom_level = 2.5
-        elif duration < 1000:      # 中短範圍 (<1s)
-            zoom_level = 2.0
-        elif duration < 2000:      # 中等範圍 (<2s)
-            zoom_level = 1.5
-        else:                      # 長範圍 (>=2s)
-            zoom_level = 1.0
+        # 使用連續平滑函數計算縮放，避免突變
+        # 時間越短，縮放級別越高
+        raw_zoom_level = 5.0 * np.exp(-duration / 2000) + 1.0
+
+        # 限制在合理範圍
+        raw_zoom_level = max(1.0, min(5.0, raw_zoom_level))
 
         # 添加平滑處理，避免小範圍變化導致的縮放抖動
         if hasattr(self, '_last_zoom_level'):
-            # 如果縮放級別變化很小，保持不變
-            if abs(self._last_zoom_level - zoom_level) < 0.2:
-                zoom_level = self._last_zoom_level
-            # 否則進行平滑過渡
-            else:
-                zoom_level = self._last_zoom_level * 0.7 + zoom_level * 0.3
+            # 計算平滑係數 - 變化越大，平滑效果越弱
+            smoothing_factor = 0.2 + 0.6 * abs(self._last_zoom_level - raw_zoom_level) / 4.0
+            smoothing_factor = min(0.8, smoothing_factor)  # 最大平滑係數為0.8
+
+            # 平滑過渡
+            zoom_level = self._last_zoom_level * (1 - smoothing_factor) + raw_zoom_level * smoothing_factor
+        else:
+            zoom_level = raw_zoom_level
 
         # 保存當前縮放級別
         self._last_zoom_level = zoom_level
@@ -374,7 +449,7 @@ class AudioVisualizer:
             self.logger.error(traceback.format_exc())
 
     def _draw_selection_area(self, draw, view_start, view_end, sel_start, sel_end):
-        """繪製選擇區域的高亮背景 - 完全優化版本"""
+        """繪製選擇區域的高亮背景 - 完全強化版本"""
         # 計算視圖持續時間和像素比例
         view_duration = view_end - view_start
         pixel_duration = view_duration / self.width if self.width > 0 else 1
@@ -390,8 +465,6 @@ class AudioVisualizer:
             sel_end_px = sel_start_px + 3
 
         # 使用更明顯的視覺效果來標識選擇區域
-
-        # 1. 首先創建一個半透明的漸變背景，從上到下顏色逐漸變淺
         selection_color = self.colors['selection_fill']
         border_color = self.colors['selection_border']
 
@@ -414,45 +487,21 @@ class AudioVisualizer:
                 width=1
             )
 
-        # 2. 繪製明顯的邊界
+        # 繪製明顯的邊界 - 使用發光效果
         # 垂直邊界
         for x in [sel_start_px, sel_end_px]:
-            for y_offset in range(-1, 2):
-                line_alpha = 255 if y_offset == 0 else 150
-                line_color = border_color[:3] + (line_alpha,)
-                draw.line(
-                    [(x + y_offset, 0), (x + y_offset, self.height)],
-                    fill=line_color,
-                    width=1
-                )
-
-        # 3. 在選擇區域添加頂部和底部邊框
-        # 將邊框略微向內縮，避免與垂直邊界重合
-        inner_start = sel_start_px + 1
-        inner_end = sel_end_px - 1
-        if inner_end > inner_start:
-            # 頂部邊框
-            for y in range(2):
-                alpha = 255 if y == 0 else 180
+            for offset in range(-2, 3):
+                # 越靠近中心線，顏色越亮
+                alpha = 255 if offset == 0 else (200 if abs(offset) == 1 else 120)
                 line_color = border_color[:3] + (alpha,)
+
                 draw.line(
-                    [(inner_start, y), (inner_end, y)],
+                    [(x + offset, 0), (x + offset, self.height)],
                     fill=line_color,
                     width=1
                 )
 
-            # 底部邊框
-            for y in range(2):
-                offset = self.height - 2 + y
-                alpha = 255 if y == 1 else 180
-                line_color = border_color[:3] + (alpha,)
-                draw.line(
-                    [(inner_start, offset), (inner_end, offset)],
-                    fill=line_color,
-                    width=1
-                )
-
-        # 4. 添加時間標記 - 在選擇區域頂部顯示時間
+        # 添加時間標記 - 在選擇區域頂部和底部顯示時間
         if sel_end_px - sel_start_px > 50:  # 只在空間足夠時顯示
             # 格式化時間
             start_time_str = f"{int(sel_start/1000)}.{int(sel_start%1000/10):02d}"
@@ -466,7 +515,7 @@ class AudioVisualizer:
 
             # 繪製開始時間（左上角）
             # 先繪製陰影
-            draw.text((sel_start_px + 3, 3), start_time_str, fill=shadow_color, stroke_width=1)
+            draw.text((sel_start_px + 3, 3), start_time_str, fill=shadow_color)
             # 再繪製文字
             draw.text((sel_start_px + 2, 2), start_time_str, fill=text_color)
 
@@ -477,15 +526,15 @@ class AudioVisualizer:
             text_x = max(sel_start_px + text_width, text_x)  # 確保不與開始時間重疊
 
             # 先繪製陰影
-            draw.text((text_x + 1, 3), end_time_str, fill=shadow_color, stroke_width=1)
+            draw.text((text_x + 1, 3), end_time_str, fill=shadow_color)
             # 再繪製文字
             draw.text((text_x, 2), end_time_str, fill=text_color)
 
-            # 在中間位置顯示持續時間
+            # 在底部中間位置顯示持續時間
             if sel_end_px - sel_start_px > 100:  # 確保有足夠空間
                 mid_x = (sel_start_px + sel_end_px) // 2 - len(duration_str) * 3
                 # 先繪製陰影
-                draw.text((mid_x + 1, self.height - 13), duration_str, fill=shadow_color, stroke_width=1)
+                draw.text((mid_x + 1, self.height - 13), duration_str, fill=shadow_color)
                 # 再繪製文字
                 draw.text((mid_x, self.height - 14), duration_str, fill=text_color)
 
