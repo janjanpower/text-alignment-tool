@@ -1907,7 +1907,7 @@ class AlignmentGUI(BaseWindow):
                 self.gui = gui
 
             def parse_time(self, time_str):
-                """解析時間字串"""
+                """解析時間字串 - 使用 time_utils"""
                 try:
                     from utils.time_utils import parse_time
                     return parse_time(time_str)
@@ -1916,7 +1916,7 @@ class AlignmentGUI(BaseWindow):
                     return None
 
             def time_to_milliseconds(self, time_obj):
-                """將時間對象轉換為毫秒"""
+                """將時間對象轉換為毫秒 - 使用 time_utils"""
                 try:
                     from utils.time_utils import time_to_milliseconds
                     return time_to_milliseconds(time_obj)
@@ -2408,6 +2408,7 @@ class AlignmentGUI(BaseWindow):
         # 強制立即刷新界面
         self.master.update_idletasks()
 
+
     def initialize_audio_player(self) -> None:
         """初始化音頻服務和播放器"""
         # 檢查是否已初始化，防止重複初始化
@@ -2417,13 +2418,14 @@ class AlignmentGUI(BaseWindow):
 
         from audio.audio_service import AudioService
 
+        # 使用優化版本的 AudioService
         self.audio_service = AudioService(self)  # 傳入 self 作為 gui_reference
         self.audio_player = self.audio_service.initialize_player(self.main_frame)
 
         # 設置音頻載入回調
         def on_audio_loaded_callback(file_path):
-            # 檢查是否重複處理相同文件
-            if self.audio_file_path == file_path and self.audio_imported:
+            # 避免重複處理相同文件
+            if hasattr(self, 'audio_file_path') and self.audio_file_path == file_path and self.audio_imported:
                 self.logger.debug(f"跳過重複處理相同音頻文件: {file_path}")
                 return
 
@@ -2433,8 +2435,8 @@ class AlignmentGUI(BaseWindow):
             # 更新顯示模式前先保存當前狀態
             old_mode = self.display_mode
 
-            # 更新顯示模式
-            self.update_display_mode()
+            # 更新顯示模式 - 使用不重建樹狀視圖的方法
+            self.update_display_mode_without_rebuild()
 
             # 如果顯示模式變化，記錄日誌
             if old_mode != self.display_mode:
@@ -2450,7 +2452,8 @@ class AlignmentGUI(BaseWindow):
 
         self.on_audio_loaded_callback = on_audio_loaded_callback
 
-        # 如果尚未初始化滑桿控制器，現在初始化
+        # 初始化滑桿控制器
+        # 注意：現在滑桿控制器應該使用優化後的 WaveformVisualization
         if not hasattr(self, 'slider_controller'):
             callback_manager = self._create_slider_callbacks()
             self.slider_controller = TimeSliderController(self.master, self.tree, callback_manager)
