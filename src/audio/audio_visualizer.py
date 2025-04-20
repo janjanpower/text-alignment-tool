@@ -135,11 +135,15 @@ class AudioVisualizer:
             self._create_empty_waveform(f"錯誤: {str(e)}")
 
     def _draw_waveform_core(self):
-        """核心波形繪製邏輯"""
+        """核心波形繪製邏輯 - 更平滑細緻版本"""
         try:
             # 獲取當前視圖和選擇範圍
             view_start, view_end = self.current_view_range
             sel_start, sel_end = self.current_selection_range
+
+            # 計算視圖持續時間
+            view_duration = view_end - view_start
+            selection_duration = sel_end - sel_start
 
             # 計算顯示的樣本起始和結束索引
             sample_rate = len(self.samples_cache) / self.audio_duration if self.audio_duration > 0 else 44100
@@ -152,30 +156,60 @@ class AudioVisualizer:
 
             # 再次檢查樣本範圍有效性
             if start_sample >= end_sample - 10:  # 確保至少有10個樣本
-                # 強制設置一個有效範圍
                 start_sample = 0
                 end_sample = min(1000, len(self.samples_cache))
 
             # 獲取顯示區域的樣本
             display_samples = self.samples_cache[start_sample:end_sample]
 
-            # 降採樣
-            samples_per_pixel = max(1, len(display_samples) // self.width)
+            # 初始化降採樣列表
             downsampled = []
 
-            for i in range(self.width):
-                start_idx = i * samples_per_pixel
-                end_idx = min(start_idx + samples_per_pixel, len(display_samples))
+            # 計算縮放比例 - 選擇區域相對於視圖的比例
+            zoom_ratio = view_duration / max(1, selection_duration)
 
-                if start_idx < len(display_samples) and end_idx > start_idx:
-                    segment = display_samples[start_idx:end_idx]
-                    downsampled.append(np.max(np.abs(segment)))
-                else:
-                    downsampled.append(0)
+            # 根據縮放比例和視圖寬度選擇降採樣策略
+            if selection_duration < 100:  # 非常短的選擇區域
+                # 使用更精細的採樣和RMS方法，而不是簡單的最大值
+                # 對於超短的音頻段落，需要更多細節
+                samples_per_pixel = max(1, int(len(display_samples) / (self.width * 2)))
+            elif zoom_ratio > 30:  # 視圖範圍遠大於選擇範圍
+                # 提供更高的細節
+                samples_per_pixel = max(1, int(len(display_samples) / (self.width * 1.5)))
+            else:
+                # 標準採樣
+                samples_per_pixel = max(1, len(display_samples) // self.width)
 
-            downsampled = np.array(downsampled)
+            # 使用更平滑的降採樣方法
+            if len(display_samples) > 0:
+                # 計算每個像素的峰值和RMS值
+                for i in range(self.width):
+                    start_idx = i * samples_per_pixel
+                    end_idx = min(start_idx + samples_per_pixel, len(display_samples))
 
-            # 創建圖像
+                    if start_idx < len(display_samples) and end_idx > start_idx:
+                        segment = display_samples[start_idx:end_idx]
+
+                        # 計算段落的峰值和RMS值
+                        if len(segment) > 0:
+                            peak = np.max(np.abs(segment))
+                            rms = np.sqrt(np.mean(np.square(segment)))
+
+                            # 使用加權混合值 - 這會使波形更平滑而保留細節
+                            # 調整權重可以改變波形的"銳利度"
+                            value = peak * 0.7 + rms * 0.3
+                            downsampled.append(value)
+                        else:
+                            downsampled.append(0)
+                    else:
+                        downsampled.append(0)
+
+            # 標準化波形
+            if len(downsampled) > 0:
+                max_value = max(max(downsampled), 0.01)  # 避免除以零
+                downsampled = [d / max_value for d in downsampled]
+
+            # 創建圖像 - 使用深色背景
             img = Image.new('RGBA', (self.width, self.height), (30, 30, 30, 255))
             draw = ImageDraw.Draw(img)
 
@@ -183,22 +217,58 @@ class AudioVisualizer:
             center_y = self.height // 2
             draw.line([(0, center_y), (self.width, center_y)], fill=(70, 70, 70, 255), width=1)
 
-            # 繪製波形
-            for x in range(self.width):
-                if x < len(downsampled):
+            # 使用反鋸齒技術繪製平滑波形
+            if len(downsampled) > 0:
+                # 計算波形點坐標
+                points_top = []
+                points_bottom = []
+
+                for x in range(self.width):
+                    if x < len(downsampled):
+                        amplitude = downsampled[x]
+                        wave_height = int(amplitude * (self.height // 2 - 4))
+
+                        # 確保振幅至少有1像素
+                        wave_height = max(1, wave_height)
+
+                        y_top = center_y - wave_height
+                        y_bottom = center_y + wave_height
+
+                        points_top.append((x, y_top))
+                        points_bottom.append((x, y_bottom))
+
+                # 選擇區域中使用更明亮的顏色
+                sel_start_pixel = int((sel_start - view_start) / view_duration * self.width) if view_duration > 0 else 0
+                sel_end_pixel = int((sel_end - view_start) / view_duration * self.width) if view_duration > 0 else self.width
+
+                # 限制在有效範圍內
+                sel_start_pixel = max(0, min(sel_start_pixel, self.width))
+                sel_end_pixel = max(0, min(sel_end_pixel, self.width))
+
+                # 繪製平滑波形，使用線段代替單點
+                for x in range(len(downsampled)):
                     amplitude = downsampled[x]
                     wave_height = int(amplitude * (self.height // 2 - 4))
                     y1 = center_y - wave_height
                     y2 = center_y + wave_height
-                    draw.line([(x, y1), (x, y2)], fill=(100, 210, 255, 255), width=2)
 
-            # 計算選擇區域在視圖中的位置
-            view_duration = view_end - view_start
+                    # 根據位置選擇不同的顏色
+                    if sel_start_pixel <= x <= sel_end_pixel:
+                        # 選擇區域內用亮藍色
+                        line_color = (120, 230, 255, 255)
+                        line_width = 2  # 稍粗一些的線條
+                    else:
+                        # 選擇區域外用標準藍色
+                        line_color = (100, 200, 255, 255)
+                        line_width = 1  # 標準線條
+
+                    draw.line([(x, y1), (x, y2)], fill=line_color, width=line_width)
+
+            # 繪製選擇區域高亮
             if view_duration > 0:
                 # 確保選擇區與視圖範圍有交集
                 if sel_end >= view_start and sel_start <= view_end:
-                    # 計算相對位置 - 確保選擇區域正確映射到視圖範圍
-                    # 如果選擇區域超出視圖範圍，則將其裁剪到視圖範圍內
+                    # 計算相對位置
                     display_sel_start = max(sel_start, view_start)
                     display_sel_end = min(sel_end, view_end)
 
@@ -210,29 +280,31 @@ class AudioVisualizer:
                     start_x = int(relative_start * self.width)
                     end_x = int(relative_end * self.width)
 
-                    # 確保有最小寬度且不超出畫布範圍
-                    if end_x - start_x < 2:
-                        end_x = min(start_x + 2, self.width)
+                    # 確保至少有一個像素的寬度
+                    if end_x - start_x < 1:
+                        end_x = start_x + 1
 
                     start_x = max(0, start_x)
                     end_x = min(self.width, end_x)
 
                     if start_x < end_x:  # 確保有效的選擇區域
-                        # 繪製高亮區域
+                        # 繪製高亮區域 - 使用漸變效果增強視覺效果
                         overlay = Image.new('RGBA', img.size, (0, 0, 0, 0))
                         overlay_draw = ImageDraw.Draw(overlay)
 
-                        # 半透明藍色高亮
-                        overlay_draw.rectangle(
-                            [(start_x, 0), (end_x, self.height)],
-                            fill=(79, 195, 247, 128)  # 更明顯的高亮
-                        )
+                        # 使用漸變填充
+                        for x in range(start_x, end_x):
+                            # 計算距離邊緣的相對位置
+                            rel_pos = min(x - start_x, end_x - x) / max(1, (end_x - start_x) / 2)
+                            # 計算透明度，邊緣較透明
+                            alpha = int(128 * min(1.0, rel_pos + 0.3))
+                            overlay_draw.line([(x, 0), (x, self.height)], fill=(79, 195, 247, alpha), width=1)
 
                         # 合併圖層
                         img = Image.alpha_composite(img, overlay)
                         draw = ImageDraw.Draw(img)
 
-                        # 繪製邊界線 - 更明顯的邊界
+                        # 繪製邊界線
                         draw.line([(start_x, 0), (start_x, self.height)], fill=(79, 195, 247, 255), width=2)
                         draw.line([(end_x, 0), (end_x, self.height)], fill=(79, 195, 247, 255), width=2)
 
@@ -242,8 +314,8 @@ class AudioVisualizer:
             self.canvas.delete("all")
             self.canvas.create_image(0, 0, anchor="nw", image=self.waveform_photo)
 
-            # 強制立即更新顯示
-            self.canvas.update()
+            # 減少更新頻率，避免閃爍
+            self.canvas.update_idletasks()
 
         except Exception as e:
             self.logger.error(f"繪製波形核心邏輯出錯: {e}")

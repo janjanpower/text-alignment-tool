@@ -113,15 +113,28 @@ def milliseconds_to_time(time_obj) -> pysrt.SubRipTime:
     :return: SubRipTime 對象
     """
     try:
+        # 確保輸入是有效的數值
+        if not isinstance(time_obj, (int, float)):
+            logging.warning(f"毫秒轉換接收到非數值類型: {type(time_obj)}")
+            time_obj = 0
+
+        time_obj = float(time_obj)  # 確保能夠轉換為浮點數
+
         total_seconds = time_obj / 1000
         hours = int(total_seconds // 3600)
         minutes = int((total_seconds % 3600) // 60)
         seconds = int(total_seconds % 60)
         milliseconds = int((time_obj % 1000))
+
+        # 增加防護措施
+        hours = max(0, min(99, hours))  # 限制小時在0-99之間
+        minutes = max(0, min(59, minutes))  # 限制分鐘在0-59之間
+        seconds = max(0, min(59, seconds))  # 限制秒在0-59之間
+        milliseconds = max(0, min(999, milliseconds))  # 限制毫秒在0-999之間
+
         return pysrt.SubRipTime(hours, minutes, seconds, milliseconds)
-    except Exception:
-        # 直接打印錯誤，不使用 logging
-        print(f"轉換毫秒 {time_obj} 為時間對象時出錯")
+    except Exception as e:
+        logging.error(f"轉換毫秒 {time_obj} 為時間對象時出錯: {e}")
         return pysrt.SubRipTime(0, 0, 0, 0)
 
 

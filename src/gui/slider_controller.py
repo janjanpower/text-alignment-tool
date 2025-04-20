@@ -388,6 +388,13 @@ class TimeSliderController:
             if not self.slider_active or not self.slider_target:
                 return
 
+            # 檢查 Tkinter 組件是否仍然有效
+            try:
+                if not self.slider_frame or not self.slider_frame.winfo_exists():
+                    return
+            except tk.TclError:
+                return  # 應用已被銷毀，直接返回
+
             # 獲取新時間值
             new_value = float(value)
 
@@ -462,12 +469,23 @@ class TimeSliderController:
                 "item_end_time": end_time
             })
 
-            # 立即更新時間標籤
-            self._update_time_label((start_time, end_time))
+            # 設置限流更新 - 添加此變數到類初始化中
+            current_time = time.time()
+            if not hasattr(self, '_last_update_time'):
+                self._last_update_time = 0
 
-            # 立即更新音頻可視化 - 這裡修改為使用平滑過渡方法
-            if self.audio_visualizer and self.audio_segment:
-                self._smooth_update_visualization((start_time, end_time))
+            # 限制更新頻率，避免閃爍（每50毫秒最多一次更新）
+            if current_time - self._last_update_time > 0.05:
+
+                # 更新時間標籤
+                self._update_time_label((start_time, end_time))
+
+                # 更新音頻視圖
+                if self.audio_visualizer and self.audio_segment:
+                    self._update_audio_visualization((start_time, end_time))
+
+                # 更新時間戳
+                self._last_update_time = current_time
 
             # 延遲更新樹視圖值
             self.tree.item(item, values=tuple(values))
@@ -502,120 +520,7 @@ class TimeSliderController:
             self.logger.error(f"滑桿值變化處理時出錯: {e}")
             self.logger.exception(e)
 
-    def _smooth_update_visualization(self, time_range):
-        """平滑更新音頻可視化，使用彈簧動畫效果"""
-        start_time, end_time = time_range
-        duration = end_time - start_time
 
-        # 動態計算縮放因子
-        zoom_factor = self._calculate_zoom_factor(duration)
-
-        # 計算目標視圖寬度
-        target_view_width = max(2000, duration * zoom_factor)
-
-        # 初始化目標視圖範圍
-        center_time = (start_time + end_time) / 2
-        target_view_start = max(0, center_time - target_view_width / 2)
-        target_view_end = min(len(self.audio_segment), target_view_start + target_view_width)
-
-        # 確保選擇區域在視圖內
-        padding = duration * 0.1  # 添加一些邊距
-        if start_time < target_view_start:
-            offset = target_view_start - start_time + padding
-            target_view_start -= offset
-            target_view_end -= offset
-        if end_time > target_view_end:
-            offset = end_time - target_view_end + padding
-            target_view_start += offset
-            target_view_end += offset
-
-        # 確保視圖範圍有效
-        target_view_start = max(0, target_view_start)
-        target_view_end = min(len(self.audio_segment), target_view_end)
-
-        # 獲取當前視圖
-        if not hasattr(self, '_current_view'):
-            # 第一次，直接設置為目標
-            self._current_view = {
-                'start': target_view_start,
-                'end': target_view_end,
-                'velocity_start': 0,  # 初始速度
-                'velocity_end': 0,
-                'last_update': time.time()
-            }
-        else:
-            # 計算時間增量
-            now = time.time()
-            dt = now - self._current_view.get('last_update', now - 0.016)
-            dt = min(0.05, max(0.005, dt))  # 限制時間增量在合理範圍
-
-            # 彈簧系統參數
-            spring_constant = 12.0  # 彈簧常數：數值越大，越"硬"
-            damping = 6.0          # 阻尼：數值越大，越快穩定
-
-            # 當前位置
-            current_start = self._current_view['start']
-            current_end = self._current_view['end']
-
-            # 當前速度
-            velocity_start = self._current_view['velocity_start']
-            velocity_end = self._current_view['velocity_end']
-
-            # 計算新的位置和速度 - 彈簧物理模型
-            # 1. 計算彈簧力
-            force_start = spring_constant * (target_view_start - current_start)
-            force_end = spring_constant * (target_view_end - current_end)
-
-            # 2. 計算阻尼力
-            damping_force_start = -damping * velocity_start
-            damping_force_end = -damping * velocity_end
-
-            # 3. 計算加速度 (F = ma，這裡我們假設質量為1)
-            acceleration_start = force_start + damping_force_start
-            acceleration_end = force_end + damping_force_end
-
-            # 4. 更新速度
-            new_velocity_start = velocity_start + acceleration_start * dt
-            new_velocity_end = velocity_end + acceleration_end * dt
-
-            # 5. 更新位置
-            new_start = current_start + new_velocity_start * dt
-            new_end = current_end + new_velocity_end * dt
-
-            # 6. 確保位置在合理範圍內
-            new_start = max(0, new_start)
-            new_end = min(len(self.audio_segment), new_end)
-
-            # 更新當前視圖狀態
-            self._current_view = {
-                'start': new_start,
-                'end': new_end,
-                'velocity_start': new_velocity_start,
-                'velocity_end': new_velocity_end,
-                'last_update': now
-            }
-
-        # 使用當前視圖更新音頻可視化
-        self.audio_visualizer.update_waveform_and_selection(
-            (self._current_view['start'], self._current_view['end']),
-            (start_time, end_time)
-        )
-
-        # 如果視圖還在變化中，設置一個定時器繼續更新
-        threshold = 1.0  # 速度閾值，低於此值認為已穩定
-        if (abs(self._current_view['velocity_start']) > threshold or
-            abs(self._current_view['velocity_end']) > threshold):
-            # 延遲16毫秒（約60fps）再次更新
-            self.master.after(16, lambda: self._continue_animation(time_range))
-
-    def _continue_animation(self, time_range):
-        """繼續視圖動畫"""
-        # 檢查滑桿是否仍然活動
-        if not self.slider_active or not self.audio_visualizer:
-            return
-
-        # 繼續更新
-        self._smooth_update_visualization(time_range)
 
     def _update_adjacent_items(self, new_value):
         """更新相鄰項目 - 減少頻率以提高性能"""
@@ -711,29 +616,13 @@ class TimeSliderController:
             # 計算時間範圍持續時間
             duration = end_time - start_time
 
-            # 根據當前調整的時間類型動態調整視圖比例
-            if self.slider_target["column_name"] == "Start":
-                # 調整開始時間時，通常需要更精細的視圖
-                zoom_factor = self._calculate_zoom_factor(duration) * 1.2
-            else:
-                # 調整結束時間
-                zoom_factor = self._calculate_zoom_factor(duration)
+            # 根據持續時間動態調整縮放比例
+            view_width = self._calculate_dynamic_view_width(duration)
 
-            # 計算視圖範圍寬度，確保足夠上下文
-            view_width = max(2000, duration * zoom_factor)  # 至少顯示2秒
+            # 計算視圖中心點
+            center_time = (start_time + end_time) / 2
 
-            # 計算視圖中心，根據調整方向偏移中心點
-            if self.slider_target["column_name"] == "Start":
-                # 調整開始時間時，讓視圖稍微偏向開始時間
-                center_weight = 0.4  # 重心稍微偏左
-            else:
-                # 調整結束時間時，讓視圖稍微偏向結束時間
-                center_weight = 0.6  # 重心稍微偏右
-
-            # 加權計算中心點
-            center_time = start_time * (1 - center_weight) + end_time * center_weight
-
-            # 計算視圖範圍
+            # 計算視圖範圍，確保足夠上下文
             view_start = max(0, center_time - view_width / 2)
             view_end = min(len(self.audio_segment), view_start + view_width)
 
@@ -745,94 +634,46 @@ class TimeSliderController:
                 view_end = min(len(self.audio_segment), end_time + view_width * 0.1)
                 view_start = max(0, view_end - view_width)
 
-            # 更新波形視圖
+            # 更新波形視圖 - 一次性更新，不使用動畫
             self.audio_visualizer.update_waveform_and_selection(
                 (view_start, view_end),
                 (start_time, end_time)
             )
 
-            # 更新滑桿目標
-            if self.slider_target:
-                self.slider_target.update({
-                    "view_start": view_start,
-                    "view_end": view_end
-                })
-
         except Exception as e:
             self.logger.error(f"更新音頻可視化時出錯: {e}")
-            import traceback
-            self.logger.error(traceback.format_exc())
 
-    def _calculate_zoom_factor(self, duration):
-        """根據時間範圍持續時間計算縮放因子，精確到毫秒級別"""
-        # 時間越短，縮放因子越大
-        if duration < 50:       # 小於50毫秒
-            return 20.0
-        elif duration < 100:    # 小於100毫秒
-            return 15.0
-        elif duration < 200:    # 小於200毫秒
-            return 12.0
-        elif duration < 500:    # 小於500毫秒
-            return 8.0
-        elif duration < 1000:   # 小於1秒
-            return 6.0
-        elif duration < 2000:   # 小於2秒
-            return 4.0
-        elif duration < 5000:   # 小於5秒
-            return 3.0
-        else:                   # 大於5秒
-            return 2.0
-    def _update_slider_audio_view(self, start_ms, end_ms):
-        """更新音頻視圖顯示，確保正確顯示所有文本的時間範圍"""
-        try:
-            # 確保音頻段落和可視化器存在
-            if not self.audio_segment or not self.audio_visualizer:
-                return
+    def _calculate_dynamic_view_width(self, duration):
+        """
+        根據時間範圍持續時間計算適當的視圖寬度，提供更平滑細緻的縮放
 
-            # 確保時間範圍有效
-            if start_ms > end_ms:
-                self.logger.warning(f"時間範圍顛倒: {start_ms} - {end_ms}，自動交換")
-                start_ms, end_ms = end_ms, start_ms
+        參數:
+            duration: 選擇區域持續時間（毫秒）
 
-            # 確保時間在有效範圍內
-            audio_length = len(self.audio_segment) if hasattr(self, 'audio_segment') and self.audio_segment else 100000
-            start_ms = max(0, min(start_ms, audio_length))
-            end_ms = max(start_ms + 100, min(end_ms, audio_length))    # 確保至少100ms的時間範圍
-
-            # 計算時間範圍持續時間
-            duration = end_ms - start_ms
-
-            # 使用相同的縮放邏輯
-            zoom_factor = self._calculate_zoom_factor(duration)
-
-            # 計算視圖範圍寬度
-            view_width = max(2000, duration * zoom_factor)  # 至少顯示2秒
-
-            # 計算視圖中心點
-            center_time = (start_ms + end_ms) / 2
-
-            # 計算視圖範圍
-            display_start = max(0, center_time - view_width / 2)
-            display_end = min(audio_length, center_time + view_width / 2)
-
-            # 確保視圖範圍包含完整的選擇區域
-            if start_ms < display_start:
-                display_start = max(0, start_ms - view_width * 0.1)
-                display_end = min(audio_length, display_start + view_width)
-            if end_ms > display_end:
-                display_end = min(audio_length, end_ms + view_width * 0.1)
-                display_start = max(0, display_end - view_width)
-
-            # 更新波形和選擇區域
-            self.audio_visualizer.update_waveform_and_selection(
-                (display_start, display_end),
-                (start_ms, end_ms)
-            )
-
-        except Exception as e:
-            self.logger.error(f"更新音頻視圖時出錯: {e}")
-            import traceback
-            self.logger.error(traceback.format_exc())
+        返回:
+            適當的視圖寬度（毫秒）
+        """
+        # 非常短的時間範圍 - 提供更精細的縮放等級
+        if duration < 10:         # 極短時間（小於10毫秒）
+            return max(1000, duration * 100)  # 極度放大
+        elif duration < 30:       # 非常短時間（10-30毫秒）
+            return max(1500, duration * 80)   # 非常高縮放
+        elif duration < 50:       # 短時間（30-50毫秒）
+            return max(2000, duration * 60)   # 很高縮放
+        elif duration < 100:      # 較短時間（50-100毫秒）
+            return max(3000, duration * 40)   # 高縮放
+        elif duration < 200:      # 短時間（100-200毫秒）
+            return max(4000, duration * 30)   # 中高縮放
+        elif duration < 500:      # 中短時間（200-500毫秒）
+            return max(6000, duration * 20)   # 中等縮放
+        elif duration < 1000:     # 中等時間（0.5-1秒）
+            return max(10000, duration * 15)  # 適中縮放
+        elif duration < 2000:     # 中長時間（1-2秒）
+            return duration * 10  # 標準縮放
+        elif duration < 5000:     # 長時間（2-5秒）
+            return duration * 6   # 低縮放
+        else:                     # 很長時間（>5秒）
+            return duration * 4   # 最低縮放
 
     def _calculate_slider_range(self, slider_params):
         """計算滑桿範圍"""
@@ -938,16 +779,26 @@ class TimeSliderController:
         try:
             self._hide_time_slider_in_progress = True
 
+            # 檢查主視窗是否仍然有效
+            try:
+                if hasattr(self, 'master') and self.master and not self.master.winfo_exists():
+                    return  # 主視窗已經不存在，直接返回
+            except tk.TclError:
+                return  # 應用已被銷毀，直接返回
+
             # 應用時間變更
             if self.slider_active and self.time_slider:
-                self.apply_time_change()
+                try:
+                    self.apply_time_change()
+                except Exception as e:
+                    self.logger.error(f"應用時間變更時出錯: {e}")
 
             # 清理音頻可視化
             if self.audio_visualizer:
                 try:
-                    if self.audio_visualizer.canvas and self.audio_visualizer.canvas.winfo_exists():
+                    if hasattr(self.audio_visualizer, 'canvas') and self.audio_visualizer.canvas and hasattr(self.audio_visualizer.canvas, 'winfo_exists') and self.audio_visualizer.canvas.winfo_exists():
                         self.audio_visualizer.clear_waveform()
-                except tk.TclError:
+                except (tk.TclError, AttributeError):
                     pass
                 self.audio_visualizer = None
                 self.state.visualizer = None  # 清除狀態中的視覺化器
