@@ -195,8 +195,12 @@ class AudioSegmentManager:
         """
         try:
             # 確保音頻數據有效
-            if audio is None or len(audio) == 0:
-                self.logger.error("傳入的音頻數據為空或無效")
+            if audio is None:
+                self.logger.error("傳入的音頻數據為 None")
+                return False
+
+            if len(audio) == 0:
+                self.logger.error("傳入的音頻數據長度為零")
                 return False
 
             # 保存完整音頻供後續使用
@@ -205,44 +209,59 @@ class AudioSegmentManager:
             # 清空現有段落
             self.audio_segments = {}
             total_duration = len(audio)
+            self.logger.info(f"開始分割音頻，總長度: {total_duration}ms")
 
             # 為每個 SRT 項目創建對應的音頻段落
+            segments_created = 0
+            error_count = 0
+
             for sub in srt_data:
                 try:
+                    # 獲取時間戳
                     start_ms = self.time_to_milliseconds(sub.start)
                     end_ms = self.time_to_milliseconds(sub.end)
 
-                    # 確保時間範圍有效
+                    # 驗證時間戳
                     if start_ms >= end_ms:
-                        # 如果開始=結束，則結束時間增加200毫秒
-                        end_ms = start_ms + 200
-                        self.logger.warning(f"修復字幕 {sub.index} 的時間範圍: {start_ms}-{end_ms}")
+                        self.logger.warning(f"字幕 {sub.index} 的時間範圍無效: {start_ms} -> {end_ms}，自動修正")
+                        end_ms = start_ms + 200  # 確保至少200毫秒的持續時間
 
                     # 確保不超出音頻範圍
                     start_ms = max(0, start_ms)
                     end_ms = min(end_ms, total_duration)
 
+                    # 檢查修正後的範圍是否有效
+                    if end_ms <= start_ms:
+                        self.logger.warning(f"字幕 {sub.index} 的時間範圍無法修正，跳過")
+                        continue
+
                     # 切割音頻
                     segment = audio[start_ms:end_ms]
 
                     # 確保段落有效
-                    if len(segment) > 0:
-                        # 標準化音頻參數
-                        segment = segment.set_frame_rate(self.sample_rate)
-                        segment = segment.set_channels(2)
-                        segment = segment.set_sample_width(2)
+                    if len(segment) == 0:
+                        self.logger.warning(f"字幕 {sub.index} 的音頻段落長度為零，跳過")
+                        continue
 
-                        # 使用數字索引保存
-                        index = int(sub.index)
-                        self.audio_segments[index] = segment
-                        self.logger.debug(f"音頻段落 {index}: {start_ms}ms - {end_ms}ms (時長: {end_ms-start_ms}ms)")
-                    else:
-                        self.logger.warning(f"段落 {sub.index} 長度為0")
+                    # 標準化音頻參數
+                    segment = segment.set_frame_rate(self.sample_rate)
+                    segment = segment.set_channels(2)
+                    segment = segment.set_sample_width(2)
+
+                    # 使用數字索引保存
+                    index = int(sub.index)
+                    self.audio_segments[index] = segment
+                    segments_created += 1
+
+                    # 記錄詳細日誌（僅在調試模式）
+                    self.logger.debug(f"音頻段落 {index}: {start_ms}ms - {end_ms}ms (時長: {end_ms-start_ms}ms)")
 
                 except Exception as e:
-                    self.logger.error(f"切割索引 {sub.index} 的音頻段落時出錯: {e}")
+                    error_count += 1
+                    self.logger.error(f"處理字幕 {sub.index} 時出錯: {e}")
 
-            return True
+            self.logger.info(f"音頻分割完成: 成功 {segments_created} 個段落，失敗 {error_count} 個")
+            return segments_created > 0
 
         except Exception as e:
             self.logger.error(f"分割音頻時出錯: {e}")

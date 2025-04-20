@@ -106,21 +106,22 @@ def time_to_milliseconds(time_obj: Union[pysrt.SubRipTime, Any]) -> int:
         return 0
 
 
-def milliseconds_to_time(milliseconds: float) -> pysrt.SubRipTime:
+def milliseconds_to_time(time_obj) -> pysrt.SubRipTime:
     """
     將毫秒轉換為 SubRipTime 對象
-    :param milliseconds: 毫秒數
+    :param time_obj: 毫秒數
     :return: SubRipTime 對象
     """
     try:
-        total_seconds = milliseconds / 1000
+        total_seconds = time_obj / 1000
         hours = int(total_seconds // 3600)
         minutes = int((total_seconds % 3600) // 60)
         seconds = int(total_seconds % 60)
-        ms = int((milliseconds % 1000))
-        return pysrt.SubRipTime(hours, minutes, seconds, ms)
-    except Exception as e:
-        logging.error(f"毫秒轉換為時間對象時出錯: {e}")
+        milliseconds = int((time_obj % 1000))
+        return pysrt.SubRipTime(hours, minutes, seconds, milliseconds)
+    except Exception:
+        # 直接打印錯誤，不使用 logging
+        print(f"轉換毫秒 {time_obj} 為時間對象時出錯")
         return pysrt.SubRipTime(0, 0, 0, 0)
 
 
