@@ -234,7 +234,7 @@ class TimeSliderController:
         self.parent.bind("<Button-1>", self.check_slider_focus)
 
     def _create_slider_frame(self, x, y, width, height):
-        """創建滑桿框架"""
+        """創建滑桿框架 - 智能位置版本"""
         # 定義常量
         LABEL_HEIGHT = 20
         AUDIO_HEIGHT = 40
@@ -254,16 +254,45 @@ class TimeSliderController:
             relief="flat"
         )
 
-        frame_width = 300
+        # 獲取樹視圖的尺寸
+        tree_width = self.tree.winfo_width()
+        tree_height = self.tree.winfo_height()
+
+        # 設置較合理的滑桿寬度
+        frame_width = min(250, max(150, tree_width // 3))
+
+        # 計算最佳位置 - 避免被遮擋
+        # 預設為右側
+        best_x = x + width
+
+        # 如果右側空間不足，考慮放在左側
+        if best_x + frame_width > tree_width - 20:
+            if x > frame_width + 20:  # 左側空間足夠
+                best_x = max(10, x - frame_width)
+            else:  # 左右都不夠，則置中
+                best_x = max(10, (tree_width - frame_width) // 2)
+
+        # 計算最佳垂直位置
+        best_y = y + height + 5
+
+        # 檢查下方空間
+        if best_y + total_height > tree_height - 10:
+            # 如果下方空間不夠，則嘗試放在上方
+            if y > total_height + 10:
+                best_y = max(5, y - total_height)
+            else:
+                # 上下都不夠，則嘗試放在中間位置
+                best_y = max(5, (tree_height - total_height) // 2)
+
+        # 放置框架
         frame.place(
-            x=x + width,
-            y=y + height + 5,
+            x=best_x,
+            y=best_y,
             width=frame_width,
             height=total_height
         )
 
         return frame
-
     def _create_time_label(self, frame, slider_params):
         """創建時間標籤"""
         time_range_label = tk.Label(
@@ -770,7 +799,7 @@ class TimeSliderController:
             )
 
     def hide_slider(self):
-        """隱藏時間調整滑桿"""
+        """隱藏時間調整滑桿 - 改進版本"""
         # 使用統一的變數名稱進行檢查
         if hasattr(self, '_hide_time_slider_in_progress') and self._hide_time_slider_in_progress:
             return
@@ -793,6 +822,14 @@ class TimeSliderController:
                     self.apply_time_change()
                 except Exception as e:
                     self.logger.error(f"應用時間變更時出錯: {e}")
+
+            # 先保存滑桿的當前狀態
+            current_pos = None
+            if self.slider_frame and hasattr(self.slider_frame, 'winfo_exists') and self.slider_frame.winfo_exists():
+                try:
+                    current_pos = (self.slider_frame.winfo_x(), self.slider_frame.winfo_y())
+                except:
+                    pass
 
             # 清理音頻可視化
             if self.audio_visualizer:
@@ -822,6 +859,10 @@ class TimeSliderController:
             self.slider_active = False
             self.slider_target = None
             self.state.target = None  # 清除狀態中的目標
+
+            # 保存滑桿位置以便下次顯示時使用相同位置
+            if current_pos:
+                self._last_slider_pos = current_pos
 
             # 解除綁定
             try:

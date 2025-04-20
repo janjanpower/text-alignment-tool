@@ -191,7 +191,7 @@ class AudioVisualizer:
         return 0.5 - 0.5 * np.cos(np.pi * t)
 
     def _validate_range(self, range_tuple, min_width=100):
-        """驗證並修正範圍，確保寬度和邊界合法"""
+        """驗證並修正範圍，確保寬度和邊界合法 - 增強版本"""
         start, end = range_tuple
 
         # 確保不為負值
@@ -217,30 +217,54 @@ class AudioVisualizer:
                 elif end == self.audio_duration:
                     start = max(0, self.audio_duration - min_width)
 
-        # 確保不超出音頻最大長度
+        # 確保範圍不超出音頻最大長度
+        start = min(start, self.audio_duration)
         end = min(end, self.audio_duration)
+
+        # 添加邊界處理，防止結束時間小於或等於開始時間
+        if end <= start:
+            end = start + min_width
+
+        # 再次檢查是否超出範圍
+        if end > self.audio_duration:
+            end = self.audio_duration
+            start = max(0, end - min_width)
 
         return start, end
 
     def _calculate_adaptive_zoom_level(self, sel_start, sel_end):
-        """根據選擇範圍大小計算自適應縮放級別"""
+        """根據選擇範圍大小計算自適應縮放級別 - 穩定版本"""
         duration = sel_end - sel_start
 
-        # 縮放級別隨著選擇區域縮小而增加
+        # 使用分段函數計算縮放，避免抖動
         if duration < 50:          # 極短範圍 (<50ms)
-            return 5.0             # 極度放大
+            zoom_level = 5.0
         elif duration < 100:       # 非常短時間 (<100ms)
-            return 4.0             # 非常高縮放
+            zoom_level = 4.0
         elif duration < 250:       # 較短範圍 (<250ms)
-            return 3.0             # 高縮放
+            zoom_level = 3.0
         elif duration < 500:       # 短範圍 (<500ms)
-            return 2.5             # 中高縮放
+            zoom_level = 2.5
         elif duration < 1000:      # 中短範圍 (<1s)
-            return 2.0             # 中等縮放
+            zoom_level = 2.0
         elif duration < 2000:      # 中等範圍 (<2s)
-            return 1.5             # 低縮放
+            zoom_level = 1.5
         else:                      # 長範圍 (>=2s)
-            return 1.0             # 標準縮放
+            zoom_level = 1.0
+
+        # 添加平滑處理，避免小範圍變化導致的縮放抖動
+        if hasattr(self, '_last_zoom_level'):
+            # 如果縮放級別變化很小，保持不變
+            if abs(self._last_zoom_level - zoom_level) < 0.2:
+                zoom_level = self._last_zoom_level
+            # 否則進行平滑過渡
+            else:
+                zoom_level = self._last_zoom_level * 0.7 + zoom_level * 0.3
+
+        # 保存當前縮放級別
+        self._last_zoom_level = zoom_level
+
+        return zoom_level
 
     def _draw_waveform(self, view_start, view_end, sel_start, sel_end, zoom_level, is_animation_frame=False):
         """
@@ -350,7 +374,7 @@ class AudioVisualizer:
             self.logger.error(traceback.format_exc())
 
     def _draw_selection_area(self, draw, view_start, view_end, sel_start, sel_end):
-        """繪製選擇區域的高亮背景"""
+        """繪製選擇區域的高亮背景 - 完全優化版本"""
         # 計算視圖持續時間和像素比例
         view_duration = view_end - view_start
         pixel_duration = view_duration / self.width if self.width > 0 else 1
@@ -361,33 +385,113 @@ class AudioVisualizer:
         sel_start_px = max(0, min(sel_start_px, self.width))
         sel_end_px = max(0, min(sel_end_px, self.width))
 
-        # 確保至少有1像素寬度
-        if sel_end_px - sel_start_px < 1:
-            sel_end_px = sel_start_px + 1
+        # 確保至少有3像素寬度，提高可見性
+        if sel_end_px - sel_start_px < 3:
+            sel_end_px = sel_start_px + 3
 
-        # 創建半透明的覆蓋層
-        for x in range(sel_start_px, sel_end_px):
-            # 漸變透明度 - 邊緣透明度較低
-            alpha = self.colors['selection_fill'][3]
-            if sel_end_px - sel_start_px > 10:
-                # 計算到邊緣的距離
-                dist_to_edge = min(x - sel_start_px, sel_end_px - x)
-                edge_factor = min(1.0, dist_to_edge / 5.0)
-                alpha = int(alpha * edge_factor)
+        # 使用更明顯的視覺效果來標識選擇區域
 
-            # 使用透明度繪製垂直線
-            color = self.colors['selection_fill'][:3] + (alpha,)
-            draw.line([(x, 0), (x, self.height)], fill=color, width=1)
+        # 1. 首先創建一個半透明的漸變背景，從上到下顏色逐漸變淺
+        selection_color = self.colors['selection_fill']
+        border_color = self.colors['selection_border']
 
-        # 繪製邊界線
-        draw.line([(sel_start_px, 0), (sel_start_px, self.height)],
-                  fill=self.colors['selection_border'], width=2)
-        draw.line([(sel_end_px, 0), (sel_end_px, self.height)],
-                  fill=self.colors['selection_border'], width=2)
+        # 高亮區域使用漸變填充
+        for y in range(self.height):
+            # 計算漸變透明度 - 中間較亮，兩端較淺
+            alpha_factor = 0.7
+            if y < self.height // 3:
+                alpha_factor = 0.8 - (y / (self.height // 3)) * 0.3
+            elif y > self.height * 2 // 3:
+                alpha_factor = 0.5 + ((y - self.height * 2 // 3) / (self.height // 3)) * 0.3
+
+            alpha = int(selection_color[3] * alpha_factor)
+            row_color = selection_color[:3] + (alpha,)
+
+            # 繪製水平線段
+            draw.line(
+                [(sel_start_px, y), (sel_end_px, y)],
+                fill=row_color,
+                width=1
+            )
+
+        # 2. 繪製明顯的邊界
+        # 垂直邊界
+        for x in [sel_start_px, sel_end_px]:
+            for y_offset in range(-1, 2):
+                line_alpha = 255 if y_offset == 0 else 150
+                line_color = border_color[:3] + (line_alpha,)
+                draw.line(
+                    [(x + y_offset, 0), (x + y_offset, self.height)],
+                    fill=line_color,
+                    width=1
+                )
+
+        # 3. 在選擇區域添加頂部和底部邊框
+        # 將邊框略微向內縮，避免與垂直邊界重合
+        inner_start = sel_start_px + 1
+        inner_end = sel_end_px - 1
+        if inner_end > inner_start:
+            # 頂部邊框
+            for y in range(2):
+                alpha = 255 if y == 0 else 180
+                line_color = border_color[:3] + (alpha,)
+                draw.line(
+                    [(inner_start, y), (inner_end, y)],
+                    fill=line_color,
+                    width=1
+                )
+
+            # 底部邊框
+            for y in range(2):
+                offset = self.height - 2 + y
+                alpha = 255 if y == 1 else 180
+                line_color = border_color[:3] + (alpha,)
+                draw.line(
+                    [(inner_start, offset), (inner_end, offset)],
+                    fill=line_color,
+                    width=1
+                )
+
+        # 4. 添加時間標記 - 在選擇區域頂部顯示時間
+        if sel_end_px - sel_start_px > 50:  # 只在空間足夠時顯示
+            # 格式化時間
+            start_time_str = f"{int(sel_start/1000)}.{int(sel_start%1000/10):02d}"
+            end_time_str = f"{int(sel_end/1000)}.{int(sel_end%1000/10):02d}"
+            duration = sel_end - sel_start
+            duration_str = f"{duration/1000:.2f}s"
+
+            # 創建陰影效果，提高可讀性
+            shadow_color = (0, 0, 0, 150)
+            text_color = (255, 255, 255, 230)
+
+            # 繪製開始時間（左上角）
+            # 先繪製陰影
+            draw.text((sel_start_px + 3, 3), start_time_str, fill=shadow_color, stroke_width=1)
+            # 再繪製文字
+            draw.text((sel_start_px + 2, 2), start_time_str, fill=text_color)
+
+            # 繪製結束時間（右上角）
+            # 計算文字寬度，確保不超出邊界
+            text_width = len(end_time_str) * 6  # 估算寬度
+            text_x = min(sel_end_px - text_width - 2, self.width - text_width - 2)
+            text_x = max(sel_start_px + text_width, text_x)  # 確保不與開始時間重疊
+
+            # 先繪製陰影
+            draw.text((text_x + 1, 3), end_time_str, fill=shadow_color, stroke_width=1)
+            # 再繪製文字
+            draw.text((text_x, 2), end_time_str, fill=text_color)
+
+            # 在中間位置顯示持續時間
+            if sel_end_px - sel_start_px > 100:  # 確保有足夠空間
+                mid_x = (sel_start_px + sel_end_px) // 2 - len(duration_str) * 3
+                # 先繪製陰影
+                draw.text((mid_x + 1, self.height - 13), duration_str, fill=shadow_color, stroke_width=1)
+                # 再繪製文字
+                draw.text((mid_x, self.height - 14), duration_str, fill=text_color)
 
     def _draw_waveform_section(self, draw, waveform_data, start_px, end_px, center_y, max_height,
-                              zoom_level, color, line_width=1):
-        """繪製波形的特定區域段落，支持增強的視覺效果"""
+                          zoom_level, color, line_width=1):
+        """繪製波形的特定區域段落 - 增強版本"""
         if start_px >= end_px or start_px >= len(waveform_data) or start_px >= self.width:
             return
 
@@ -397,24 +501,50 @@ class AudioVisualizer:
         # 根據縮放級別調整波形高度
         height_factor = zoom_level
 
-        # 使用Path對象創建平滑的波形路徑
-        points = []
-        for x in range(start_px, end_px):
-            if x < len(waveform_data):
-                amplitude = waveform_data[x]
-                # 應用高度因子
-                wave_height = int(amplitude * max_height * height_factor)
-                wave_height = min(wave_height, max_height)  # 確保不超出邊界
+        # 是否為選擇區域內的波形
+        is_selection = color == self.colors['wave_selected']
 
-                # 上下兩個點
-                y1 = center_y - wave_height
-                y2 = center_y + wave_height
+        # 增強選擇區域波形的視覺效果
+        if is_selection:
+            line_width = max(2, line_width)  # 確保至少2像素寬
 
-                # 繪製線條
-                draw.line([(x, y1), (x, y2)], fill=color, width=line_width)
+            # 創建波形填充效果
+            for x in range(start_px, end_px):
+                if x < len(waveform_data):
+                    amplitude = waveform_data[x]
+                    # 應用高度因子
+                    wave_height = int(amplitude * max_height * height_factor)
+                    wave_height = min(wave_height, max_height)  # 確保不超出邊界
 
+                    # 上下兩個點
+                    y1 = center_y - wave_height
+                    y2 = center_y + wave_height
+
+                    # 繪製垂直線
+                    draw.line([(x, y1), (x, y2)], fill=color, width=line_width)
+
+                    # 選擇區域添加額外效果 - 在波形頂部和底部添加高亮點
+                    if wave_height > 3 and x % 3 == 0:  # 每3個像素添加一次，避免過密
+                        highlight_color = (255, 255, 255, 150)
+                        draw.point((x, y1), fill=highlight_color)
+                        draw.point((x, y2), fill=highlight_color)
+        else:
+            # 非選擇區域使用普通繪製方式
+            for x in range(start_px, end_px):
+                if x < len(waveform_data):
+                    amplitude = waveform_data[x]
+                    # 應用高度因子
+                    wave_height = int(amplitude * max_height * height_factor)
+                    wave_height = min(wave_height, max_height)  # 確保不超出邊界
+
+                    # 上下兩個點
+                    y1 = center_y - wave_height
+                    y2 = center_y + wave_height
+
+                    # 繪製垂直線
+                    draw.line([(x, y1), (x, y2)], fill=color, width=line_width)
     def _calculate_waveform_data(self, view_start, view_end, width, zoom_level, quality_factor=1.0):
-        """計算指定視圖範圍的波形數據 - 優化版本"""
+        """計算指定視圖範圍的波形數據 - 精確版本"""
         # 如果沒有樣本或寬度為0，返回空數組
         if self.samples_cache is None or width <= 0:
             return np.zeros(width)
@@ -449,14 +579,30 @@ class AudioVisualizer:
         # 初始化結果數組
         result = np.zeros(target_width)
 
+        # 對於非常短的時間段，使用更精確的採樣方式
+        is_short_segment = (view_end - view_start) < 500  # 小於500毫秒的段落
+
         # 使用高效的向量化操作計算振幅
-        # 針對不同的samples_per_pixel使用不同的策略
-        if effective_samples_per_pixel <= 1:
-            # 樣本少於像素，使用插值
+        if effective_samples_per_pixel <= 1 or is_short_segment:
+            # 樣本少於像素或短時間段，使用精確插值
             indices = np.linspace(0, len(samples)-1, target_width).astype(int)
-            result = np.abs(samples[indices])
+            if is_short_segment:
+                # 對於短時間段，保留更多細節
+                # 使用最大值而非絕對值，保留波形細節
+                pos_indices = indices[::2]  # 正半波采樣
+                neg_indices = indices[1::2]  # 負半波采樣
+
+                if len(pos_indices) > 0:
+                    result[::2] = np.maximum(0, samples[pos_indices])
+                if len(neg_indices) > 0:
+                    result[1::2] = np.minimum(0, samples[neg_indices])
+
+                # 然後計算絕對值
+                result = np.abs(result)
+            else:
+                result = np.abs(samples[indices])
         else:
-            # 樣本多於像素，使用峰值檢測
+            # 樣本多於像素，使用峰值和RMS的加權平均
             for i in range(target_width):
                 start_idx = min(len(samples)-1, int(i * samples_per_pixel))
                 end_idx = min(len(samples), int((i+1) * samples_per_pixel))
@@ -464,12 +610,13 @@ class AudioVisualizer:
                 if start_idx < end_idx:
                     segment = samples[start_idx:end_idx]
 
-                    # 計算峰值和均方根的加權平均
                     if len(segment) > 0:
+                        # 計算峰值和RMS值
                         peak = np.max(np.abs(segment))
                         rms = np.sqrt(np.mean(np.square(segment)))
 
-                        # 縮放級別影響峰值權重
+                        # 縮放級別動態調整峰值權重
+                        # 縮放級別越高，越強調波形細節
                         peak_weight = min(0.9, 0.6 + (zoom_level - 1.0) * 0.1)
                         rms_weight = 1.0 - peak_weight
 
@@ -557,26 +704,26 @@ class AudioVisualizer:
                 self._create_empty_waveform()
 
     def set_theme(self, dark_mode=True):
-        """設置顏色主題"""
+        """設置顏色主題 - 優化版本"""
         if dark_mode:
-            # 深色主題
+            # 深色主題 - 更鮮明的顏色對比
             self.colors = {
                 'background': "#233A68",      # 深藍背景
-                'center_line': "#454545",     # 中心線顏色
-                'wave_normal': (80, 180, 240, 255),   # 普通波形顏色
-                'wave_selected': (120, 230, 255, 255), # 選中區域波形顏色
-                'selection_fill': (79, 195, 247, 150), # 選中區域填充顏色
-                'selection_border': (79, 195, 247, 255) # 選中區域邊框顏色
+                'center_line': "#555555",     # 中心線顏色，略深
+                'wave_normal': (100, 180, 230, 230),   # 普通波形顏色
+                'wave_selected': (150, 230, 255, 255), # 選中區域波形顏色，更亮
+                'selection_fill': (30, 120, 220, 180), # 選中區域填充顏色，更深更鮮明
+                'selection_border': (100, 200, 255, 255) # 選中區域邊框顏色，更亮
             }
         else:
-            # 淺色主題
+            # 淺色主題 - 更鮮明的顏色對比
             self.colors = {
                 'background': "#E8F0FE",      # 淺藍背景
                 'center_line': "#AAAAAA",     # 中心線顏色
-                'wave_normal': (50, 150, 220, 255),   # 普通波形顏色
-                'wave_selected': (30, 120, 220, 255), # 選中區域波形顏色
-                'selection_fill': (79, 195, 247, 120), # 選中區域填充顏色
-                'selection_border': (79, 195, 247, 220) # 選中區域邊框顏色
+                'wave_normal': (80, 150, 200, 230),   # 普通波形顏色
+                'wave_selected': (30, 100, 200, 255), # 選中區域波形顏色，更深更鮮明
+                'selection_fill': (30, 120, 220, 150), # 選中區域填充顏色
+                'selection_border': (0, 100, 200, 220) # 選中區域邊框顏色
             }
 
         # 更新畫布背景色
