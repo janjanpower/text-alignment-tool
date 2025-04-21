@@ -36,7 +36,7 @@
         "check_interval": 24,
         "last_check_time": 0,
         "repo_owner": "janjanpower",
-        "repo_name": "update",
+        "repo_name": "client_update",
         "branch": "main",
         "current_version": "1.0.0"
     }

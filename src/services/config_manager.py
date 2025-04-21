@@ -133,6 +133,18 @@ class ConfigManager:
                         self.config[section][key] = value
                         self.logger.debug(f"添加缺失的配置項: {section}.{key}")
 
+    def get(self, section: str, default=None) -> Dict[str, Any]:
+        """
+        獲取特定配置區段的別名方法
+        :param section: 區段名稱
+        :param default: 如果區段不存在，返回的默認值
+        :return: 區段配置字典或默認值
+        """
+        try:
+            return self.get_section(section)
+        except:
+            return default
+
     def get_config(self) -> Dict[str, Any]:
         """
         獲取完整配置

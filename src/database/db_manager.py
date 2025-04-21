@@ -33,7 +33,7 @@ class DatabaseManager:
             config = ConfigManager()
 
             # 輸出配置文件路徑，幫助调试
-            self.logger.info(f"嘗試讀取配置文件: {config.config_file}")
+            self.logger.info(f"嘗試讀取配置文件: {config.config_path}")  # 修改這裡，從 config_file 改為 config_path
 
             db_config = config.get("database", {})
 
