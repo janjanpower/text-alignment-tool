@@ -439,8 +439,15 @@ class ProjectManager(BaseWindow):
             if not os.path.exists(project_path):
                 os.makedirs(project_path)
 
-            # 關閉當前視窗
-            self.master.destroy()
+            # 保存用戶選擇的專案信息
+            self.result = {"project_name": selected, "project_path": project_path}
+
+            # 清理資源
+            self.cleanup()
+
+            # 安全地關閉當前視窗
+            from utils.window_utils import close_window_safely
+            close_window_safely(self.master)
 
             # 創建新的 root 和校正工具
             root = tk.Tk()
@@ -453,13 +460,17 @@ class ProjectManager(BaseWindow):
             sys.exit(1)
 
     def close_window(self, event=None):
-        """重寫關閉視窗方法"""
+        """重寫關閉視窗方法，使用安全的視窗關閉函數"""
         # 確保用戶登出
         if self.user_id:
             self.update_logout_status(self.user_id)
 
-        # 調用父類關閉視窗方法
-        super().close_window(event)
+        # 清理資源
+        self.cleanup()
+
+        # 使用安全的視窗關閉函數
+        from utils.window_utils import close_window_safely
+        close_window_safely(self.master)
 
 
     def run(self):

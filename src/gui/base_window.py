@@ -464,39 +464,62 @@ class BaseWindow:
         except Exception as e:
             self.logger.error(f"清理 UI 時出錯: {e}")
     def close_window(self, event: Optional[tk.Event] = None) -> None:
-        """關閉視窗"""
+        """關閉視窗，確保資源正確清理"""
         try:
-            # 檢查子類是否有登出方法，如果有則調用
-            if hasattr(self, 'update_logout_status') and hasattr(self, 'user_id'):
-                self.update_logout_status(self.user_id)
+            # 設置關閉標誌，防止重複操作
+            if hasattr(self, '_closing') and self._closing:
+                return
+            self._closing = True
 
-            # 停止所有計時器
+            # 執行清理操作
+            try:
+                self.cleanup()
+            except Exception as e:
+                self.logger.error(f"執行清理時出錯: {e}")
+
+            # 確保處理完所有待處理的事件
+            try:
+                self.master.update_idletasks()
+            except tk.TclError:
+                pass  # 忽略可能的錯誤
+
+            # 使用更安全的方式關閉視窗
+            from utils.window_utils import close_window_safely
+            close_window_safely(self.master, self._do_final_cleanup)
+
+        except Exception as e:
+            self.logger.error(f"關閉視窗時出錯: {e}")
+            try:
+                # 最後嘗試直接銷毀視窗
+                self.master.destroy()
+            except:
+                pass
+            # 強制退出
+            import sys
+            sys.exit(0)
+
+    def _do_final_cleanup(self):
+        """執行最終的清理工作，在視窗即將關閉前調用"""
+        # 解除所有事件綁定
+        try:
+            for widget in self.master.winfo_children():
+                for binding in widget.bind():
+                    try:
+                        widget.unbind(binding)
+                    except Exception:
+                        pass
+        except Exception as e:
+            self.logger.error(f"解除事件綁定時出錯: {e}")
+
+        # 取消所有計時器
+        try:
             for after_id in self.master.tk.eval('after info').split():
                 try:
                     self.master.after_cancel(after_id)
                 except Exception:
                     pass
-
-            # 解除所有事件綁定
-            for widget in self.master.winfo_children():
-                try:
-                    for binding in widget.bind():
-                        widget.unbind(binding)
-                except Exception:
-                    pass
-
-            # 確保處理完所有待處理的事件
-            self.master.update_idletasks()
-
-            # 銷毀視窗
-            self.master.destroy()
-            import sys
-            sys.exit(0)
-
         except Exception as e:
-            logging.error(f"關閉視窗時出錯: {e}")
-            import sys
-            sys.exit(1)
+            self.logger.error(f"取消計時器時出錯: {e}")
 
     def set_on_closing(self, callback: Callable[[], None]) -> None:
         """

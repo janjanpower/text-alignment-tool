@@ -30,5 +30,14 @@
     "login": {
         "remember_username": true,
         "saved_username": "1"
+    },
+    "update": {
+        "auto_check": true,
+        "check_interval": 24,
+        "last_check_time": 0,
+        "repo_owner": "janjanpower",
+        "repo_name": "update",
+        "branch": "main",
+        "current_version": "1.0.0"
     }
 }
