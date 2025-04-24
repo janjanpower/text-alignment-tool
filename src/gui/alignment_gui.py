@@ -2933,16 +2933,19 @@ class AlignmentGUI(BaseWindow):
                 end_col = 2
                 text_col = 3
 
-            self.logger.debug(f"開始從樹視圖獲取 SRT 數據，顯示模式: {self.display_mode}")
-
-            # 遍歷樹視圖中的所有項目 - 修改部分：確保順序正確
+            # 獲取樹視圖中的所有項目並按樹的順序排序
             all_items = self.tree_manager.get_all_items()
-            # 按照實際樹視圖順序處理，確保索引連續
-            new_srt_index = 1  # 從1開始的連續索引
+
+            # 從1開始的連續索引
+            new_srt_index = 1
+
+            # 儲存已處理的索引，避免重複
+            processed_indices = set()
 
             for item in all_items:
                 try:
-                    values = self.tree_manager.get_item_values(item)
+                    # 確保使用列表而不是元組
+                    values = list(self.tree_manager.get_item_values(item))
 
                     # 確保 values 有足夠的元素
                     if len(values) <= index_col:
@@ -2963,26 +2966,7 @@ class AlignmentGUI(BaseWindow):
                         if len(values) > word_text_col and values[word_text_col]:
                             text = values[word_text_col]
 
-                    # 考慮校正狀態 - 修改部分：使用樹視圖中的實際顯示文本
-                    try:
-                        # 獲取當前項目的索引
-                        item_index = str(values[index_col])
-
-                        # 獲取校正圖標
-                        vx_col = -1  # 校正圖標總是在最後一列
-                        correction_icon = values[vx_col] if len(values) > abs(vx_col) else ""
-
-                        # 根據校正圖標決定使用哪個文本
-                        if correction_icon == "✅":  # 已校正
-                            # 已在GUI中顯示校正後的文本，不需要再次獲取
-                            pass
-                        elif correction_icon == "❌":  # 未校正
-                            # 已在GUI中顯示原始文本，不需要再次獲取
-                            pass
-                    except Exception as e:
-                        self.logger.warning(f"處理校正狀態時出錯: {e}")
-
-                    # 安全解析時間 - 使用詳細的錯誤處理
+                    # 安全解析時間
                     try:
                         start = parse_time(start_time) if isinstance(start_time, str) else start_time
                         end = parse_time(end_time) if isinstance(end_time, str) else end_time
@@ -2991,22 +2975,31 @@ class AlignmentGUI(BaseWindow):
                         start = pysrt.SubRipTime(0, 0, 0, 0)
                         end = pysrt.SubRipTime(0, 0, 10, 0)  # 默認10秒
 
-                    # 創建 SRT 項目 - 修改部分：使用連續的索引
+                    # 創建 SRT 項目 - 使用連續的索引
                     sub = pysrt.SubRipItem(
                         index=new_srt_index,  # 使用連續的索引
                         start=start,
                         end=end,
                         text=text if text is not None else ""
                     )
-                    new_srt_data.append(sub)
 
-                    # 更新樹視圖中顯示的索引 - 保持同步
-                    if str(values[index_col]) != str(new_srt_index):
-                        values[index_col] = str(new_srt_index)
-                        self.tree.item(item, values=tuple(values))
+                    # 檢查是否是重複的項目
+                    item_key = (str(start), str(end), text)
+                    if item_key not in processed_indices:
+                        new_srt_data.append(sub)
+                        processed_indices.add(item_key)
 
-                    # 索引增加，確保連續性
-                    new_srt_index += 1
+                        # 更新樹視圖中顯示的索引 - 保持同步
+                        if str(values[index_col]) != str(new_srt_index):
+                            # 將 values 轉換為列表，以確保可修改
+                            values = list(values)
+                            values[index_col] = str(new_srt_index)
+                            self.tree.item(item, values=tuple(values))
+
+                        # 索引增加，確保連續性
+                        new_srt_index += 1
+                    else:
+                        self.logger.warning(f"檢測到重複項目，跳過: {item_key}")
 
                 except Exception as e:
                     self.logger.warning(f"處理項目時出錯: {e}, 跳過該項目")
@@ -3659,7 +3652,8 @@ class AlignmentGUI(BaseWindow):
                 # 獲取當前索引
                 old_index = str(values[index_pos])
 
-                # 更新值中的索引
+                # 更新值中的索引 - 確保使用列表類型
+                values = list(values)  # 確保轉換為列表
                 values[index_pos] = str(i)
                 self.tree_manager.update_item(item, values=tuple(values))
 
@@ -3684,6 +3678,7 @@ class AlignmentGUI(BaseWindow):
                         if correction_state == 'correct':
                             text_pos = 4 if self.display_mode in [self.DISPLAY_MODE_ALL, self.DISPLAY_MODE_AUDIO_SRT] else 3
                             if text_pos < len(values):
+                                values = list(values)  # 確保是列表
                                 values[text_pos] = corrected_text
                                 self.tree_manager.update_item(item, values=tuple(values))
 

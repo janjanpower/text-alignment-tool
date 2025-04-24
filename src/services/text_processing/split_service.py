@@ -113,11 +113,33 @@ class SplitService:
         # 獲取原始項目的信息
         item_info = self._extract_item_info(item)
 
+        # 重要：確認樹視圖中的項目仍然存在
+        if not self.gui.tree.exists(item):
+            self.logger.error(f"項目 {item} 不存在，無法進行斷句操作")
+            return
+
         # 準備新的時間列表
         new_start_times, new_end_times = self._prepare_time_lists(result)
 
-        # 刪除原始項目並創建新項目
-        new_items, id_mapping = self._create_split_items(item, result, srt_index, item_info)
+        # 獲取原始項目的位置
+        delete_position = self.gui.tree.index(item)
+
+        # 保存要刪除項目的標籤等信息
+        tags = self.gui.tree.item(item, 'tags')
+
+        # 刪除原始項目前先保存原始項目的內容
+        original_values = self.gui.tree_manager.get_item_values(item)
+
+        # 刪除原始項目 - 這一步很重要，必須確保完全刪除
+        self.gui.tree_manager.delete_item(item)
+
+        # 確認刪除成功
+        if self.gui.tree.exists(item):
+            self.logger.warning(f"項目 {item} 刪除失敗，嘗試再次刪除")
+            self.gui.tree.delete(item)
+
+        # 創建新項目
+        new_items, id_mapping = self._create_split_items(item, result, srt_index, item_info, delete_position)
 
         # 更新 SRT 數據和音頻
         self._update_srt_and_audio(srt_index, result, start_time, end_time, new_start_times, new_end_times)
@@ -237,30 +259,22 @@ class SplitService:
 
         return new_start_times, new_end_times
 
-    def _create_split_items(self, original_item, result, srt_index, item_info):
+    def _create_split_items(self, original_item, result, srt_index, item_info, delete_position):
         """創建拆分後的新項目"""
         # 將結果轉換為列表，避免 tuple 可能引起的問題
         result_list = list(result)
 
-        # 獲取項目位置和標籤
-        delete_position = item_info['position']
-        tags = item_info['tags']
+        # 獲取標籤
+        tags = item_info.get('tags', ())
 
-        # 獲取文本列表中的額外數據
+        # 記錄 ID 映射，用於後續校正狀態處理
+        id_mapping = {'original': original_item}
+        new_items = []
+
+        # 從所有項目獲取文本內容
         word_text = item_info.get('word_text', "")
         match_status = item_info.get('match_status', "")
         is_uncorrected = item_info.get('is_uncorrected', False)
-
-        # 刪除原始項目
-        try:
-            self.gui.tree_manager.delete_item(original_item)
-        except Exception as e:
-            self.logger.error(f"刪除項目失敗: {e}")
-            return [], {}
-
-        # 創建 ID 映射表
-        id_mapping = {'original': original_item}
-        new_items = []
 
         # 在進行斷句處理前，先保存原始項目的校正狀態
         original_correction_state = None
@@ -272,8 +286,11 @@ class SplitService:
                     'original': self.gui.correction_service.original_texts.get(str_index, ''),
                     'corrected': self.gui.correction_service.corrected_texts.get(str_index, '')
                 }
-                # 在這裡先清除原始校正狀態，避免影響後續的處理
+                # 先清除原始校正狀態，避免影響後續的處理
                 self.gui.correction_service.remove_correction_state(str_index)
+
+        # 獲取列索引配置
+        column_indices = self.gui.get_column_indices_for_current_mode()
 
         # 處理每個分割後的文本段落
         for i, text_data in enumerate(result_list):
@@ -281,13 +298,14 @@ class SplitService:
             if isinstance(text_data, tuple) and len(text_data) >= 3:
                 text, new_start, new_end = text_data
 
-                # 為新段落準備值，現在傳遞更多參數
+                # 為新段落準備值
                 new_srt_index = srt_index + i if i > 0 else srt_index
 
                 # 處理校正狀態和顯示文本
                 item_values = self._prepare_split_item_values(
                     text, new_srt_index, new_start, new_end,
-                    i, word_text, match_status, is_uncorrected
+                    i, word_text, match_status, is_uncorrected,
+                    original_correction_state if i == 0 else None
                 )
 
                 # 插入新項目
@@ -302,10 +320,11 @@ class SplitService:
 
                 # 應用標籤
                 if tags:
+                    # 移除可能影響顯示的標籤
                     clean_tags = tuple(tag for tag in tags if tag != 'mismatch')
                     self.gui.tree.item(new_item, tags=clean_tags)
 
-                # 更新 SRT 數據
+                # 更新 SRT 數據 - 這個方法需要確保更新正確
                 self._update_srt_item(srt_index, i, new_srt_index, text, new_start, new_end)
             else:
                 self.logger.warning(f"忽略無效的文本數據: {text_data}")
@@ -313,9 +332,12 @@ class SplitService:
         return new_items, id_mapping
 
     def _prepare_split_item_values(self, text, new_srt_index, new_start, new_end, part_index,
-                         word_text, match_status, is_uncorrected):
+                       word_text, match_status, is_uncorrected, original_correction_state=None):
         """為拆分項目準備值列表"""
         try:
+            # 載入校正數據庫
+            corrections = self.gui.load_corrections()
+
             # 檢查文本是否需要校正
             needs_correction, corrected_text, original_text, _ = self.gui.correction_service.check_text_for_correction(text)
 
@@ -324,25 +346,17 @@ class SplitService:
             display_text = text
 
             if needs_correction:
-                # 檢查 self.last_split_operation 是否存在
-                if hasattr(self, 'last_split_operation') and self.last_split_operation:
-                    # 修改此處的邏輯：僅第一個片段繼承原始校正狀態
-                    if part_index == 0 and 'original_item_correction' in self.last_split_operation and self.last_split_operation['original_item_correction']:
-                        orig_correction = self.last_split_operation['original_item_correction']
-                        if orig_correction['state'] == 'correct':
-                            display_text = corrected_text
-                            correction_icon = '✅'
-                        else:  # 'error'
-                            display_text = text  # 原始文本
-                            correction_icon = '❌'
-                    else:
-                        # 重要修改：新分割段落不要繼承原始段落的校正狀態
-                        # 如果不是第一個片段，則始終使用未校正狀態
-                        display_text = text  # 顯示原始文本
+                # 只有第一個片段繼承原始校正狀態
+                if part_index == 0 and original_correction_state:
+                    if original_correction_state['state'] == 'correct':
+                        display_text = corrected_text
+                        correction_icon = '✅'
+                    else:  # 'error'
+                        display_text = text  # 原始文本
                         correction_icon = '❌'
                 else:
-                    # 如果沒有 last_split_operation，預設使用未校正狀態
-                    display_text = text
+                    # 新分割段落不繼承原始段落的校正狀態，使用未校正狀態
+                    display_text = text  # 顯示原始文本
                     correction_icon = '❌'
 
             # 構建數值列表
@@ -394,13 +408,12 @@ class SplitService:
 
             # 保存校正狀態
             if needs_correction:
-                # 決定校正狀態 - 修改這裡的邏輯
+                # 決定校正狀態
                 state = 'error'  # 預設為未校正狀態
 
-                if hasattr(self, 'last_split_operation') and self.last_split_operation:
-                    if part_index == 0 and 'original_item_correction' in self.last_split_operation and self.last_split_operation['original_item_correction']:
-                        # 第一個片段繼承原始校正狀態
-                        state = self.last_split_operation['original_item_correction']['state']
+                # 只有第一個片段繼承原始校正狀態
+                if part_index == 0 and original_correction_state:
+                    state = original_correction_state['state']
 
                 # 設置校正狀態
                 self.gui.correction_service.set_correction_state(
@@ -430,10 +443,12 @@ class SplitService:
         try:
             if part_index == 0:
                 # 更新原有項目
-                if srt_index - 1 < len(self.gui.srt_data):
+                if 0 <= srt_index - 1 < len(self.gui.srt_data):
                     self.gui.srt_data[srt_index - 1].text = text
                     self.gui.srt_data[srt_index - 1].start = parse_time(new_start) if isinstance(new_start, str) else new_start
                     self.gui.srt_data[srt_index - 1].end = parse_time(new_end) if isinstance(new_end, str) else new_end
+                else:
+                    self.logger.warning(f"SRT 索引 {srt_index} 超出範圍，無法更新原有項目")
             else:
                 # 創建新的 SRT 項目
                 try:
@@ -443,43 +458,75 @@ class SplitService:
                         end=parse_time(new_end) if isinstance(new_end, str) else new_end,
                         text=text
                     )
-                    # 插入到 SRT 數據中
-                    if srt_index + part_index - 1 < len(self.gui.srt_data):
-                        self.gui.srt_data.insert(srt_index + part_index - 1, new_srt_item)
+
+                    # 計算新項目在 SRT 數據中的位置
+                    insert_position = srt_index + part_index - 1
+
+                    # 檢查位置是否有效
+                    if 0 <= insert_position < len(self.gui.srt_data):
+                        # 檢查該位置是否已經有項目存在
+                        existing_item = self.gui.srt_data[insert_position]
+                        if existing_item.index == new_srt_index:
+                            # 如果已存在相同索引的項目，則更新而不是插入
+                            self.gui.srt_data[insert_position] = new_srt_item
+                            self.logger.debug(f"更新 SRT 項目，索引: {new_srt_index}, 文本: {text[:20]}...")
+                        else:
+                            # 在適當位置插入新項目
+                            self.gui.srt_data.insert(insert_position, new_srt_item)
+                            self.logger.debug(f"插入 SRT 項目，索引: {new_srt_index}, 位置: {insert_position}, 文本: {text[:20]}...")
                     else:
+                        # 如果位置超出範圍，添加到末尾
                         self.gui.srt_data.append(new_srt_item)
+                        self.logger.debug(f"添加 SRT 項目到末尾，索引: {new_srt_index}, 文本: {text[:20]}...")
+
                 except Exception as e:
-                    self.logger.error(f"創建 SRT 項目時出錯: {e}")
+                    self.logger.error(f"創建或插入 SRT 項目時出錯: {e}")
         except Exception as e:
             self.logger.error(f"更新 SRT 項目時出錯: {e}")
 
     def _update_srt_and_audio(self, srt_index, result, start_time, end_time, new_start_times, new_end_times):
         """更新 SRT 數據和音頻段落"""
-        # 重新編號
-        self.gui.renumber_items(skip_correction_update=False)
+        try:
+            # 重新編號
+            self.gui.renumber_items(skip_correction_update=False)
 
-        # 更新音頻段落
-        if self.gui.audio_imported and hasattr(self.gui, 'audio_player'):
-            try:
-                # 首先使用單個區域切分方法
-                self.gui.audio_player.segment_single_audio(
-                    start_time,
-                    end_time,
-                    new_start_times,
-                    new_end_times,
-                    srt_index
-                )
+            # 確保 SRT 數據排序正確
+            self.gui.srt_data.sort()
 
-                # 然後重新處理整個 SRT 數據
-                self.gui.audio_player.segment_audio(self.gui.srt_data)
-                self.logger.info("已重新分割全部音頻段落")
+            # 重新檢查每個項目的索引是否連續
+            for i, sub in enumerate(self.gui.srt_data, 1):
+                if sub.index != i:
+                    self.logger.warning(f"SRT 數據中的索引不連續，調整 {sub.index} 為 {i}")
+                    sub.index = i
 
-                # 隱藏可能顯示的時間滑桿
-                if hasattr(self.gui, 'slider_controller'):
-                    self.gui.slider_controller.hide_slider()
+            # 更新音頻段落
+            if self.gui.audio_imported and hasattr(self.gui, 'audio_player'):
+                try:
+                    # 首先使用單個區域切分方法
+                    self.gui.audio_player.segment_single_audio(
+                        start_time,
+                        end_time,
+                        new_start_times,
+                        new_end_times,
+                        srt_index
+                    )
 
-            except Exception as e:
-                self.logger.error(f"更新音頻段落時出錯: {e}", exc_info=True)
+                    # 然後重新處理整個 SRT 數據
+                    self.gui.audio_player.segment_audio(self.gui.srt_data)
+                    self.logger.info("已重新分割全部音頻段落")
+
+                    # 隱藏可能顯示的時間滑桿
+                    if hasattr(self.gui, 'slider_controller'):
+                        self.gui.slider_controller.hide_slider()
+
+                except Exception as e:
+                    self.logger.error(f"更新音頻段落時出錯: {e}", exc_info=True)
+
+            # 更新 SRT 數據
+            self.gui.update_srt_data_from_treeview()
+
+        except Exception as e:
+            self.logger.error(f"更新 SRT 數據和音頻段落時出錯: {e}", exc_info=True)
 
     def _save_split_operation_state(self, original_state_data, result, new_items, id_mapping, srt_index, start_time, end_time):
         """保存拆分操作的狀態以支持撤銷/重做"""

@@ -141,7 +141,7 @@ class CombineService:
             all_texts = []
             all_word_texts = []
             for item in sorted_items:
-                values = self.gui.tree_manager.get_item_values(item)
+                values = list(self.gui.tree_manager.get_item_values(item))
                 if column_indices['text'] < len(values):
                     all_texts.append(values[column_indices['text']])
                 if column_indices['word_text'] is not None and column_indices['word_text'] < len(values):
@@ -154,7 +154,7 @@ class CombineService:
             # 獲取時間範圍
             first_start = base_values[column_indices['start']]
             last_item = sorted_items[-1]
-            last_values = self.gui.tree.item(last_item, 'values')
+            last_values = list(self.gui.tree.item(last_item, 'values'))
             last_end = last_values[column_indices['end']] if column_indices['end'] < len(last_values) else ""
 
             # 清除被合併項目的校正狀態
@@ -171,7 +171,7 @@ class CombineService:
                 self.gui.tree_manager.delete_item(item)
 
             # 構建合併後的值
-            combined_values = base_values.copy()
+            combined_values = list(base_values).copy()  # 確保是列表
             combined_values[column_indices['text']] = combined_text
             combined_values[column_indices['end']] = last_end
             if column_indices['word_text'] is not None:

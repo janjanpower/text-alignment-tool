@@ -329,43 +329,52 @@ class TextEditDialog(simpledialog.Dialog):
         :param lines: 文本行列表
         :return: 包含文本、開始時間、結束時間的列表
         """
-        # 此處添加診斷信息
-        print(f"開始生成時間段，行數：{len(lines)}")
-        print(f"開始時間: {self.start_time}, 結束時間: {self.end_time}")
+        # 忽略空行
+        valid_lines = [line for line in lines if line.strip()]
+        if not valid_lines:
+            return []
 
+        # 解析時間
         start_time = parse_time(str(self.start_time))
         end_time = parse_time(str(self.end_time))
         total_duration = (end_time.ordinal - start_time.ordinal)
-        total_chars = sum(len(line) for line in lines)
 
-        print(f"總字符數: {total_chars}, 總持續時間: {total_duration}")
+        # 計算總字符數（只考慮非空行）
+        total_chars = sum(len(line.strip()) for line in valid_lines)
 
-        current_time = start_time
+        # 至少要有一個字符
+        if total_chars == 0:
+            total_chars = 1
+
+        # 記錄結果
         results = []
+        current_time = start_time
 
-        for i, line in enumerate(lines):
-            if not line.strip():
+        for i, line in enumerate(valid_lines):
+            line_text = line.strip()
+            if not line_text:
                 continue
 
             # 計算該行的時間比例
-            if i == len(lines) - 1:
+            if i == len(valid_lines) - 1:
+                # 最後一行直接用到結束時間
                 next_time = end_time
             else:
-                line_proportion = len(line) / total_chars if total_chars > 0 else 0
+                # 根據字符比例計算時間
+                line_proportion = len(line_text) / total_chars
                 time_duration = int(total_duration * line_proportion)
                 next_time = pysrt.SubRipTime.from_ordinal(current_time.ordinal + time_duration)
 
-            # 輸出每行的時間分配
-            print(f"行 {i+1}: '{line}' - {current_time} 到 {next_time}")
-
+            # 保存結果
             results.append((
-                line.strip(),                # 文本
-                format_time(current_time),   # 開始時間
-                format_time(next_time)       # 結束時間
+                line_text,                  # 文本
+                format_time(current_time),  # 開始時間
+                format_time(next_time)      # 結束時間
             ))
+
+            # 更新當前時間為下一行的開始時間
             current_time = next_time
 
-        print(f"生成完成，共 {len(results)} 個時間段")
         return results
 
     def apply(self):

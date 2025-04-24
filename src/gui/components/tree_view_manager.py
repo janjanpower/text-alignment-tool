@@ -31,26 +31,26 @@ class TreeViewManager:
             self.logger.error(f"插入項目時出錯: {e}")
             raise
 
-    def update_item(self, item_id: str, values: tuple = None, tags: tuple = None) -> None:
+    def update_item(self, item, **kwargs):
         """
-        更新 TreeView 項目
-        :param item_id: 項目 ID
-        :param values: 新的值元組
-        :param tags: 新的標籤元組
+        更新項目
+        :param item: 項目ID
+        :param kwargs: 項目屬性
+        :return: 是否成功
         """
         try:
-            kwargs = {}
-            if values is not None:
-                kwargs['values'] = values
-            if tags is not None:
-                kwargs['tags'] = tags
+            if not self.tree.exists(item):
+                return False
 
-            if kwargs and self.tree.exists(item_id):
-                self.tree.item(item_id, **kwargs)
-            else:
-                self.logger.warning(f"項目不存在或未提供更新值: {item_id}")
+            # 如果提供了 values 參數，確保它是一個元組
+            if 'values' in kwargs and not isinstance(kwargs['values'], tuple):
+                kwargs['values'] = tuple(kwargs['values'])
+
+            self.tree.item(item, **kwargs)
+            return True
         except Exception as e:
             self.logger.error(f"更新項目時出錯: {e}")
+            return False
 
     def delete_items(self, items: List[str]) -> None:
         """
@@ -117,11 +117,19 @@ class TreeViewManager:
         """獲取所有項目 ID"""
         return self.tree.get_children()
 
-    def get_item_values(self, item_id: str) -> Tuple:
-        """獲取指定項目的值"""
-        if self.tree.exists(item_id):
-            return self.tree.item(item_id, 'values')
-        return tuple()
+    def get_item_values(self, item):
+        """
+        獲取樹項目的值
+        :param item: 項目ID
+        :return: 項目值列表 (不是元組)
+        """
+        try:
+            if not self.tree.exists(item):
+                return []
+            return list(self.tree.item(item)['values'])  # 轉換為列表再返回
+        except Exception as e:
+            self.logger.error(f"獲取項目值時出錯: {e}")
+            return []
 
     def get_item_tags(self, item_id: str) -> Tuple:
         """獲取指定項目的標籤"""
