@@ -283,31 +283,47 @@ class CorrectionTool(BaseWindow):
 
     def add_correction(self) -> None:
         """新增校正項"""
-        dialog = CorrectionInputDialog(self.master, self.correction_service)
-        result = dialog.run()
-        if result:
-            error, correction = result
+        try:
+            # 匯入視窗工具模組
+            from utils.window_utils import ensure_child_window_topmost
 
-            # 檢查是否重複
-            duplicate = False
-            for i, (existing_error, _) in enumerate(self.data_rows):
-                if existing_error == error:
-                    # 更新現有項而不是添加新項
-                    self.data_rows[i] = (error, correction)
-                    duplicate = True
-                    break
+            # 創建校正輸入對話框
+            dialog = CorrectionInputDialog(self.master, self.correction_service)
 
-            # 如果不是重複的，添加新項
-            if not duplicate:
-                # 更新數據列表
-                self.data_rows.append((error, correction))
+            # 確保對話框置頂
+            if hasattr(dialog, 'window'):
+                ensure_child_window_topmost(self.master, dialog.window)
 
-            # 更新顯示 - 確保先清空再重新加載
-            self.tree.delete(*self.tree.get_children())
-            self.update_display()
+            # 運行對話框並獲取結果
+            result = dialog.run()
 
-            # 顯示成功訊息
-            show_info("成功", f"已{'更新' if duplicate else '添加'}校正規則：\n{error} → {correction}", self.master)
+            if result:
+                error, correction = result
+
+                # 檢查是否重複
+                duplicate = False
+                for i, (existing_error, _) in enumerate(self.data_rows):
+                    if existing_error == error:
+                        # 更新現有項而不是添加新項
+                        self.data_rows[i] = (error, correction)
+                        duplicate = True
+                        break
+
+                # 如果不是重複的，添加新項
+                if not duplicate:
+                    # 更新數據列表
+                    self.data_rows.append((error, correction))
+
+                # 更新顯示 - 確保先清空再重新加載
+                self.tree.delete(*self.tree.get_children())
+                self.update_display()
+
+                # 顯示成功訊息
+                show_info("成功", f"已{'更新' if duplicate else '添加'}校正規則：\n{error} → {correction}", self.master)
+
+        except Exception as e:
+            self.logger.error(f"添加校正項時出錯: {e}")
+            show_error("錯誤", f"添加校正項失敗: {str(e)}", self.master)
 
     def delete_correction(self) -> None:
         """刪除選中項"""

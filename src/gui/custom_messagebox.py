@@ -5,6 +5,9 @@ from tkinter import ttk
 from typing import Optional, Any
 import logging
 
+# 配置日誌
+logger = logging.getLogger(__name__)
+
 class CustomMessageBox(tk.Toplevel):
     """自定義訊息框類別"""
 
@@ -23,11 +26,16 @@ class CustomMessageBox(tk.Toplevel):
         :param min_width: 最小視窗寬度
         :param min_height: 最小視窗高度
         """
+        # 先隱藏視窗，避免閃爍
         super().__init__(parent)
+        self.withdraw()  # 創建後立即隱藏視窗，避免閃爍
 
         # 創建一個 Tkinter 變數用於 wait_variable
         self.result_var = tk.BooleanVar(self)
         self.result_var.set(False)
+
+        # 標記視窗是否已顯示
+        self._visibility_changed = False
 
         # 基本設置
         self.title(title)
@@ -37,10 +45,12 @@ class CustomMessageBox(tk.Toplevel):
         self.parent = parent
         self.message = message
 
-
         # 設置視窗屬性
         self.overrideredirect(True)
         self.resizable(False, False)
+
+        # 設置訊息框置頂
+        self.attributes('-topmost', True)
 
         # 初始化拖曳變數
         self.drag_start_x = 0
@@ -49,7 +59,7 @@ class CustomMessageBox(tk.Toplevel):
         # 初始化結果
         self.result = None
 
-         # 初始化按鈕管理器 (移至此處)
+        # 初始化按鈕管理器 (移至此處)
         from gui.components.button_manager import ButtonManager
         self.button_manager = ButtonManager(self)
 
@@ -63,12 +73,26 @@ class CustomMessageBox(tk.Toplevel):
         # 設置模態
         if parent:
             self.transient(parent)
-            self.wait_visibility()
+
+        # 所有界面設置完成後再顯示視窗，避免閃爍
+        self.deiconify()
+
+        # 確保其他事件處理完成
+        self.update_idletasks()
+
+        # 設置視窗可見性標記
+        self.bind("<Map>", self._on_visibility_change)
+
+        # 設置模態並獲取焦點
+        if parent:
             self.grab_set()
             self.focus_force()
 
-        # 綁定事件
-        self.bind_events()
+    def _on_visibility_change(self, event):
+        """處理視窗可見性變化事件"""
+        self._visibility_changed = True
+        # 移除事件綁定，避免重複處理
+        self.unbind("<Map>")
 
     def calculate_text_dimensions(self, text: str, font_family: str = 'Arial',
                                 font_size: int = 10, max_width: int = 500) -> tuple[int, int]:
@@ -311,56 +335,84 @@ class CustomMessageBox(tk.Toplevel):
 
     def ok(self) -> None:
         """確定按鈕事件"""
-        self.result = True
         try:
-            # 設置結果變數，用於 wait_variable
-            self.result_var.set(True)
+            # 設置結果
+            self.result = True
 
-            if self.parent:
-                try:
-                    self.grab_release()
-                except tk.TclError:
-                    pass  # 忽略可能的錯誤
+            # 釋放焦點捕獲
+            try:
+                self.grab_release()
+            except tk.TclError:
+                pass  # 忽略可能的錯誤
 
-            # 處理所有待處理的事件，確保 visibility 事件已完成
+            # 處理所有待處理的事件
             try:
                 self.update_idletasks()
             except tk.TclError:
                 pass  # 忽略可能的錯誤
 
+            # 設置結果變數，這將通知等待此變數的代碼
+            self.result_var.set(True)
+
+            # 銷毀視窗
             self.destroy()
+
+            # 如果有父視窗，恢復其焦點
+            if self.parent:
+                try:
+                    self.parent.focus_force()
+                except:
+                    pass
+
         except Exception as e:
             # 捕獲並記錄任何錯誤，但不中斷程序
-            logging.warning(f"關閉 CustomMessageBox 時發生錯誤: {e}")
+            logger.warning(f"關閉 CustomMessageBox 時發生錯誤: {e}")
             try:
+                # 確保結果變數被設置
+                self.result_var.set(True)
+                # 嘗試銷毀視窗
                 self.destroy()
             except:
                 pass  # 最後嘗試銷毀視窗，忽略所有錯誤
 
     def cancel(self) -> None:
         """取消按鈕事件"""
-        self.result = False
         try:
-            # 設置結果變數，用於 wait_variable
-            self.result_var.set(True)
+            # 設置結果
+            self.result = False
 
-            if self.parent:
-                try:
-                    self.grab_release()
-                except tk.TclError:
-                    pass  # 忽略可能的錯誤
+            # 釋放焦點捕獲
+            try:
+                self.grab_release()
+            except tk.TclError:
+                pass  # 忽略可能的錯誤
 
-            # 處理所有待處理的事件，確保 visibility 事件已完成
+            # 處理所有待處理的事件
             try:
                 self.update_idletasks()
             except tk.TclError:
                 pass  # 忽略可能的錯誤
 
+            # 設置結果變數，這將通知等待此變數的代碼
+            self.result_var.set(True)
+
+            # 銷毀視窗
             self.destroy()
+
+            # 如果有父視窗，恢復其焦點
+            if self.parent:
+                try:
+                    self.parent.focus_force()
+                except:
+                    pass
+
         except Exception as e:
             # 捕獲並記錄任何錯誤，但不中斷程序
-            logging.warning(f"關閉 CustomMessageBox 時發生錯誤: {e}")
+            logger.warning(f"關閉 CustomMessageBox 時發生錯誤: {e}")
             try:
+                # 確保結果變數被設置
+                self.result_var.set(True)
+                # 嘗試銷毀視窗
                 self.destroy()
             except:
                 pass  # 最後嘗試銷毀視窗，忽略所有錯誤
@@ -369,18 +421,65 @@ class CustomMessageBox(tk.Toplevel):
 def show_message(title: str, message: str, message_type: str = "info",
                 parent: Optional[tk.Tk] = None) -> None:
     """顯示訊息框"""
-    dialog = CustomMessageBox(title, message, message_type, parent)
-
-    # 使用 wait_window 作為主要方法
+    dialog = None
     try:
+        # 如果有父視窗，先取消其置頂狀態
+        parent_topmost = False
         if parent:
-            parent.wait_window(dialog)
+            try:
+                parent_topmost = parent.attributes('-topmost')
+                parent.attributes('-topmost', False)
+                parent.update()
+            except Exception as e:
+                logger.warning(f"取消父視窗置頂狀態時出錯: {e}")
+
+        # 創建訊息框
+        dialog = CustomMessageBox(title, message, message_type, parent)
+
+        # 使用 wait_variable 代替 wait_window 避免可見性問題
+        if hasattr(dialog, 'result_var'):
+            dialog.wait_variable(dialog.result_var)
         else:
-            dialog.wait_window()
+            # 如果沒有 result_var，退回到使用 wait_window
+            try:
+                if parent:
+                    parent.wait_window(dialog)
+                else:
+                    dialog.wait_window()
+            except tk.TclError as e:
+                # 忽略特定的可見性錯誤
+                if "was deleted before its visibility changed" not in str(e):
+                    logger.warning(f"等待訊息框關閉時發生錯誤: {e}")
+
+        # 恢復父視窗的原始置頂狀態並返回焦點
+        if parent:
+            try:
+                # 先確保父視窗可見
+                parent.deiconify()
+
+                # 恢復原始置頂狀態
+                if parent_topmost:
+                    parent.attributes('-topmost', parent_topmost)
+
+                # 更新視窗並獲取焦點
+                parent.update()
+                parent.focus_force()
+            except Exception as e:
+                logger.warning(f"恢復父視窗狀態時出錯: {e}")
+
     except tk.TclError as e:
         # 捕獲可能的 TclError 並記錄
-        logging.warning(f"等待訊息框關閉時發生錯誤: {e}")
-
+        if "was deleted before its visibility changed" not in str(e):
+            logger.warning(f"等待訊息框關閉時發生錯誤: {e}")
+    except Exception as e:
+        logger.error(f"顯示訊息框時出錯: {e}")
+    finally:
+        # 確保對話框關閉，防止殘留
+        if dialog and dialog.winfo_exists():
+            try:
+                dialog.destroy()
+            except:
+                pass
 
 def show_info(title: str, message: str, parent: Optional[tk.Tk] = None) -> None:
     """顯示信息訊息框"""
@@ -397,16 +496,69 @@ def show_error(title: str, message: str, parent: Optional[tk.Tk] = None) -> None
 def ask_question(title: str, message: str,
                 parent: Optional[tk.Tk] = None) -> bool:
     """顯示詢問訊息框"""
-    dialog = CustomMessageBox(title, message, "question", parent)
-
-    # 使用 wait_window 作為主要方法
+    dialog = None
     try:
+        # 如果有父視窗，先取消其置頂狀態
+        parent_topmost = False
         if parent:
-            parent.wait_window(dialog)
+            try:
+                parent_topmost = parent.attributes('-topmost')
+                parent.attributes('-topmost', False)
+                parent.update()
+            except Exception as e:
+                logger.warning(f"取消父視窗置頂狀態時出錯: {e}")
+
+        # 創建詢問訊息框
+        dialog = CustomMessageBox(title, message, "question", parent)
+
+        # 使用 wait_variable 代替 wait_window 避免可見性問題
+        if hasattr(dialog, 'result_var'):
+            dialog.wait_variable(dialog.result_var)
         else:
-            dialog.wait_window()
+            # 如果沒有 result_var，退回到使用 wait_window
+            try:
+                if parent:
+                    parent.wait_window(dialog)
+                else:
+                    dialog.wait_window()
+            except tk.TclError as e:
+                # 忽略特定的可見性錯誤
+                if "was deleted before its visibility changed" not in str(e):
+                    logger.warning(f"等待詢問訊息框關閉時發生錯誤: {e}")
+
+        # 獲取結果
+        result = dialog.result if hasattr(dialog, 'result') else False
+
+        # 恢復父視窗的原始置頂狀態並返回焦點
+        if parent:
+            try:
+                # 先確保父視窗可見
+                parent.deiconify()
+
+                # 恢復原始置頂狀態
+                if parent_topmost:
+                    parent.attributes('-topmost', parent_topmost)
+
+                # 更新視窗並獲取焦點
+                parent.update()
+                parent.focus_force()
+            except Exception as e:
+                logger.warning(f"恢復父視窗狀態時出錯: {e}")
+
+        return result
+
     except tk.TclError as e:
         # 捕獲可能的 TclError 並記錄
-        logging.warning(f"等待詢問訊息框關閉時發生錯誤: {e}")
-
-    return dialog.result if hasattr(dialog, 'result') else False
+        if "was deleted before its visibility changed" not in str(e):
+            logger.warning(f"等待詢問訊息框關閉時發生錯誤: {e}")
+        return False
+    except Exception as e:
+        logger.error(f"顯示詢問訊息框時出錯: {e}")
+        return False
+    finally:
+        # 確保對話框關閉，防止殘留
+        if dialog and dialog.winfo_exists():
+            try:
+                dialog.destroy()
+            except:
+                pass

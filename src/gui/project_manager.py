@@ -129,6 +129,38 @@ class ProjectManager(BaseWindow):
         # 綁定 Enter 鍵
         self.master.bind('<Return>', lambda e: self.confirm())
 
+    def show_register(self):
+        """顯示註冊視窗"""
+        try:
+            # 匯入視窗工具模組
+            from utils.window_utils import ensure_child_window_topmost
+
+            # 建立並顯示註冊對話框
+            register_dialog = RegisterDialog(self.master)
+
+            # 確保對話框置頂於登入視窗之上
+            ensure_child_window_topmost(self.master, register_dialog.window)
+
+            # 等待註冊對話框關閉
+            self.master.wait_window(register_dialog.window)
+
+            # 如果註冊成功，填入使用者名稱並設置焦點
+            if register_dialog.result:
+                self.username_entry.delete(0, tk.END)
+                self.username_entry.insert(0, register_dialog.result)
+                self.password_entry.focus_set()
+            else:
+                # 如果註冊取消或關閉，則焦點回到使用者名稱輸入框
+                self.username_entry.focus_set()
+
+            # 強制讓登入視窗獲取焦點
+            self.master.focus_force()
+
+        except Exception as e:
+            self.logger.error(f"顯示註冊視窗時出錯: {e}")
+            # 確保登入視窗重新獲得焦點
+            self.master.focus_force()
+
     def add_logout_button(self):
         """添加登出按鈕"""
         # 假設已有按鈕容器 button_container

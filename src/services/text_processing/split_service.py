@@ -1,6 +1,7 @@
 """文本拆分服務模組，負責處理字幕拆分相關操作"""
 
 import logging
+from pydoc import text
 import time
 
 import pysrt
@@ -148,6 +149,17 @@ class SplitService:
             if len(item_info['values']) > word_text_index:
                 original_word_text = item_info['values'][word_text_index]
 
+        # 明確記錄原始校正狀態
+        original_item_correction = None
+        index_to_check = str(srt_index)
+        if hasattr(self.gui, 'correction_service'):
+            if index_to_check in self.gui.correction_service.correction_states:
+                original_item_correction = {
+                    'state': self.gui.correction_service.correction_states[index_to_check],
+                    'original': self.gui.correction_service.original_texts.get(index_to_check, ''),
+                    'corrected': self.gui.correction_service.corrected_texts.get(index_to_check, '')
+                }
+
         # 記錄拆分操作
         self.last_split_operation = {
             'timestamp': time.time(),
@@ -158,24 +170,13 @@ class SplitService:
             'original_end': end_time,
             'display_mode': self.gui.display_mode,
             'original_correction_state': self.gui.correction_service.serialize_state() if hasattr(self.gui, 'correction_service') else {},
-            'original_word_text': original_word_text
+            'original_word_text': original_word_text,
+            'original_item_correction': original_item_correction
         }
 
         # 保存在狀態管理器中
         if hasattr(self.gui, 'state_manager') and hasattr(self.gui.state_manager, 'last_split_operation'):
             self.gui.state_manager.last_split_operation = self.last_split_operation
-
-        # 記錄該項目的原始校正狀態
-        if hasattr(self.gui, 'correction_service'):
-            index_to_check = str(srt_index)
-            if index_to_check in self.gui.correction_service.correction_states:
-                self.last_split_operation['original_item_correction'] = {
-                    'state': self.gui.correction_service.correction_states[index_to_check],
-                    'original': self.gui.correction_service.original_texts.get(index_to_check, ''),
-                    'corrected': self.gui.correction_service.corrected_texts.get(index_to_check, '')
-                }
-                # 清除原始項目的校正狀態，避免後續重複使用
-                self.gui.correction_service.remove_correction_state(index_to_check)
 
     def _extract_item_info(self, item):
         """從原始項目提取重要信息"""
@@ -261,142 +262,196 @@ class SplitService:
         id_mapping = {'original': original_item}
         new_items = []
 
+        # 在進行斷句處理前，先保存原始項目的校正狀態
+        original_correction_state = None
+        if isinstance(srt_index, (str, int)):
+            str_index = str(srt_index)
+            if hasattr(self.gui, 'correction_service') and hasattr(self.gui.correction_service, 'correction_states') and str_index in self.gui.correction_service.correction_states:
+                original_correction_state = {
+                    'state': self.gui.correction_service.correction_states[str_index],
+                    'original': self.gui.correction_service.original_texts.get(str_index, ''),
+                    'corrected': self.gui.correction_service.corrected_texts.get(str_index, '')
+                }
+                # 在這裡先清除原始校正狀態，避免影響後續的處理
+                self.gui.correction_service.remove_correction_state(str_index)
+
         # 處理每個分割後的文本段落
-        for i, (text, new_start, new_end) in enumerate(result_list):
-            # 為新段落準備值
-            new_srt_index = srt_index + i if i > 0 else srt_index
+        for i, text_data in enumerate(result_list):
+            # 確保 text_data 是一個tuple，並且有足夠的元素
+            if isinstance(text_data, tuple) and len(text_data) >= 3:
+                text, new_start, new_end = text_data
 
-            # 處理校正狀態和顯示文本
-            item_values = self._prepare_split_item_values(text, new_srt_index, new_start, new_end,
-                                                         i, word_text, match_status, is_uncorrected)
+                # 為新段落準備值，現在傳遞更多參數
+                new_srt_index = srt_index + i if i > 0 else srt_index
 
-            # 插入新項目
-            pos = delete_position + i
-            new_item = self.gui.insert_item('', pos, values=tuple(item_values))
-            new_items.append(new_item)
+                # 處理校正狀態和顯示文本
+                item_values = self._prepare_split_item_values(
+                    text, new_srt_index, new_start, new_end,
+                    i, word_text, match_status, is_uncorrected
+                )
 
-            # 保存 ID 映射
-            id_mapping[f'part_{i}'] = new_item
-            if i == 0:
-                id_mapping['first_new'] = new_item
+                # 插入新項目
+                pos = delete_position + i
+                new_item = self.gui.insert_item('', pos, values=tuple(item_values))
+                new_items.append(new_item)
 
-            # 應用標籤
-            if tags:
-                clean_tags = tuple(tag for tag in tags if tag != 'mismatch')
-                self.gui.tree.item(new_item, tags=clean_tags)
+                # 保存 ID 映射
+                id_mapping[f'part_{i}'] = new_item
+                if i == 0:
+                    id_mapping['first_new'] = new_item
 
-            # 更新 SRT 數據
-            self._update_srt_item(srt_index, i, new_srt_index, text, new_start, new_end)
+                # 應用標籤
+                if tags:
+                    clean_tags = tuple(tag for tag in tags if tag != 'mismatch')
+                    self.gui.tree.item(new_item, tags=clean_tags)
+
+                # 更新 SRT 數據
+                self._update_srt_item(srt_index, i, new_srt_index, text, new_start, new_end)
+            else:
+                self.logger.warning(f"忽略無效的文本數據: {text_data}")
 
         return new_items, id_mapping
 
     def _prepare_split_item_values(self, text, new_srt_index, new_start, new_end, part_index,
-                                 word_text, match_status, is_uncorrected):
+                         word_text, match_status, is_uncorrected):
         """為拆分項目準備值列表"""
-        # 檢查文本是否需要校正
-        needs_correction, corrected_text, original_text, _ = self.gui.correction_service.check_text_for_correction(text)
+        try:
+            # 檢查文本是否需要校正
+            needs_correction, corrected_text, original_text, _ = self.gui.correction_service.check_text_for_correction(text)
 
-        # 根據原始校正狀態決定圖標和顯示文本
-        correction_icon = ''
-        display_text = text
+            # 根據原始校正狀態決定圖標和顯示文本
+            correction_icon = ''
+            display_text = text
 
-        if needs_correction:
-            # 第一個片段繼承原始校正狀態
-            if part_index == 0 and 'original_item_correction' in self.last_split_operation:
-                orig_correction = self.last_split_operation['original_item_correction']
-                if orig_correction['state'] == 'correct':
-                    display_text = corrected_text
-                    correction_icon = '✅'
-                else:  # 'error'
-                    display_text = text  # 原始文本
+            if needs_correction:
+                # 檢查 self.last_split_operation 是否存在
+                if hasattr(self, 'last_split_operation') and self.last_split_operation:
+                    # 修改此處的邏輯：僅第一個片段繼承原始校正狀態
+                    if part_index == 0 and 'original_item_correction' in self.last_split_operation and self.last_split_operation['original_item_correction']:
+                        orig_correction = self.last_split_operation['original_item_correction']
+                        if orig_correction['state'] == 'correct':
+                            display_text = corrected_text
+                            correction_icon = '✅'
+                        else:  # 'error'
+                            display_text = text  # 原始文本
+                            correction_icon = '❌'
+                    else:
+                        # 重要修改：新分割段落不要繼承原始段落的校正狀態
+                        # 如果不是第一個片段，則始終使用未校正狀態
+                        display_text = text  # 顯示原始文本
+                        correction_icon = '❌'
+                else:
+                    # 如果沒有 last_split_operation，預設使用未校正狀態
+                    display_text = text
                     correction_icon = '❌'
-            else:
-                # 新分割段落默認為未校正狀態
-                display_text = text  # 顯示原始文本
-                correction_icon = '❌'
 
-        # 保存校正狀態
-        if needs_correction:
-            # 決定校正狀態
-            state = 'error'  # 默認為未校正狀態
+            # 構建數值列表
+            values = []
 
-            # 第一個片段繼承原始校正狀態
-            if part_index == 0 and 'original_item_correction' in self.last_split_operation:
-                state = self.last_split_operation['original_item_correction']['state']
+            # 根據顯示模式返回適當的值列表
+            if self.gui.display_mode == self.gui.DISPLAY_MODE_ALL:
+                # [V.O, Index, Start, End, SRT Text, Word Text, Match, V/X]
+                values = [
+                    self.gui.PLAY_ICON,
+                    str(new_srt_index),
+                    new_start,
+                    new_end,
+                    display_text,
+                    part_index == 0 and word_text or "",  # 只有第一個段落保留 Word 文本
+                    part_index == 0 and match_status or "",  # 只有第一個段落保留 Match 狀態
+                    correction_icon     # V/X 根據校正需要設置
+                ]
+            elif self.gui.display_mode == self.gui.DISPLAY_MODE_SRT_WORD:
+                # [Index, Start, End, SRT Text, Word Text, Match, V/X]
+                values = [
+                    str(new_srt_index),
+                    new_start,
+                    new_end,
+                    display_text,
+                    part_index == 0 and word_text or "",  # 只有第一個段落保留 Word 文本
+                    part_index == 0 and match_status or "",  # 只有第一個段落保留 Match 狀態
+                    correction_icon     # V/X 根據校正需要設置
+                ]
+            elif self.gui.display_mode == self.gui.DISPLAY_MODE_AUDIO_SRT:
+                # [V.O, Index, Start, End, SRT Text, V/X]
+                values = [
+                    self.gui.PLAY_ICON,
+                    str(new_srt_index),
+                    new_start,
+                    new_end,
+                    display_text,
+                    correction_icon   # V/X 根據校正需要設置
+                ]
+            else:  # SRT 模式
+                # [Index, Start, End, SRT Text, V/X]
+                values = [
+                    str(new_srt_index),
+                    new_start,
+                    new_end,
+                    display_text,
+                    correction_icon   # V/X 根據校正需要設置
+                ]
 
-            # 設置校正狀態
-            self.gui.correction_service.set_correction_state(
-                str(new_srt_index),
-                original_text,
-                corrected_text,
-                state
-            )
+            # 保存校正狀態
+            if needs_correction:
+                # 決定校正狀態 - 修改這裡的邏輯
+                state = 'error'  # 預設為未校正狀態
 
-        # 根據顯示模式返回適當的值列表
-        if self.gui.display_mode == self.gui.DISPLAY_MODE_ALL:
-            # [V.O, Index, Start, End, SRT Text, Word Text, Match, V/X]
-            return [
-                self.gui.PLAY_ICON,
-                str(new_srt_index),
-                new_start,
-                new_end,
-                display_text,
-                part_index == 0 and word_text or "",  # 只有第一個段落保留 Word 文本
-                part_index == 0 and match_status or "",  # 只有第一個段落保留 Match 狀態
-                correction_icon     # V/X 根據校正需要設置
-            ]
-        elif self.gui.display_mode == self.gui.DISPLAY_MODE_SRT_WORD:
-            # [Index, Start, End, SRT Text, Word Text, Match, V/X]
-            return [
-                str(new_srt_index),
-                new_start,
-                new_end,
-                display_text,
-                part_index == 0 and word_text or "",  # 只有第一個段落保留 Word 文本
-                part_index == 0 and match_status or "",  # 只有第一個段落保留 Match 狀態
-                correction_icon     # V/X 根據校正需要設置
-            ]
-        elif self.gui.display_mode == self.gui.DISPLAY_MODE_AUDIO_SRT:
-            # [V.O, Index, Start, End, SRT Text, V/X]
-            return [
-                self.gui.PLAY_ICON,
-                str(new_srt_index),
-                new_start,
-                new_end,
-                display_text,
-                correction_icon   # V/X 根據校正需要設置
-            ]
-        else:  # SRT 模式
-            # [Index, Start, End, SRT Text, V/X]
-            return [
-                str(new_srt_index),
-                new_start,
-                new_end,
-                display_text,
-                correction_icon   # V/X 根據校正需要設置
-            ]
+                if hasattr(self, 'last_split_operation') and self.last_split_operation:
+                    if part_index == 0 and 'original_item_correction' in self.last_split_operation and self.last_split_operation['original_item_correction']:
+                        # 第一個片段繼承原始校正狀態
+                        state = self.last_split_operation['original_item_correction']['state']
+
+                # 設置校正狀態
+                self.gui.correction_service.set_correction_state(
+                    str(new_srt_index),
+                    original_text,
+                    corrected_text,
+                    state
+                )
+
+            return values
+        except Exception as e:
+            self.logger.error(f"準備拆分項目值時出錯: {e}")
+            # 返回安全的預設值
+            safe_values = []
+            if self.gui.display_mode == self.gui.DISPLAY_MODE_ALL:
+                safe_values = [self.gui.PLAY_ICON, str(new_srt_index), new_start, new_end, text, "", "", ""]
+            elif self.gui.display_mode == self.gui.DISPLAY_MODE_SRT_WORD:
+                safe_values = [str(new_srt_index), new_start, new_end, text, "", "", ""]
+            elif self.gui.display_mode == self.gui.DISPLAY_MODE_AUDIO_SRT:
+                safe_values = [self.gui.PLAY_ICON, str(new_srt_index), new_start, new_end, text, ""]
+            else:  # SRT 模式
+                safe_values = [str(new_srt_index), new_start, new_end, text, ""]
+            return safe_values
 
     def _update_srt_item(self, srt_index, part_index, new_srt_index, text, new_start, new_end):
         """更新 SRT 數據中的項目"""
-        if part_index == 0:
-            # 更新原有項目
-            if srt_index - 1 < len(self.gui.srt_data):
-                self.gui.srt_data[srt_index - 1].text = text
-                self.gui.srt_data[srt_index - 1].start = parse_time(new_start)
-                self.gui.srt_data[srt_index - 1].end = parse_time(new_end)
-        else:
-            # 創建新的 SRT 項目
-            new_srt_item = pysrt.SubRipItem(
-                index=new_srt_index,
-                start=parse_time(new_start),
-                end=parse_time(new_end),
-                text=text
-            )
-            # 插入到 SRT 數據中
-            if srt_index + part_index - 1 < len(self.gui.srt_data):
-                self.gui.srt_data.insert(srt_index + part_index - 1, new_srt_item)
+        try:
+            if part_index == 0:
+                # 更新原有項目
+                if srt_index - 1 < len(self.gui.srt_data):
+                    self.gui.srt_data[srt_index - 1].text = text
+                    self.gui.srt_data[srt_index - 1].start = parse_time(new_start) if isinstance(new_start, str) else new_start
+                    self.gui.srt_data[srt_index - 1].end = parse_time(new_end) if isinstance(new_end, str) else new_end
             else:
-                self.gui.srt_data.append(new_srt_item)
+                # 創建新的 SRT 項目
+                try:
+                    new_srt_item = pysrt.SubRipItem(
+                        index=new_srt_index,
+                        start=parse_time(new_start) if isinstance(new_start, str) else new_start,
+                        end=parse_time(new_end) if isinstance(new_end, str) else new_end,
+                        text=text
+                    )
+                    # 插入到 SRT 數據中
+                    if srt_index + part_index - 1 < len(self.gui.srt_data):
+                        self.gui.srt_data.insert(srt_index + part_index - 1, new_srt_item)
+                    else:
+                        self.gui.srt_data.append(new_srt_item)
+                except Exception as e:
+                    self.logger.error(f"創建 SRT 項目時出錯: {e}")
+        except Exception as e:
+            self.logger.error(f"更新 SRT 項目時出錯: {e}")
 
     def _update_srt_and_audio(self, srt_index, result, start_time, end_time, new_start_times, new_end_times):
         """更新 SRT 數據和音頻段落"""

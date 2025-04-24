@@ -14,8 +14,10 @@ class ProjectService:
 
     def get_projects_directory(self) -> str:
         """獲取專案目錄路徑"""
-        current_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        return os.path.join(current_dir, "projects")
+        from utils.file_utils import get_current_directory
+        # 使用 utils.file_utils 中的函數獲取專案根目錄
+        root_dir = get_current_directory()
+        return os.path.join(root_dir, "projects")
 
     def ensure_projects_directory(self):
         """確保專案目錄存在"""

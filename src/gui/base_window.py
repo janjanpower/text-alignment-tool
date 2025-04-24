@@ -24,13 +24,15 @@ class BaseWindow:
     def __init__(self, title: str = "自定義視窗",
                  width: int = 800, height: int = 600,
                  corner_radius=20,
-                 master: Optional[tk.Tk] = None) -> None:
+                 master: Optional[tk.Tk] = None,
+                 make_topmost: bool = False) -> None:
         """
         初始化基礎視窗
         :param title: 視窗標題
         :param width: 視窗寬度
         :param height: 視窗高度
         :param master: 父視窗
+        :param make_topmost: 是否設置為置頂視窗
         """
         # 初始化主視窗
         if master is None:
@@ -56,13 +58,15 @@ class BaseWindow:
         self.master.geometry(f"{width}x{height}")
         self.master.configure(bg='#f0f0f0')
 
+        # 初始化置頂狀態
+        self._is_topmost = make_topmost
+
         # 初始化拖曳變數
         self._offsetx = 0
         self._offsety = 0
 
         # 設置無邊框
         self.master.overrideredirect(True)
-        self.master.attributes('-topmost', False)
 
         if isinstance(self.master, tk.Tk):
             # 設置任務欄圖標
@@ -255,6 +259,34 @@ class BaseWindow:
         self.title_label.config(text=title)
         self.master.title(title)
 
+    def set_topmost(self, is_topmost: bool = True) -> None:
+        """
+        設置視窗是否置頂
+        :param is_topmost: 是否置頂
+        """
+        try:
+            self._is_topmost = is_topmost
+            self.master.attributes('-topmost', is_topmost)
+            # 刷新視窗以確保置頂設置生效
+            self.master.update()
+        except Exception as e:
+            self.logger.error(f"設置視窗置頂狀態時出錯: {e}")
+
+    def toggle_topmost(self) -> bool:
+        """
+        切換視窗的置頂狀態
+        :return: 切換後的置頂狀態
+        """
+        self._is_topmost = not self._is_topmost
+        self.set_topmost(self._is_topmost)
+        return self._is_topmost
+
+    def is_topmost(self) -> bool:
+        """
+        獲取視窗當前的置頂狀態
+        :return: 是否置頂
+        """
+        return self._is_topmost
 
     def _handle_close(self):
         """統一的關閉處理"""

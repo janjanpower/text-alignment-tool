@@ -9,7 +9,17 @@ def get_current_directory() -> str:
     """
     if getattr(sys, 'frozen', False):
         return os.path.dirname(sys.executable)
-    return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+    # 獲取當前檔案的絕對路徑
+    current_file = os.path.abspath(__file__)
+    # 獲取 utils 目錄的路徑
+    utils_dir = os.path.dirname(current_file)
+    # 獲取 src 目錄的路徑
+    src_dir = os.path.dirname(utils_dir)
+    # 獲取專案根目錄的路徑
+    root_dir = os.path.dirname(src_dir)
+
+    return root_dir
 
 def ensure_directories(base_dir=None) -> None:
     """

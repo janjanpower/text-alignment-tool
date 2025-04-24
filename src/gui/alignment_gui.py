@@ -2248,8 +2248,30 @@ class AlignmentGUI(BaseWindow):
             return ""
 
     def process_srt_edit_result(self, result, item, srt_index, start_time, end_time):
-        """處理 SRT 文本編輯結果 - 轉發到 split_service"""
+        """處理 SRT 文本編輯結果 - 強化校正狀態處理"""
+        # 委託給 split_service 處理，但先保存原始校正狀態
+        original_correction_state = None
+
+        # 檢查是否需要關注校正狀態 (針對斷句操作)
+        is_split_result = isinstance(result, list) and len(result) > 0 and isinstance(result[0], tuple)
+
+        if is_split_result and hasattr(self, 'correction_service'):
+            # 備份原始校正狀態
+            index_str = str(srt_index)
+            if index_str in self.correction_service.correction_states:
+                original_correction_state = {
+                    'state': self.correction_service.correction_states[index_str],
+                    'original': self.correction_service.original_texts.get(index_str, ''),
+                    'corrected': self.correction_service.corrected_texts.get(index_str, '')
+                }
+
+        # 調用 split_service 處理編輯結果
         self.split_service.process_srt_edit_result(result, item, srt_index, start_time, end_time)
+
+        # 處理完成後，確保校正狀態顯示正確
+        if is_split_result and hasattr(self, 'correction_service'):
+            # 更新校正狀態顯示
+            self.update_correction_status_display()
 
 
     def process_word_text_edit(self, result, item, srt_index):

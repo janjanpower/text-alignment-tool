@@ -30,11 +30,17 @@ class BaseDialog:
     def create_dialog(self) -> None:
         """創建對話框視窗"""
         self.window = tk.Toplevel(self.parent)
+        # 創建後立即隱藏視窗，避免閃爍
+        self.window.withdraw()
+
         self.window.title(self.title_text)
         self.window.geometry(f"{self.width}x{self.height}")
 
         # 設置無邊框樣式
         self.window.overrideredirect(True)
+
+        # 設置對話框置頂
+        self.window.attributes('-topmost', True)
 
         # 創建標題列
         self.create_title_bar()
@@ -55,6 +61,12 @@ class BaseDialog:
 
         # 設置模態
         self.window.transient(self.parent)
+
+        # 完成所有設置後再顯示視窗
+        self.window.deiconify()
+        self.window.update()
+
+        # 獲取焦點
         self.window.grab_set()
 
         # 綁定事件
@@ -170,3 +182,21 @@ class BaseDialog:
         """顯示對話框並返回結果"""
         self.window.wait_window()
         return self.result
+
+    def run(self) -> Any:
+        """運行對話框並返回結果"""
+        try:
+            # 確保對話框置頂
+            self.window.attributes('-topmost', True)
+            self.window.update()
+
+            # 使用 focus_force 確保對話框獲得焦點
+            self.window.focus_force()
+
+            # 等待對話框關閉
+            self.window.wait_window()
+
+            return self.result
+        except Exception as e:
+            self.logger.error(f"運行對話框時出錯: {e}")
+            return None

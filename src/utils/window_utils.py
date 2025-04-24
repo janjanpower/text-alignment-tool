@@ -3,9 +3,13 @@ import logging
 from typing import Optional
 from gui.base_window import BaseWindow
 
-def show_new_window(root: tk.Tk, window: BaseWindow) -> None:
+def show_new_window(root: tk.Tk, window: BaseWindow, make_topmost=True) -> None:
     """
     顯示新視窗並確保資源正確處理
+
+    :param root: 根視窗
+    :param window: 要顯示的視窗
+    :param make_topmost: 是否將視窗設為置頂
     """
     logger = logging.getLogger(__name__)
     try:
@@ -15,6 +19,15 @@ def show_new_window(root: tk.Tk, window: BaseWindow) -> None:
 
         # 在顯示視窗前，確保處理完所有待處理的事件
         root.update_idletasks()
+
+        # 如果需要置頂，設置視窗屬性
+        if make_topmost and hasattr(root, 'attributes'):
+            # 設置視窗置頂
+            root.attributes('-topmost', True)
+            # 更新視窗以確保置頂生效
+            root.update()
+            # 如果不希望一直置頂，可以在更新後取消置頂
+            # root.attributes('-topmost', False)
 
         # 顯示視窗
         root.deiconify()
@@ -31,6 +44,47 @@ def show_new_window(root: tk.Tk, window: BaseWindow) -> None:
         import sys
         sys.exit(1)
 
+def make_window_topmost(window: tk.Tk, topmost: bool = True) -> None:
+    """
+    設置視窗是否置頂
+
+    :param window: 要設置的視窗
+    :param topmost: 是否置頂
+    """
+    logger = logging.getLogger(__name__)
+    try:
+        if hasattr(window, 'attributes'):
+            # 設置視窗置頂
+            window.attributes('-topmost', topmost)
+            # 更新視窗以確保設置生效
+            window.update()
+    except tk.TclError as e:
+        logger.warning(f"設置視窗置頂屬性時出錯: {e}")
+    except Exception as e:
+        logger.error(f"設置視窗置頂狀態時出錯: {e}")
+
+def ensure_child_window_topmost(parent: tk.Tk, child_window: tk.Toplevel) -> None:
+    """
+    確保子視窗置於父視窗之上
+
+    :param parent: 父視窗
+    :param child_window: 子視窗
+    """
+    logger = logging.getLogger(__name__)
+    try:
+        # 確保子視窗與父視窗關聯
+        child_window.transient(parent)
+
+        # 設置子視窗置頂
+        make_window_topmost(child_window, True)
+
+        # 獲取焦點
+        child_window.focus_force()
+
+        # 設置為模態視窗（阻止與父視窗的交互直到子視窗關閉）
+        child_window.grab_set()
+    except Exception as e:
+        logger.error(f"確保子視窗置頂時出錯: {e}")
 
 def close_window_safely(window: tk.Tk, cleanup_callback=None) -> None:
     """

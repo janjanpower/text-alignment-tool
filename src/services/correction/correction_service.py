@@ -643,22 +643,40 @@ class CorrectionService:
             if hasattr(self, '_checking_text'):
                 self._checking_text = False
 
-    def update_correction_states_after_split(self, original_index: str, new_texts: List[str]) -> None:
+    def update_correction_states_after_split(self, original_index: str, new_texts: list[str], corrections: dict) -> None:
         """
         文本拆分後更新校正狀態
-        :param original_index: 原始文本的索引
-        :param new_texts: 拆分後的文本列表
+
+        Args:
+            original_index: 原始文本的索引
+            new_texts: 拆分後的文本列表
+            corrections: 校正對照表
         """
+        # 保存原始索引的校正狀態
+        original_state = None
+        original_original_text = None
+        original_corrected_text = None
+
+        if original_index in self.correction_states:
+            original_state = self.correction_states[original_index]
+            original_original_text = self.original_texts.get(original_index, '')
+            original_corrected_text = self.corrected_texts.get(original_index, '')
+
         # 清除原始索引的狀態
         self.remove_correction_state(original_index)
 
         # 檢查每個新文本段落
         for i, text in enumerate(new_texts):
-            new_index = f"{original_index}_{i}"
-            needs_correction, corrected, original, _ = self.check_text_for_correction(text)
+            new_index = f"{original_index}_{i}" if i > 0 else original_index
+            needs_correction, corrected, original, _ = self.check_text_for_correction(text, corrections)
 
             if needs_correction:
-                self.set_correction_state(new_index, original, corrected, 'correct')
+                if i == 0 and original_state:
+                    # 第一個段落繼承原始校正狀態
+                    self.add_correction_state(new_index, original, corrected, original_state)
+                else:
+                    # 其他段落設置為未校正狀態
+                    self.add_correction_state(new_index, original, corrected, 'error')
 
     def serialize_state(self) -> Dict[str, Dict[str, Any]]:
         """
