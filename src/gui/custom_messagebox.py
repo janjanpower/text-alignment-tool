@@ -416,13 +416,84 @@ class CustomMessageBox(tk.Toplevel):
                 self.destroy()
             except:
                 pass  # 最後嘗試銷毀視窗，忽略所有錯誤
+    def cleanup(self) -> None:
+            """清理資源"""
+            try:
+                if hasattr(self, '_cleanup_done') and self._cleanup_done:
+                    return
+                self._cleanup_done = True
 
+                # 停止音頻播放
+                if hasattr(self, 'audio_player'):
+                    self.audio_player.cleanup()
+
+                # 清除合併符號
+                if hasattr(self, 'merge_symbol'):
+                    try:
+                        self.merge_symbol.place_forget()
+                        self.merge_symbol.destroy()
+                    except tk.TclError:
+                        pass
+
+                # 保存當前狀態
+                if hasattr(self, 'state_manager') and not self._gui_destroyed:
+                    try:
+                        current_state = self.get_current_state()
+                        correction_state = None
+                        if hasattr(self, 'correction_service'):
+                            correction_state = self.correction_service.serialize_state()
+                        self.save_operation_state('操作類型', '操作描述', {'key': 'value'})
+                    except Exception as e:
+                        self.logger.error(f"保存最終狀態時出錯: {e}")
+
+                # 清除所有資料
+                self.clear_current_data()
+
+                # 解除所有事件綁定
+                try:
+                    for binding in ('<Button-1>', '<B1-Motion>', '<Motion>', '<Configure>', '<<TreeviewSelect>>'):
+                        try:
+                            if hasattr(self, 'master') and self.master:
+                                self.master.unbind(binding)
+                        except:
+                            pass
+
+                    # 解除其他特定控件的綁定
+                    if hasattr(self, 'tree'):
+                        for binding in ('<Button-1>', '<Double-1>', '<KeyRelease>', '<Leave>'):
+                            try:
+                                self.tree.unbind(binding)
+                            except:
+                                pass
+                except Exception as e:
+                    self.logger.error(f"解除事件綁定時出錯: {e}")
+
+                # 調用父類清理方法
+                try:
+                    super().cleanup()
+                except Exception as e:
+                    self.logger.error(f"調用父類清理方法時出錯: {e}")
+
+            except Exception as e:
+                self.logger.error(f"清理資源時出錯: {e}")
 # 輔助函數保持不變
 def show_message(title: str, message: str, message_type: str = "info",
                 parent: Optional[tk.Tk] = None) -> None:
     """顯示訊息框"""
     dialog = None
     try:
+        # 首先檢查父視窗是否還存在
+        if parent:
+            try:
+                if not parent.winfo_exists():
+                    # 父視窗已不存在，使用None作為父視窗
+                    parent = None
+            except tk.TclError:
+                # 如果出現Tcl錯誤，也將父視窗設為None
+                parent = None
+            except Exception:
+                parent = None
+
         # 如果有父視窗，先取消其置頂狀態
         parent_topmost = False
         if parent:
@@ -432,17 +503,22 @@ def show_message(title: str, message: str, message_type: str = "info",
                 parent.update()
             except Exception as e:
                 logger.warning(f"取消父視窗置頂狀態時出錯: {e}")
+                # 忽略錯誤，繼續處理
 
         # 創建訊息框
         dialog = CustomMessageBox(title, message, message_type, parent)
 
         # 使用 wait_variable 代替 wait_window 避免可見性問題
         if hasattr(dialog, 'result_var'):
-            dialog.wait_variable(dialog.result_var)
+            try:
+                dialog.wait_variable(dialog.result_var)
+            except tk.TclError:
+                # 忽略可能的Tcl錯誤
+                pass
         else:
             # 如果沒有 result_var，退回到使用 wait_window
             try:
-                if parent:
+                if parent and parent.winfo_exists():
                     parent.wait_window(dialog)
                 else:
                     dialog.wait_window()
@@ -454,18 +530,21 @@ def show_message(title: str, message: str, message_type: str = "info",
         # 恢復父視窗的原始置頂狀態並返回焦點
         if parent:
             try:
-                # 先確保父視窗可見
-                parent.deiconify()
+                # 確保父視窗仍然存在
+                if parent.winfo_exists():
+                    # 先確保父視窗可見
+                    parent.deiconify()
 
-                # 恢復原始置頂狀態
-                if parent_topmost:
-                    parent.attributes('-topmost', parent_topmost)
+                    # 恢復原始置頂狀態
+                    if parent_topmost:
+                        parent.attributes('-topmost', parent_topmost)
 
-                # 更新視窗並獲取焦點
-                parent.update()
-                parent.focus_force()
+                    # 更新視窗並獲取焦點
+                    parent.update()
+                    parent.focus_force()
             except Exception as e:
                 logger.warning(f"恢復父視窗狀態時出錯: {e}")
+                # 忽略錯誤，繼續處理
 
     except tk.TclError as e:
         # 捕獲可能的 TclError 並記錄
@@ -475,9 +554,10 @@ def show_message(title: str, message: str, message_type: str = "info",
         logger.error(f"顯示訊息框時出錯: {e}")
     finally:
         # 確保對話框關閉，防止殘留
-        if dialog and dialog.winfo_exists():
+        if dialog:
             try:
-                dialog.destroy()
+                if dialog.winfo_exists():
+                    dialog.destroy()
             except:
                 pass
 
@@ -498,6 +578,18 @@ def ask_question(title: str, message: str,
     """顯示詢問訊息框"""
     dialog = None
     try:
+        # 首先檢查父視窗是否還存在
+        if parent:
+            try:
+                if not parent.winfo_exists():
+                    # 父視窗已不存在，使用None作為父視窗
+                    parent = None
+            except tk.TclError:
+                # 如果出現Tcl錯誤，也將父視窗設為None
+                parent = None
+            except Exception:
+                parent = None
+
         # 如果有父視窗，先取消其置頂狀態
         parent_topmost = False
         if parent:
@@ -507,17 +599,22 @@ def ask_question(title: str, message: str,
                 parent.update()
             except Exception as e:
                 logger.warning(f"取消父視窗置頂狀態時出錯: {e}")
+                # 忽略錯誤，繼續處理
 
         # 創建詢問訊息框
         dialog = CustomMessageBox(title, message, "question", parent)
 
         # 使用 wait_variable 代替 wait_window 避免可見性問題
         if hasattr(dialog, 'result_var'):
-            dialog.wait_variable(dialog.result_var)
+            try:
+                dialog.wait_variable(dialog.result_var)
+            except tk.TclError:
+                # 忽略可能的Tcl錯誤
+                pass
         else:
             # 如果沒有 result_var，退回到使用 wait_window
             try:
-                if parent:
+                if parent and parent.winfo_exists():
                     parent.wait_window(dialog)
                 else:
                     dialog.wait_window()
@@ -532,18 +629,21 @@ def ask_question(title: str, message: str,
         # 恢復父視窗的原始置頂狀態並返回焦點
         if parent:
             try:
-                # 先確保父視窗可見
-                parent.deiconify()
+                # 確保父視窗仍然存在
+                if parent.winfo_exists():
+                    # 先確保父視窗可見
+                    parent.deiconify()
 
-                # 恢復原始置頂狀態
-                if parent_topmost:
-                    parent.attributes('-topmost', parent_topmost)
+                    # 恢復原始置頂狀態
+                    if parent_topmost:
+                        parent.attributes('-topmost', parent_topmost)
 
-                # 更新視窗並獲取焦點
-                parent.update()
-                parent.focus_force()
+                    # 更新視窗並獲取焦點
+                    parent.update()
+                    parent.focus_force()
             except Exception as e:
                 logger.warning(f"恢復父視窗狀態時出錯: {e}")
+                # 忽略錯誤，繼續處理
 
         return result
 
@@ -557,8 +657,10 @@ def ask_question(title: str, message: str,
         return False
     finally:
         # 確保對話框關閉，防止殘留
-        if dialog and dialog.winfo_exists():
+        if dialog:
             try:
-                dialog.destroy()
+                if dialog.winfo_exists():
+                    dialog.destroy()
             except:
                 pass
+

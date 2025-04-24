@@ -12,24 +12,26 @@ import tkinter as tk
 from tkinter import ttk, simpledialog
 
 import pysrt
-from gui.custom_messagebox import show_error,show_warning
-from utils.time_utils import parse_time,format_time
+from gui.custom_messagebox import show_error, show_warning
+from utils.time_utils import parse_time, format_time
+from services.text_processing.segmentation_service import SegmentationService
 
 
 class TextEditDialog(simpledialog.Dialog):
     def __init__(self, parent: tk.Tk, title: str, initial_text: str = "",
              start_time: str = "", end_time: str = "",
              column_index: int = 4, display_mode: str = "srt", fps: int = 30,
-             word_text: str = "", edit_mode: str = "srt"):  # 增加 word_text 和 edit_mode 參數
+             word_text: str = "", edit_mode: str = "srt"):
         self.display_mode = display_mode
         self.initial_text = str(initial_text)
-        self.word_text = str(word_text)  # 保存 Word 文本
-        self.edit_mode = edit_mode       # 編輯模式：'srt', 'word', 'both'
+        self.word_text = str(word_text)
+        self.edit_mode = edit_mode
         self.start_time = format_time(parse_time(start_time)) if start_time else start_time
         self.end_time = format_time(parse_time(end_time)) if end_time else end_time
         self.column_index = column_index
         self.fps = fps
         self.result = None
+        self.segmentation_service = SegmentationService()
 
         # 檢查是否為允許編輯的欄位
         if self.display_mode == "audio_srt" and column_index not in [4, 5]:
@@ -383,69 +385,11 @@ class TextEditDialog(simpledialog.Dialog):
             # 檢查是否為 Word 編輯且需要分割
             if self.edit_mode == 'word' and hasattr(self, 'word_text_widget') and self.word_text_widget:
                 word_text = self.word_text_widget.get("1.0", tk.END).strip()
-
-                # 檢查是否需要分割 Word 文本
-                if '\n' in word_text:
-                    lines = [line.strip() for line in word_text.split('\n') if line.strip()]
-                    if len(lines) > 1:
-                        # 使用與 SRT 相同的邏輯生成分割結果
-                        self.result = self.generate_time_segments(lines)
-                        return
-                    else:
-                        self.result = word_text
-                        return
-                else:
-                    self.result = word_text
-                    return
+                return self._process_word_edit(word_text)
 
             # 處理普通 SRT 編輯
             text = self.text_widget.get("1.0", tk.END).strip()
-
-            # 這裡是關鍵：調試日誌輸出
-            print(f"編輯文本內容: '{text}', 包含換行符: {'\n' in text}")
-
-            lines = [line.strip() for line in text.split('\n') if line.strip()]
-            print(f"拆分後的行數: {len(lines)}")
-
-            # 基本驗證
-            if not lines:
-                show_error("錯誤", "文本不能為空", self.parent)
-                return
-
-            # 如果只有一行文本，不需要拆分，直接返回文本字符串
-            if len(lines) == 1 and '\n' not in text:
-                self.result = text
-                return
-
-            # 以下是多行文本的拆分處理邏輯
-            if not self.start_time or not self.end_time:
-                show_error("錯誤", "開始時間或結束時間無效", self.parent)
-                return
-
-            # 解析時間
-            try:
-                start_time = parse_time(str(self.start_time))
-                end_time = parse_time(str(self.end_time))
-                total_duration = (end_time.ordinal - start_time.ordinal)
-
-                if total_duration <= 0:
-                    show_error("錯誤", "結束時間必須大於開始時間", self.parent)
-                    return
-
-            except ValueError as e:
-                show_error("錯誤", f"時間格式解析錯誤：{str(e)}", self.parent)
-                return
-
-            # 計算時間分配
-            total_chars = sum(len(line) for line in lines)
-            if total_chars == 0:
-                show_error("錯誤", "文本內容無效", self.parent)
-                return
-
-            # 生成時間分段
-            segments = self.generate_time_segments(lines)
-            print(f"生成的分段數量: {len(segments)}")
-            self.result = segments
+            return self._process_srt_edit(text)
 
         except Exception as e:
             error_msg = f"處理文本時出錯：{str(e)}"
@@ -453,6 +397,61 @@ class TextEditDialog(simpledialog.Dialog):
             show_error("錯誤", error_msg, self.parent)
             self.result = None
 
+    def _process_word_edit(self, word_text):
+        """處理 Word 文本編輯"""
+        # 檢查是否需要分割 Word 文本
+        if '\n' in word_text:
+            lines = [line.strip() for line in word_text.split('\n') if line.strip()]
+            if len(lines) > 1:
+                # 使用核心服務生成分割結果
+                is_valid, error_msg = self.segmentation_service.validate_time_range(
+                    self.start_time, self.end_time
+                )
+
+                if not is_valid:
+                    show_error("錯誤", error_msg, self.parent)
+                    return
+
+                self.result = self.segmentation_service.generate_time_segments(
+                    lines, self.start_time, self.end_time
+                )
+                return
+            else:
+                self.result = word_text
+                return
+        else:
+            self.result = word_text
+            return
+
+    def _process_srt_edit(self, text):
+        """處理 SRT 文本編輯"""
+        lines = [line.strip() for line in text.split('\n') if line.strip()]
+
+        # 基本驗證
+        if not lines:
+            show_error("錯誤", "文本不能為空", self.parent)
+            return
+
+        # 如果只有一行文本，不需要拆分，直接返回文本字符串
+        if len(lines) == 1 and '\n' not in text:
+            self.result = text
+            return
+
+        # 時間範圍驗證
+        is_valid, error_msg = self.segmentation_service.validate_time_range(
+            self.start_time, self.end_time
+        )
+
+        if not is_valid:
+            show_error("錯誤", error_msg, self.parent)
+            return
+
+        # 使用核心服務生成分割結果
+        segments = self.segmentation_service.generate_time_segments(
+            lines, self.start_time, self.end_time
+        )
+
+        self.result = segments
 
     def split_text_by_frames(self, lines):
         """按幀數拆分文本"""

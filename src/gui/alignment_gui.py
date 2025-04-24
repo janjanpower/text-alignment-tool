@@ -33,7 +33,7 @@ from utils.text_utils import simplify_to_traditional
 from utils.time_utils import parse_time,time_to_milliseconds, milliseconds_to_time, time_to_seconds
 from gui.slider_controller import TimeSliderController
 from services.state import EnhancedStateManager, CorrectionStateManager
-
+from services.text_processing.segmentation_service import SegmentationService
 
 # 添加項目根目錄到路徑以確保絕對導入能正常工作
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -49,6 +49,10 @@ class AlignmentGUI(BaseWindow):
         # 加載配置
         self.config = ConfigManager()
         window_config = self.config.get_window_config()
+
+        # 添加視窗狀態標記
+        self._is_destroying = False
+        self._gui_destroyed = False
 
         # 調用父類初始化
         super().__init__(
@@ -66,9 +70,6 @@ class AlignmentGUI(BaseWindow):
 
         # 初始化圖片管理器
         self.image_manager = ImageManager()
-
-        # 先初始化變數和狀態管理器
-        self.initialize_variables()
 
         # 確保 ui_manager 在 state_manager 設置回調前初始化
         self.ui_manager = UIManager(self.master, self.config, self.font_manager)
@@ -105,6 +106,7 @@ class AlignmentGUI(BaseWindow):
         # 綁定事件
         self.bind_all_events()
 
+        # 添加窗口關閉事件處理，設置標誌以防止重複訪問
         self.master.protocol("WM_DELETE_WINDOW", self.close_window)
 
         # 初始化變數時加入日誌
@@ -128,6 +130,20 @@ class AlignmentGUI(BaseWindow):
 
         self.last_combine_operation = None
         self.last_time_adjust_operation = None
+
+        # 添加窗口聚焦事件處理，用於在窗口聚焦時恢復置頂狀態
+        self.master.bind("<FocusIn>", self.on_window_focus)
+
+    def on_window_focus(self, event=None):
+        """處理窗口獲得焦點的事件"""
+        try:
+            # 確保窗口仍然存在
+            if not self._gui_destroyed and self.master and self.master.winfo_exists():
+                # 恢復窗口狀態，可以在這裡處理置頂等屬性
+                pass
+        except tk.TclError:
+            # 忽略可能的 Tcl 錯誤
+            pass
 
     def create_interface(self) -> None:
         """創建主要界面元素"""
@@ -1318,10 +1334,25 @@ class AlignmentGUI(BaseWindow):
     def close_window(self, event: Optional[tk.Event] = None) -> None:
         """關閉視窗"""
         try:
-            # 先設置關閉標誌，防止重複操作
-            if hasattr(self, '_closing') and self._closing:
+            # 檢查是否已經在關閉過程中
+            if hasattr(self, '_is_destroying') and self._is_destroying:
                 return
-            self._closing = True
+            self._is_destroying = True
+
+            # 先解除所有事件綁定
+            if hasattr(self, 'master') and self.master and self.master.winfo_exists():
+                try:
+                    # 解除拖曳和其他事件綁定
+                    for binding in ('<Button-1>', '<B1-Motion>', '<Motion>', '<Configure>', '<<TreeviewSelect>>'):
+                        try:
+                            self.master.unbind(binding)
+                        except:
+                            pass
+
+                    # 解除關閉協議
+                    self.master.protocol("WM_DELETE_WINDOW", lambda: None)
+                except:
+                    pass
 
             # 停止音頻播放
             if hasattr(self, 'audio_player'):
@@ -1330,21 +1361,17 @@ class AlignmentGUI(BaseWindow):
                 except Exception as e:
                     self.logger.error(f"停止音頻播放時出錯: {e}")
 
-            # 確保所有屬性都存在，避免訪問不存在的屬性時出錯
-            if not hasattr(self, 'display_mode'):
-                self.display_mode = "srt"  # 設置默認值
-
-            # 嘗試保存當前狀態
-            try:
-                if hasattr(self, 'state_manager'):
+            # 保存當前狀態
+            if hasattr(self, 'state_manager') and not self._gui_destroyed:
+                try:
                     current_state = self.get_current_state()
                     correction_state = None
                     if hasattr(self, 'correction_service'):
                         correction_state = self.correction_service.serialize_state()
                     self.save_operation_state('close_window', '關閉應用',
                                             {'type': 'close', 'description': '關閉應用'})
-            except Exception as e:
-                self.logger.error(f"保存關閉狀態時出錯: {e}")
+                except Exception as e:
+                    self.logger.error(f"保存關閉狀態時出錯: {e}")
 
             # 執行清理
             try:
@@ -1352,15 +1379,20 @@ class AlignmentGUI(BaseWindow):
             except Exception as e:
                 self.logger.error(f"執行清理時出錯: {e}")
 
+            # 更新視窗狀態標記
+            self._gui_destroyed = True
+
             # 確保處理完所有待處理的事件
             try:
-                self.master.update_idletasks()
+                if self.master and self.master.winfo_exists():
+                    self.master.update_idletasks()
             except Exception:
                 pass
 
             # 銷毀視窗
             try:
-                self.master.destroy()
+                if self.master and self.master.winfo_exists():
+                    self.master.destroy()
             except Exception as e:
                 self.logger.error(f"銷毀視窗時出錯: {e}")
 
@@ -2272,7 +2304,6 @@ class AlignmentGUI(BaseWindow):
         if is_split_result and hasattr(self, 'correction_service'):
             # 更新校正狀態顯示
             self.update_correction_status_display()
-
 
     def process_word_text_edit(self, result, item, srt_index):
         """

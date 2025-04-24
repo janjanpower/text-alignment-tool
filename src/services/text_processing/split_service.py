@@ -1,13 +1,13 @@
 """文本拆分服務模組，負責處理字幕拆分相關操作"""
 
 import logging
-from pydoc import text
 import time
 
 import pysrt
 from utils.time_utils import parse_time
 from utils.text_utils import simplify_to_traditional
 from services.correction.correction_service import CorrectionService
+from services.text_processing.segmentation_service import SegmentationService
 from gui.custom_messagebox import (
     show_info,
     show_warning,
@@ -28,6 +28,7 @@ class SplitService:
         self.logger = logging.getLogger(self.__class__.__name__)
         self.last_split_operation = None
         self.correction_service = CorrectionService
+        self.segmentation_service = SegmentationService()
 
     def process_srt_edit_result(self, result, item, srt_index, start_time, end_time):
         """
